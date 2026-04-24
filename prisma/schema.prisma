@@ -1,0 +1,92 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Empresa {
+  id        String   @id @default(uuid())
+  nombre    String
+  slug      String   @unique
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  modulos   EmpresaModulo[]
+  roles     Role[]
+  usuarios  Usuario[]
+}
+
+model Modulo {
+  id          String   @id @default(uuid())
+  nombre      String   @unique
+  descripcion String?
+  key         String   @unique // e.g., 'ventas', 'inventario'
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  empresas    EmpresaModulo[]
+  permisos    Permission[]
+}
+
+model EmpresaModulo {
+  id        String   @id @default(uuid())
+  empresaId String
+  moduloId  String
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+  modulo    Modulo  @relation(fields: [moduloId], references: [id])
+
+  @@unique([empresaId, moduloId])
+}
+
+model Role {
+  id        String   @id @default(uuid())
+  nombre    String
+  empresaId String
+  isSystem  Boolean  @default(false) // Default roles like 'Admin', 'User'
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  empresa    Empresa      @relation(fields: [empresaId], references: [id])
+  permisos   Permission[]
+  usuarios   Usuario[]
+
+  @@unique([nombre, empresaId])
+}
+
+model Permission {
+  id        String   @id @default(uuid())
+  roleId    String
+  moduloId  String
+  canRead   Boolean  @default(false)
+  canWrite  Boolean  @default(false)
+  canDelete Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  role      Role   @relation(fields: [roleId], references: [id])
+  modulo    Modulo @relation(fields: [moduloId], references: [id])
+
+  @@unique([roleId, moduloId])
+}
+
+model Usuario {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  nombre    String
+  empresaId String
+  roleId    String
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+  role      Role    @relation(fields: [roleId], references: [id])
+}
