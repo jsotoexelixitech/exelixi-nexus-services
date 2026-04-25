@@ -111,17 +111,35 @@ export class AuthService {
       // Extraemos empresa y rol con sus relaciones tipadas
       const { empresa, role } = user;
 
-      // Mapear módulos y submódulos a los que tiene acceso por su empresa Y su rol
+      // 1. Obtener detalles granulares de la nueva tabla
+      const granularDetails = await (prisma as any).rolePermissionDetail.findMany({
+        where: { roleId: user.roleId }
+      });
+
+      // 2. Mapear módulos y submódulos con sus flags CRUD
       const modulesAccess = empresa.modulos.map(em => {
-        const hasPermission = role.permisos.some(p => p.empresaModuloId === em.id);
+        const moduleDetail = granularDetails.find(d => d.moduloId === em.moduloId && !d.submoduloId);
+        
         return {
           id: em.modulo.id,
           nombre: em.modulo.nombre,
-          hasAccess: hasPermission,
-          submodulos: em.modulo.submodulos.map(s => ({
-            id: s.id,
-            nombre: s.nombre
-          }))
+          hasAccess: !!moduleDetail,
+          canCreate: moduleDetail?.canCreate || false,
+          canRead: moduleDetail?.canRead || false,
+          canUpdate: moduleDetail?.canUpdate || false,
+          canDelete: moduleDetail?.canDelete || false,
+          submodulos: em.modulo.submodulos.map(s => {
+            const smDetail = granularDetails.find(d => d.submoduloId === s.id);
+            return {
+              id: s.id,
+              nombre: s.nombre,
+              hasAccess: !!smDetail,
+              canCreate: smDetail?.canCreate || false,
+              canRead: smDetail?.canRead || false,
+              canUpdate: smDetail?.canUpdate || false,
+              canDelete: smDetail?.canDelete || false
+            };
+          })
         };
       });
 
@@ -137,7 +155,7 @@ export class AuthService {
           nombre: empresa.nombre,
           rif: empresa.rif
         },
-        access: modulesAccess
+        permissions: modulesAccess
       };
     } catch (error: unknown) {
       if (error instanceof AppError) throw error;

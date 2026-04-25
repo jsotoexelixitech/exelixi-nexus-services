@@ -81,6 +81,20 @@ model Permission {
   @@map("rol_modulo")
 }
 
+// Nueva tabla para granularidad (CRUD) que intentaremos crear
+model RolePermissionDetail {
+  id              Int      @id @default(autoincrement())
+  roleId          Int
+  moduloId        Int      // ID del módulo global
+  submoduloId     Int?     // Opcional para submódulos
+  canCreate       Boolean  @default(false)
+  canRead         Boolean  @default(true)
+  canUpdate       Boolean  @default(false)
+  canDelete       Boolean  @default(false)
+  
+  @@map("rol_permiso_detalle")
+}
+
 model Recibo {
   id                     Int       @id @default(autoincrement()) @map("recibo_id")
   numero                 Int       @map("recibo_numero")
