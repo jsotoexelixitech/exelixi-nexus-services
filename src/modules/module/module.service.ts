@@ -18,4 +18,28 @@ export class ModuleService {
     
     return active.map(a => a.modulo);
   }
+
+  /**
+   * Retorna todos los módulos y sus submódulos (para administración).
+   */
+  async getAllModules() {
+    return await prisma.modulo.findMany({
+      include: {
+        submodulos: true
+      }
+    });
+  }
+
+  /**
+   * Crea un nuevo submódulo vinculado a un módulo.
+   */
+  async createSubmodule(moduloId: number, nombre: string) {
+    return await prisma.submodulo.create({
+      data: {
+        nombre,
+        moduloId,
+        activo: true
+      }
+    });
+  }
 }

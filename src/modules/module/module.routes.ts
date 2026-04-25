@@ -11,4 +11,16 @@ const controller = new ModuleController();
  */
 router.get('/active', authenticate, controller.getActive);
 
+/**
+ * @route GET /api/modules/all
+ * @desc Listar todos los módulos y sus submódulos
+ */
+router.get('/all', authenticate, controller.listAll);
+
+/**
+ * @route POST /api/modules/submodule
+ * @desc Crear un nuevo submódulo
+ */
+router.post('/submodule', authenticate, controller.createSubmodule);
+
 export default router;

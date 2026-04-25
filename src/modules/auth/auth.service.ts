@@ -74,4 +74,75 @@ export class AuthService {
       throw new AppError('Error interno durante la autenticación. Intente más tarde.', 500);
     }
   }
+
+  /**
+   * Obtiene el perfil completo del usuario, incluyendo empresa, rol y permisos.
+   */
+  async getUserProfile(userId: number) {
+    try {
+      const user = await prisma.usuario.findUnique({
+        where: { id: userId },
+        include: {
+          empresa: {
+            include: {
+              modulos: {
+                where: { activo: true },
+                include: { modulo: { include: { submodulos: { where: { activo: true } } } } }
+              }
+            }
+          },
+          role: {
+            include: {
+              permisos: {
+                where: { activo: true },
+                include: {
+                  empresaModulo: {
+                    include: { modulo: true }
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (!user) throw new AppError('Usuario no encontrado', 404);
+
+      // Extraemos empresa y rol con sus relaciones tipadas
+      const { empresa, role } = user;
+
+      // Mapear módulos y submódulos a los que tiene acceso por su empresa Y su rol
+      const modulesAccess = empresa.modulos.map(em => {
+        const hasPermission = role.permisos.some(p => p.empresaModuloId === em.id);
+        return {
+          id: em.modulo.id,
+          nombre: em.modulo.nombre,
+          hasAccess: hasPermission,
+          submodulos: em.modulo.submodulos.map(s => ({
+            id: s.id,
+            nombre: s.nombre
+          }))
+        };
+      });
+
+      return {
+        user: {
+          id: user.id,
+          nombre: user.nombre,
+          email: user.email,
+          role: role.nombre
+        },
+        empresa: {
+          id: empresa.id,
+          nombre: empresa.nombre,
+          rif: empresa.rif
+        },
+        access: modulesAccess
+      };
+    } catch (error: unknown) {
+      if (error instanceof AppError) throw error;
+      logger.error(`Error al obtener perfil: ${getErrorMessage(error)}`);
+      throw new AppError('Error al recuperar información del perfil.', 500);
+    }
+  }
 }
