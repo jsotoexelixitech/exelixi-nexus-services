@@ -5,6 +5,19 @@ import { getErrorMessage } from '../../utils/error-handler';
 const companyService = new CompanyService();
 
 export class CompanyController {
+  /**
+   * @openapi
+   * /api/companies:
+   *   get:
+   *     tags:
+   *       - Companies
+   *     summary: Listar todas las empresas (SaaS Admin)
+   *     security:
+   *       - bearerAuth: []
+   *     responses:
+   *       200:
+   *         description: Lista de empresas
+   */
   async list(req: Request, res: Response) {
     try {
       const companies = await companyService.getAllCompanies();
@@ -29,6 +42,35 @@ export class CompanyController {
     }
   }
 
+  /**
+   * @openapi
+   * /api/companies:
+   *   post:
+   *     tags:
+   *       - Companies
+   *     summary: Crear una nueva empresa
+   *     security:
+   *       - bearerAuth: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required:
+   *               - nombre
+   *               - rif
+   *             properties:
+   *               nombre:
+   *                 type: string
+   *               rif:
+   *                 type: string
+   *               tipo:
+   *                 type: string
+   *     responses:
+   *       201:
+   *         description: Empresa creada
+   */
   async create(req: Request, res: Response) {
     try {
       const { nombre, rif, tipo } = req.body;
