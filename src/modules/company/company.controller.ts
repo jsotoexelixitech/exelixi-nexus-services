@@ -32,7 +32,7 @@ export class CompanyController {
   async createModule(req: Request, res: Response) {
     try {
       const { nombre, key, descripcion } = req.body;
-      const modulo = await companyService.createModule(nombre, key, descripcion);
+      const modulo = await companyService.createModule(nombre);
       res.status(201).json(modulo);
     } catch (error: any) {
       res.status(400).json({ message: error.message });

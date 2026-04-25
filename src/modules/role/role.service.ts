@@ -6,13 +6,15 @@ export class RoleService {
   /**
    * Crea un rol vinculado a una empresa específica.
    */
-  async createRole(empresaId: string, nombre: string) {
+  async createRole(empresaId: string | number, nombre: string) {
     try {
-      logger.info(`Creando rol '${nombre}' para empresa ${empresaId}`);
+      const eid = Number(empresaId);
+      logger.info(`Creando rol '${nombre}' para empresa ${eid}`);
       return await prisma.role.create({
         data: {
           nombre,
-          empresaId,
+          empresaId: eid,
+          activo: true
         }
       });
     } catch (error: any) {
@@ -21,11 +23,13 @@ export class RoleService {
     }
   }
 
-  async updateRole(id: string, empresaId: string, nombre: string) {
+  async updateRole(id: string | number, empresaId: string | number, nombre: string) {
     try {
-      logger.info(`Actualizando rol ${id} a '${nombre}'`);
+      const rid = Number(id);
+      const eid = Number(empresaId);
+      logger.info(`Actualizando rol ${rid} a '${nombre}'`);
       return await prisma.role.update({
-        where: { id, empresaId },
+        where: { id: rid, empresaId: eid },
         data: { nombre }
       });
     } catch (error: any) {
@@ -34,13 +38,15 @@ export class RoleService {
     }
   }
 
-  async deleteRole(id: string, empresaId: string) {
+  async deleteRole(id: string | number, empresaId: string | number) {
     try {
-      logger.info(`Intentando eliminar rol ${id}`);
+      const rid = Number(id);
+      const eid = Number(empresaId);
+      logger.info(`Intentando eliminar rol ${rid}`);
       
       // Validar si tiene usuarios asignados
       const usersCount = await prisma.usuario.count({
-        where: { roleId: id }
+        where: { roleId: rid }
       });
 
       if (usersCount > 0) {
@@ -48,7 +54,7 @@ export class RoleService {
       }
 
       return await prisma.role.delete({
-        where: { id, empresaId }
+        where: { id: rid, empresaId: eid }
       });
     } catch (error: any) {
       if (error instanceof AppError) throw error;
@@ -59,80 +65,76 @@ export class RoleService {
 
   /**
    * Asigna permisos a un rol. 
+   * En este esquema, vinculamos el Rol con el EmpresaModulo.
    */
-  async assignPermissions(empresaId: string, roleId: string, permissions: { moduloId: string, canRead: boolean, canWrite: boolean, canDelete: boolean }[]) {
-    logger.info(`Asignando matriz de ${permissions.length} permisos al rol ${roleId}`);
-    // 1. Obtener los módulos activos de la empresa
-    const activeModules = await prisma.empresaModulo.findMany({
-      where: { empresaId, activo: true },
-      select: { moduloId: true }
+  async assignPermissions(empresaId: string | number, roleId: string | number, empresaModuloIds: number[]) {
+    const eid = Number(empresaId);
+    const rid = Number(roleId);
+    logger.info(`Asignando ${empresaModuloIds.length} permisos al rol ${rid}`);
+
+    // 1. Validar que los EmpresaModulo pertenezcan a la empresa
+    const validModules = await prisma.empresaModulo.findMany({
+      where: { 
+        id: { in: empresaModuloIds },
+        empresaId: eid 
+      }
     });
 
-    const activeModuleIds = activeModules.map(m => m.moduloId);
-
-    // 2. Filtrar o validar que todos los módulos en 'permissions' estén en 'activeModuleIds'
-    for (const p of permissions) {
-      if (!activeModuleIds.includes(p.moduloId)) {
-        throw new Error(`La empresa no tiene activo el módulo con ID ${p.moduloId}. No se puede asignar al rol.`);
-      }
+    if (validModules.length !== empresaModuloIds.length) {
+      throw new AppError('Uno o más módulos no pertenecen a esta empresa.', 400);
     }
 
-    // 3. Guardar los permisos (Upsert para actualizar si ya existen)
-    const operations = permissions.map(p => 
-      prisma.permission.upsert({
-        where: {
-          roleId_moduloId: {
-            roleId,
-            moduloId: p.moduloId
-          }
-        },
-        update: {
-          canRead: p.canRead,
-          canWrite: p.canWrite,
-          canDelete: p.canDelete
-        },
-        create: {
-          roleId,
-          moduloId: p.moduloId,
-          canRead: p.canRead,
-          canWrite: p.canWrite,
-          canDelete: p.canDelete
-        }
+    // 2. Eliminar permisos anteriores y crear los nuevos (simplificado)
+    return await prisma.$transaction([
+      prisma.permission.deleteMany({ where: { roleId: rid } }),
+      prisma.permission.createMany({
+        data: empresaModuloIds.map(emid => ({
+          roleId: rid,
+          empresaModuloId: emid,
+          activo: true
+        }))
       })
-    );
-
-    return prisma.$transaction(operations);
+    ]);
   }
 
-  async getRolesByEmpresa(empresaId: string) {
+  async getRolesByEmpresa(empresaId: string | number) {
     return prisma.role.findMany({
-      where: { empresaId },
-      include: { permisos: { include: { modulo: true } } }
+      where: { empresaId: Number(empresaId) },
+      include: { 
+        permisos: { 
+          include: { 
+            empresaModulo: { 
+              include: { modulo: true } 
+            } 
+          } 
+        } 
+      }
     });
   }
 
-  async getPermissionMatrix(empresaId: string, roleId: string) {
+  async getPermissionMatrix(empresaId: string | number, roleId: string | number) {
+    const eid = Number(empresaId);
+    const rid = Number(roleId);
+
     // 1. Obtener los módulos que la empresa tiene activos
     const activeModules = await prisma.empresaModulo.findMany({
-      where: { empresaId, activo: true },
+      where: { empresaId: eid, activo: true },
       include: { modulo: true }
     });
 
     // 2. Obtener los permisos actuales del rol
     const currentPermissions = await prisma.permission.findMany({
-      where: { roleId }
+      where: { roleId: rid }
     });
 
     // 3. Cruzar información para el frontend
     return activeModules.map(am => {
-      const perm = currentPermissions.find(p => p.moduloId === am.moduloId);
+      const perm = currentPermissions.find(p => p.empresaModuloId === am.id);
       return {
+        empresaModuloId: am.id,
         moduloId: am.moduloId,
         nombre: am.modulo.nombre,
-        key: am.modulo.key,
-        canRead: perm?.canRead || false,
-        canWrite: perm?.canWrite || false,
-        canDelete: perm?.canDelete || false
+        activo: perm?.activo || false
       };
     });
   }

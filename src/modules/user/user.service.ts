@@ -1,5 +1,5 @@
 import { Usuario } from '@prisma/client';
-import bcrypt from 'bcrypt';
+import * as bcrypt from 'bcrypt';
 import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
@@ -8,14 +8,16 @@ export class UserService {
   /**
    * Crea un usuario vinculado a una empresa y un rol.
    */
-  async createUser(empresaId: string, data: Omit<Usuario, 'id' | 'createdAt' | 'updatedAt' | 'empresaId' | 'activo'>) {
+  async createUser(empresaId: string | number, data: Omit<Usuario, 'id' | 'createdAt' | 'empresaId' | 'activo'>) {
     try {
-      logger.info(`Intentando crear usuario ${data.email} en empresa ${empresaId}`);
+      const eid = Number(empresaId);
+      logger.info(`Intentando crear usuario ${data.email} en empresa ${eid}`);
+      
       // 1. Validar que el rol pertenezca a la empresa
       const role = await prisma.role.findFirst({
         where: { 
           id: data.roleId, 
-          empresaId 
+          empresaId: eid 
         }
       });
 
@@ -31,7 +33,7 @@ export class UserService {
         data: {
           ...data,
           password: hashedPassword,
-          empresaId,
+          empresaId: eid,
           activo: true
         }
       });
@@ -45,16 +47,18 @@ export class UserService {
     }
   }
 
-  async updateUser(id: string, empresaId: string, data: Partial<Usuario>) {
+  async updateUser(id: string | number, empresaId: string | number, data: Partial<Usuario>) {
     try {
-      logger.info(`Actualizando usuario ${id}`);
+      const uid = Number(id);
+      const eid = Number(empresaId);
+      logger.info(`Actualizando usuario ${uid}`);
       
       if (data.password) {
         data.password = await bcrypt.hash(data.password, 10);
       }
 
       return await prisma.usuario.update({
-        where: { id, empresaId },
+        where: { id: uid, empresaId: eid },
         data
       });
     } catch (error: any) {
@@ -63,14 +67,16 @@ export class UserService {
     }
   }
 
-  async toggleUserStatus(id: string, empresaId: string) {
+  async toggleUserStatus(id: string | number, empresaId: string | number) {
     try {
-      const user = await prisma.usuario.findUnique({ where: { id, empresaId } });
+      const uid = Number(id);
+      const eid = Number(empresaId);
+      const user = await prisma.usuario.findUnique({ where: { id: uid, empresaId: eid } });
       if (!user) throw new AppError('Usuario no encontrado en su empresa.', 404);
 
-      logger.info(`Cambiando estado de usuario ${id} a ${!user.activo}`);
+      logger.info(`Cambiando estado de usuario ${uid} a ${!user.activo}`);
       return await prisma.usuario.update({
-        where: { id, empresaId },
+        where: { id: uid, empresaId: eid },
         data: { activo: !user.activo }
       });
     } catch (error: any) {
@@ -80,9 +86,11 @@ export class UserService {
     }
   }
 
-  async changePassword(id: string, empresaId: string, currentPass: string, newPass: string) {
+  async changePassword(id: string | number, empresaId: string | number, currentPass: string, newPass: string) {
     try {
-      const user = await prisma.usuario.findUnique({ where: { id, empresaId } });
+      const uid = Number(id);
+      const eid = Number(empresaId);
+      const user = await prisma.usuario.findUnique({ where: { id: uid, empresaId: eid } });
       if (!user) throw new AppError('Usuario no identificado.', 404);
 
       const isMatch = await bcrypt.compare(currentPass, user.password);
@@ -90,7 +98,7 @@ export class UserService {
 
       const hashedPassword = await bcrypt.hash(newPass, 10);
       return await prisma.usuario.update({
-        where: { id, empresaId },
+        where: { id: uid, empresaId: eid },
         data: { password: hashedPassword }
       });
     } catch (error: any) {
@@ -100,16 +108,17 @@ export class UserService {
     }
   }
 
-  async getUsersByEmpresa(empresaId: string, skip: number, take: number) {
+  async getUsersByEmpresa(empresaId: string | number, skip: number, take: number) {
     try {
+      const eid = Number(empresaId);
       const [users, total] = await Promise.all([
         prisma.usuario.findMany({
-          where: { empresaId },
+          where: { empresaId: eid },
           skip,
           take,
           include: { role: true },
         }),
-        prisma.usuario.count({ where: { empresaId } })
+        prisma.usuario.count({ where: { empresaId: eid } })
       ]);
 
       return { users, total };

@@ -66,13 +66,23 @@ export class UserController {
     const empresaId = req.user?.empresaId;
     if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
 
-    const users = await userService.getUsersByEmpresa(empresaId);
-    res.json(users.map(u => ({
-      id: u.id,
-      nombre: u.nombre,
-      email: u.email,
-      role: u.role.nombre,
-      activo: u.activo
-    })));
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 10;
+    const skip = (page - 1) * limit;
+
+    const { users, total } = await userService.getUsersByEmpresa(empresaId, skip, limit);
+    
+    res.json({
+      total,
+      page,
+      limit,
+      users: users.map(u => ({
+        id: u.id,
+        nombre: u.nombre,
+        email: u.email,
+        role: u.role.nombre,
+        activo: u.activo
+      }))
+    });
   }
 }

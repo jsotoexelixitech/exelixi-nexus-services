@@ -6,16 +6,18 @@ export class CompanyService {
   /**
    * Crea una nueva empresa (Tenant).
    */
-  async createCompany(nombre: string, slug: string) {
+  async createCompany(nombre: string, rif: string, tipo: string = 'cliente') {
     try {
-      logger.info(`Creando nueva empresa: ${nombre} (${slug})`);
+      logger.info(`Creando nueva empresa: ${nombre} (${rif})`);
       return await prisma.empresa.create({
-        data: { nombre, slug }
+        data: { 
+          nombre, 
+          rif,
+          tipo,
+          activo: true 
+        }
       });
     } catch (error: any) {
-      if (error.code === 'P2002') {
-        throw new AppError(`El slug '${slug}' ya está en uso por otra empresa.`, 400);
-      }
       logger.error(`Error al crear empresa: ${error.message}`);
       throw error;
     }
@@ -24,16 +26,30 @@ export class CompanyService {
   /**
    * Activa o desactiva un módulo para una empresa específica.
    */
-  async toggleModule(empresaId: string, moduloId: string, active: boolean) {
+  async toggleModule(empresaId: number, moduloId: number, active: boolean) {
     try {
       logger.info(`${active ? 'Activando' : 'Desactivando'} módulo ${moduloId} para empresa ${empresaId}`);
-      return await prisma.empresaModulo.upsert({
-        where: {
-          empresaId_moduloId: { empresaId, moduloId }
-        },
-        update: { activo: active },
-        create: { empresaId, moduloId, activo: active }
+      
+      // Buscamos si ya existe la relación
+      const existing = await prisma.empresaModulo.findFirst({
+        where: { empresaId, moduloId }
       });
+
+      if (existing) {
+        return await prisma.empresaModulo.update({
+          where: { id: existing.id },
+          data: { activo: active }
+        });
+      } else {
+        return await prisma.empresaModulo.create({
+          data: { 
+            empresaId, 
+            moduloId, 
+            activo: active,
+            token: `token-${empresaId}-${moduloId}` // Generamos un token por defecto
+          }
+        });
+      }
     } catch (error: any) {
       logger.error(`Error al modificar módulo: ${error.message}`);
       throw new AppError('No se pudo actualizar el estado del módulo.', 500);
@@ -70,15 +86,15 @@ export class CompanyService {
   /**
    * Crea un módulo en el sistema (Super Admin).
    */
-  async createModule(nombre: string, key: string, descripcion?: string) {
+  async createModule(nombre: string) {
     try {
       return await prisma.modulo.create({
-        data: { nombre, key, descripcion }
+        data: { 
+          nombre,
+          activo: true 
+        }
       });
     } catch (error: any) {
-      if (error.code === 'P2002') {
-        throw new AppError(`La key de módulo '${key}' ya existe.`, 400);
-      }
       logger.error(`Error al crear módulo: ${error.message}`);
       throw error;
     }
