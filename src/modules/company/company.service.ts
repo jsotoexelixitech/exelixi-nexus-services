@@ -6,9 +6,9 @@ export class CompanyService {
   /**
    * Crea una nueva empresa (Tenant).
    */
-  async createCompany(nombre: string, rif: string, tipo: string = 'cliente') {
+  async createCompany(nombre: string, rif?: string, tipo: string = 'cliente') {
     try {
-      logger.info(`Creando nueva empresa: ${nombre} (${rif})`);
+      logger.info(`Creando nueva empresa: ${nombre} (${rif || 'S/R'})`);
       return await prisma.empresa.create({
         data: { 
           nombre, 
@@ -17,9 +17,64 @@ export class CompanyService {
           activo: true 
         }
       });
-    } catch (error: any) {
-      logger.error(`Error al crear empresa: ${error.message}`);
-      throw error;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido';
+      logger.error(`Error al crear empresa: ${message}`);
+      throw new AppError('No se pudo crear la empresa.', 500);
+    }
+  }
+
+  /**
+   * Obtiene una empresa por su ID.
+   */
+  async getCompanyById(id: number) {
+    const company = await prisma.empresa.findUnique({
+      where: { id },
+      include: {
+        modulos: {
+          include: { modulo: true }
+        }
+      }
+    });
+
+    if (!company) {
+      throw new AppError('Empresa no encontrada.', 404);
+    }
+
+    return company;
+  }
+
+  /**
+   * Actualiza los datos de una empresa.
+   */
+  async updateCompany(id: number, data: { nombre?: string; rif?: string; tipo?: string; activo?: boolean }) {
+    try {
+      logger.info(`Actualizando empresa ${id}`);
+      return await prisma.empresa.update({
+        where: { id },
+        data
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido';
+      logger.error(`Error al actualizar empresa: ${message}`);
+      throw new AppError('No se pudo actualizar la empresa.', 500);
+    }
+  }
+
+  /**
+   * Eliminación lógica (desactivación) de una empresa.
+   */
+  async deleteCompany(id: number) {
+    try {
+      logger.info(`Desactivando empresa ${id}`);
+      return await prisma.empresa.update({
+        where: { id },
+        data: { activo: false }
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido';
+      logger.error(`Error al desactivar empresa: ${message}`);
+      throw new AppError('No se pudo desactivar la empresa.', 500);
     }
   }
 
@@ -30,7 +85,6 @@ export class CompanyService {
     try {
       logger.info(`${active ? 'Activando' : 'Desactivando'} módulo ${moduloId} para empresa ${empresaId}`);
       
-      // Buscamos si ya existe la relación
       const existing = await prisma.empresaModulo.findFirst({
         where: { empresaId, moduloId }
       });
@@ -46,12 +100,13 @@ export class CompanyService {
             empresaId, 
             moduloId, 
             activo: active,
-            token: `token-${empresaId}-${moduloId}` // Generamos un token por defecto
+            token: `token-${empresaId}-${moduloId}`
           }
         });
       }
-    } catch (error: any) {
-      logger.error(`Error al modificar módulo: ${error.message}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido';
+      logger.error(`Error al modificar módulo: ${message}`);
       throw new AppError('No se pudo actualizar el estado del módulo.', 500);
     }
   }
@@ -65,38 +120,10 @@ export class CompanyService {
           }
         }
       });
-    } catch (error: any) {
-      logger.error(`Error al listar empresas: ${error.message}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido';
+      logger.error(`Error al listar empresas: ${message}`);
       throw new AppError('Error al recuperar el listado de empresas.', 500);
-    }
-  }
-
-  /**
-   * Obtiene los módulos disponibles en el sistema.
-   */
-  async getSystemModules() {
-    try {
-      return await prisma.modulo.findMany();
-    } catch (error: any) {
-      logger.error(`Error al obtener módulos del sistema: ${error.message}`);
-      throw new AppError('Error al recuperar módulos globales.', 500);
-    }
-  }
-
-  /**
-   * Crea un módulo en el sistema (Super Admin).
-   */
-  async createModule(nombre: string) {
-    try {
-      return await prisma.modulo.create({
-        data: { 
-          nombre,
-          activo: true 
-        }
-      });
-    } catch (error: any) {
-      logger.error(`Error al crear módulo: ${error.message}`);
-      throw error;
     }
   }
 }

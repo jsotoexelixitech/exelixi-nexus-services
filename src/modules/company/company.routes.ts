@@ -2,16 +2,21 @@ import { Router } from 'express';
 import { CompanyController } from './company.controller';
 import { authenticate } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
-import { createCompanySchema, toggleModuleSchema, createModuleSchema } from './company.schema';
+import { createCompanySchema, updateCompanySchema, toggleModuleSchema } from './company.schema';
 
 const router = Router();
 const controller = new CompanyController();
 
-// Estas rutas deberían estar protegidas por un middleware de "checkSuperAdmin"
-// Por simplicidad para el demo, usamos solo authenticate
-router.post('/', authenticate, validate(createCompanySchema), controller.create);
-router.get('/', authenticate, controller.list);
-router.post('/toggle-module', authenticate, validate(toggleModuleSchema), controller.toggleModule);
-router.post('/modules', authenticate, validate(createModuleSchema), controller.createModule);
+// Todas las rutas de empresas requieren autenticación
+router.use(authenticate);
+
+router.get('/', controller.list);
+router.get('/:id', controller.getById);
+router.post('/', validate(createCompanySchema), controller.create);
+router.put('/:id', validate(updateCompanySchema), controller.update);
+router.delete('/:id', controller.delete);
+
+// Gestión de módulos por empresa
+router.post('/toggle-module', validate(toggleModuleSchema), controller.toggleModule);
 
 export default router;

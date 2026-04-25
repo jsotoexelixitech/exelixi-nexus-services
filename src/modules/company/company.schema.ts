@@ -3,22 +3,24 @@ import { z } from 'zod';
 export const createCompanySchema = z.object({
   body: z.object({
     nombre: z.string().min(3, 'El nombre debe tener al menos 3 caracteres'),
-    slug: z.string().min(3, 'El slug debe tener al menos 3 caracteres').regex(/^[a-z0-9-]+$/, 'El slug solo puede contener letras minúsculas, números y guiones'),
+    rif: z.string().min(5, 'El RIF debe tener al menos 5 caracteres').optional(),
+    tipo: z.string().optional(),
+  }),
+});
+
+export const updateCompanySchema = z.object({
+  body: z.object({
+    nombre: z.string().min(3, 'El nombre debe tener al menos 3 caracteres').optional(),
+    rif: z.string().min(5, 'El RIF debe tener al menos 5 caracteres').optional(),
+    tipo: z.string().optional(),
+    activo: z.boolean().optional(),
   }),
 });
 
 export const toggleModuleSchema = z.object({
   body: z.object({
-    empresaId: z.string().uuid('ID de empresa inválido'),
-    moduloId: z.string().uuid('ID de módulo inválido'),
+    empresaId: z.number({ required_error: 'ID de empresa es requerido' }),
+    moduloId: z.number({ required_error: 'ID de módulo es requerido' }),
     active: z.boolean(),
-  }),
-});
-
-export const createModuleSchema = z.object({
-  body: z.object({
-    nombre: z.string().min(3, 'El nombre debe tener al menos 3 caracteres'),
-    key: z.string().min(3, 'La key debe tener al menos 3 caracteres').toUpperCase(),
-    descripcion: z.string().optional(),
   }),
 });

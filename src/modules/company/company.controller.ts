@@ -1,41 +1,84 @@
 import { Request, Response } from 'express';
 import { CompanyService } from './company.service';
+import { getErrorMessage } from '../../utils/error-handler';
 
 const companyService = new CompanyService();
 
 export class CompanyController {
+  async list(req: Request, res: Response) {
+    try {
+      const companies = await companyService.getAllCompanies();
+      res.json({
+        success: true,
+        data: companies
+      });
+    } catch (error: unknown) {
+      res.status(500).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async getById(req: Request, res: Response) {
+    try {
+      const company = await companyService.getCompanyById(Number(req.params.id));
+      res.json({
+        success: true,
+        data: company
+      });
+    } catch (error: unknown) {
+      res.status(404).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
   async create(req: Request, res: Response) {
     try {
-      const { nombre, slug } = req.body;
-      const company = await companyService.createCompany(nombre, slug);
-      res.status(201).json(company);
-    } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      const { nombre, rif, tipo } = req.body;
+      const company = await companyService.createCompany(nombre, rif, tipo);
+      res.status(201).json({
+        success: true,
+        message: 'Empresa creada exitosamente',
+        data: company
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async update(req: Request, res: Response) {
+    try {
+      const company = await companyService.updateCompany(Number(req.params.id), req.body);
+      res.json({
+        success: true,
+        message: 'Empresa actualizada exitosamente',
+        data: company
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async delete(req: Request, res: Response) {
+    try {
+      await companyService.deleteCompany(Number(req.params.id));
+      res.json({
+        success: true,
+        message: 'Empresa desactivada exitosamente'
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
 
   async toggleModule(req: Request, res: Response) {
     try {
       const { empresaId, moduloId, active } = req.body;
-      const result = await companyService.toggleModule(empresaId, moduloId, active);
-      res.json(result);
-    } catch (error: any) {
-      res.status(400).json({ message: error.message });
-    }
-  }
-
-  async list(req: Request, res: Response) {
-    const companies = await companyService.getAllCompanies();
-    res.json(companies);
-  }
-
-  async createModule(req: Request, res: Response) {
-    try {
-      const { nombre, key, descripcion } = req.body;
-      const modulo = await companyService.createModule(nombre);
-      res.status(201).json(modulo);
-    } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      const result = await companyService.toggleModule(Number(empresaId), Number(moduloId), active);
+      res.json({
+        success: true,
+        message: `Módulo ${active ? 'activado' : 'desactivado'} exitosamente`,
+        data: result
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
 }
