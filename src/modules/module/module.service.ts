@@ -31,6 +31,35 @@ export class ModuleService {
   }
 
   /**
+   * Crea un nuevo módulo global.
+   */
+  async createModule(nombre: string, icono?: string) {
+    return await prisma.modulo.create({
+      data: { nombre, icono, activo: true }
+    });
+  }
+
+  /**
+   * Actualiza un módulo global.
+   */
+  async updateModule(id: number, data: { nombre?: string; icono?: string; activo?: boolean }) {
+    return await prisma.modulo.update({
+      where: { id },
+      data
+    });
+  }
+
+  /**
+   * Elimina (desactiva) un módulo global.
+   */
+  async deleteModule(id: number) {
+    return await prisma.modulo.update({
+      where: { id },
+      data: { activo: false }
+    });
+  }
+
+  /**
    * Crea un nuevo submódulo vinculado a un módulo.
    */
   async createSubmodule(moduloId: number, nombre: string) {
@@ -40,6 +69,25 @@ export class ModuleService {
         moduloId,
         activo: true
       }
+    });
+  }
+
+  /**
+   * Actualiza un submódulo.
+   */
+  async updateSubmodule(id: number, data: { nombre?: string; activo?: boolean }) {
+    return await prisma.submodulo.update({
+      where: { id },
+      data
+    });
+  }
+
+  /**
+   * Elimina un submódulo.
+   */
+  async deleteSubmodule(id: number) {
+    return await prisma.submodulo.delete({
+      where: { id }
     });
   }
 }

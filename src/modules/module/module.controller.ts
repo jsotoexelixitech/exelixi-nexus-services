@@ -59,6 +59,36 @@ export class ModuleController {
     }
   }
 
+  async createModule(req: AuthRequest, res: Response) {
+    try {
+      const { nombre, icono } = req.body;
+      const result = await moduleService.createModule(nombre, icono);
+      res.status(201).json({ success: true, data: result });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async updateModule(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const result = await moduleService.updateModule(Number(id), req.body);
+      res.json({ success: true, data: result });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async deleteModule(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      await moduleService.deleteModule(Number(id));
+      res.json({ success: true, message: 'Módulo desactivado correctamente' });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
   /**
    * @openapi
    * /api/modules/submodule:
@@ -94,6 +124,26 @@ export class ModuleController {
         success: true,
         data: submodule
       });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async updateSubmodule(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const result = await moduleService.updateSubmodule(Number(id), req.body);
+      res.json({ success: true, data: result });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async deleteSubmodule(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      await moduleService.deleteSubmodule(Number(id));
+      res.json({ success: true, message: 'Submódulo eliminado correctamente' });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
     }

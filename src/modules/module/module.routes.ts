@@ -7,22 +7,16 @@ import { createSubmoduleSchema } from './module.schema';
 const router = Router();
 const controller = new ModuleController();
 
-/**
- * @route GET /api/modules/active
- * @desc Obtener módulos activos para la empresa actual
- */
+// Módulos
 router.get('/active', authenticate, controller.getActive);
-
-/**
- * @route GET /api/modules/all
- * @desc Listar todos los módulos y sus submódulos
- */
 router.get('/all', authenticate, controller.listAll);
+router.post('/', authenticate, controller.createModule);
+router.put('/:id', authenticate, controller.updateModule);
+router.delete('/:id', authenticate, controller.deleteModule);
 
-/**
- * @route POST /api/modules/submodule
- * @desc Crear un nuevo submódulo
- */
+// Submódulos
 router.post('/submodule', authenticate, validate(createSubmoduleSchema), controller.createSubmodule);
+router.put('/submodule/:id', authenticate, controller.updateSubmodule);
+router.delete('/submodule/:id', authenticate, controller.deleteSubmodule);
 
 export default router;
