@@ -2,82 +2,74 @@
 
 Exelixi Nexus es una infraestructura backend de grado empresarial diseñada para orquestar sistemas SaaS multi-tenant con un enfoque radical en la **seguridad, escalabilidad y robustez del tipado**.
 
-Implementa una arquitectura modular de "Vertical Slices", control de acceso granular (RBAC) y una capa de seguridad híbrida de vanguardia.
-
 ## 🌟 Diferenciadores Clave
 
 - **🛡️ Seguridad de Doble Capa**: Protección mediante Global API Key y JWTs encriptados (AES-256-CBC).
-- **💪 Tipado Estricto (Zero-Any Policy)**: Base de código 100% TypeScript con política estricta de cero uso de `any`, garantizando estabilidad en producción.
-- **🏢 Compatibilidad Legacy**: Diseñado para integrarse con bases de datos preexistentes (IDs enteros, mapeos `snake_case`) sin perder la elegancia del código moderno.
-- **🧩 Arquitectura de Módulos y Submódulos**: Sistema dinámico para habilitar/deshabilitar funcionalidades por cliente.
-
-## 🛠️ Tech Stack
-
-- **Runtime**: Node.js v20+ (Ejecución optimizada con `tsx`)
-- **Framework**: Express.js + TypeScript
-- **ORM**: Prisma (PostgreSQL) con mapeo avanzado de esquemas legacy.
-- **Validación**: Zod para esquemas de entrada y salida.
-- **Seguridad**:
-  - **Auth**: JWT con capa extra de obfuscación mediante cifrado simétrico.
-  - **Hardening**: Helmet, CORS, Rate Limiting.
-  - **Shield**: Global API Key protection (Capa de infraestructura).
-- **Observabilidad**: Winston Logger con niveles de auditoría configurables.
-- **Documentación**: Swagger / OpenAPI 3.0 con soporte para autorización por Header.
-
-## 🏗️ Estructura del Proyecto
-
-El proyecto sigue un patrón de **Vertical Slices**. Cada carpeta en `src/modules` es una unidad de negocio autónoma.
-
-```text
-src/
-├── config/         # Configuraciones globales (DB, Swagger, Env)
-├── middlewares/    # Guardias de seguridad (Auth, Role, API Key)
-├── utils/          # Utilidades tipadas (Crypto, Pagination, Error Handling)
-└── modules/        # Unidades de negocio (Slices)
-    ├── auth/       # Sesiones y perfil detallado (/me)
-    ├── company/    # Gestión de Tenants, Módulos y Submódulos
-    ├── user/       # Gestión de Usuarios y Seguridad de cuentas
-    ├── role/       # Matriz de permisos dinámicos (RBAC)
-    └── module/     # Definición global de capacidades del sistema
-```
-
-## 🔒 Capas de Seguridad
-
-1.  **Capa de Infraestructura**: Validación de `x-api-key` para prevenir tráfico no autorizado.
-2.  **Capa de Sesión**: JWT encriptado. El cliente nunca ve el contenido real del token, evitando ingeniería inversa del payload.
-3.  **Capa de Tenant**: Aislamiento forzado por `empresaId` en todas las consultas al ORM.
-4.  **Capa de Permisos**: Validación por Módulo y Submódulo antes de ejecutar lógica de negocio.
-
-## 🚀 Instalación y Uso
-
-### 1. Requisitos
-- Node.js 20+
-- PostgreSQL
-
-### 2. Configuración
-```bash
-cp .env.example .env
-npm install
-```
-
-### 3. Sincronización y Seed
-```bash
-npx prisma generate
-npx prisma db seed
-```
-
-### 4. Ejecución en Desarrollo
-```bash
-npm run dev
-```
-
-## 📝 Documentación API
-
-Accede a la documentación interactiva y sandbox de pruebas:
-👉 `http://localhost:3000/api-docs`
-
-> [!IMPORTANT]
-> El proyecto utiliza **IDs enteros** para los parámetros de ruta (`/api/companies/1`) para mantener compatibilidad con el esquema legacy.
+- **💪 Tipado Estricto (Zero-Any Policy)**: Base de código 100% TypeScript con política estricta de cero uso de `any`.
+- **🏢 Compatibilidad Legacy**: Integración con bases de datos preexistentes (IDs enteros, mapeos `snake_case`).
+- **🧩 Sistema de Módulos Dinámicos**: Control total sobre qué funcionalidades tiene activas cada empresa.
 
 ---
-Desarrollado con foco en **cero deuda técnica y máxima seguridad**.
+
+## 🔐 Flujo de Seguridad y Autenticación
+
+El sistema implementa una **Defensa en Profundidad** con el siguiente flujo:
+
+1.  **Capa de Infraestructura (API Key)**: Todas las peticiones deben incluir el header `x-api-key`. Sin esto, el servidor rechaza la conexión antes de procesar lógica.
+2.  **Capa de Autenticación (Login)**: Al loguearse, el sistema genera un JWT que es **encriptado simétricamente (AES-256-CBC)** antes de enviarse al cliente.
+3.  **Capa de Sesión (Bearer Token)**: Para rutas protegidas, se debe enviar el token en el header `Authorization: Bearer <token_encriptado>`.
+4.  **Capa de Aislamiento (Multi-tenancy)**: El sistema extrae el `empresaId` del token y garantiza que el usuario NUNCA pueda ver o modificar datos de otra empresa.
+
+---
+
+## 📡 Guía de API (Endpoints Principales)
+
+### 🔑 Autenticación (`/api/auth`)
+| Método | Endpoint | Descripción | Payload |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/login` | Inicia sesión y devuelve un token encriptado. | `{ "email": "...", "password": "..." }` |
+| `GET` | `/me` | Devuelve el perfil completo, empresa y permisos. | Requiere Bearer Token |
+
+### 🏢 Empresas (`/api/companies`)
+| Método | Endpoint | Descripción | Payload |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/` | Lista todas las empresas (SaaS Admin). | - |
+| `POST` | `/toggle-module` | Activa/Desactiva un módulo para una empresa. | `{ "empresaId": 1, "moduloId": 2, "active": true }` |
+
+### 🧩 Módulos y Roles (`/api/modules`, `/api/roles`)
+| Método | Endpoint | Descripción | Payload |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/modules/active` | Módulos que la empresa actual tiene contratados. | - |
+| `POST` | `/modules/submodule`| Crea una sub-funcionalidad dentro de un módulo. | `{ "moduloId": 1, "nombre": "..." }` |
+| `POST` | `/roles` | Crea un rol (ej. "Vendedor") para la empresa. | `{ "nombre": "Vendedor" }` |
+| `POST` | `/roles/assign` | Asigna permisos de módulos a un rol. | `{ "roleId": 1, "permissions": [1, 2] }` |
+
+---
+
+## 🚦 Límites y Funcionalidades
+
+### 🛡️ Rate Limiting (Protección Anti-DDoS)
+El sistema tiene un límite estricto por IP:
+- **Límite**: 100 peticiones.
+- **Ventana de tiempo**: 15 minutos.
+- **Identificador**: Dirección IP del cliente.
+- **Respuesta**: HTTP 429 (Too Many Requests).
+
+### 📊 Matriz de Permisos (RBAC)
+El acceso no es solo por "URL", sino por **Módulo**. 
+1. Una empresa "contrata" un módulo.
+2. El administrador crea un Rol.
+3. El Rol se vincula a los módulos activos.
+4. El usuario, al heredar el Rol, solo puede operar en los módulos permitidos.
+
+---
+
+## 🚀 Instalación Rápida
+
+1.  **Configurar Entorno**: `cp .env.example .env` (Asegúrate de poner una `ENCRYPTION_KEY` de 32 caracteres).
+2.  **Instalar**: `pnpm install`
+3.  **Base de Datos**: `npx prisma db push && npx prisma db seed`
+4.  **Desarrollo**: `npm run dev`
+
+---
+👉 **Documentación Interactiva**: `http://localhost:3000/api-docs`

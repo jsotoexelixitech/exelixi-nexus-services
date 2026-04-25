@@ -8,88 +8,112 @@ datasource db {
 }
 
 model Empresa {
-  id      Int     @id @default(autoincrement()) @map("empresa_id")
-  rif     String? @map("empresa_rif")
-  nombre  String  @map("empresa_nombre")
-  activo  Boolean @default(true) @map("empresa_estatus")
-  tipo    String? @map("empresa_tipo")
-  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
-
+  id        Int             @id @default(autoincrement()) @map("empresa_id")
+  rif       String          @map("empresa_rif") @db.VarChar
+  nombre    String          @map("empresa_nombre") @db.VarChar
+  activo    Boolean         @map("empresa_estatus")
+  tipo      String          @map("empresa_tipo") @db.VarChar
+  createdAt DateTime?       @map("created_at") @db.Timestamp(6)
   modulos   EmpresaModulo[]
+  recibos   Recibo[]
   roles     Role[]
+  siniestro Siniestro[]
   usuarios  Usuario[]
 
   @@map("empresa")
 }
 
 model Modulo {
-  id          Int     @id @default(autoincrement()) @map("modulo_id")
-  nombre      String  @map("modulo_nombre")
-  activo      Boolean @default(true) @map("modulo_estatus")
-  createdAt   DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
-  
-  empresas    EmpresaModulo[]
-  submodulos  Submodulo[]
+  id         Int             @id @default(autoincrement()) @map("modulo_id")
+  nombre     String          @map("modulo_nombre") @db.VarChar
+  activo     Boolean         @map("modulo_estatus")
+  createdAt  DateTime?       @map("created_at") @db.Timestamp(6)
+  empresas   EmpresaModulo[]
+  submodulos Submodulo[]
 
   @@map("modulo")
 }
 
 model Submodulo {
-  id        Int     @id @default(autoincrement()) @map("submodulo_id")
-  nombre    String  @map("submodulo_nombre")
-  activo    Boolean @default(true) @map("submodulo_estatus")
-  moduloId  Int     @map("submodulo_modulo_id")
-
-  modulo    Modulo  @relation(fields: [moduloId], references: [id])
+  id       Int     @id @default(autoincrement()) @map("submodulo_id")
+  nombre   String  @map("submodulo_nombre") @db.VarChar
+  activo   Boolean @map("submodulo_estatus")
+  moduloId Int     @map("submodulo_modulo_id")
+  modulo   Modulo  @relation(fields: [moduloId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_submodulo_modulo")
 
   @@map("submodulo")
 }
 
 model EmpresaModulo {
-  id        Int      @id @default(autoincrement()) @map("emmo_id")
-  empresaId Int      @map("emmo_empresa_id")
-  moduloId  Int      @map("emmo_modulo_id")
-  token     String?  @map("emmo_token")
-  activo    Boolean  @default(true) @map("emmo_estatus")
-  createdAt DateTime? @default(now()) @map("emmo_created_at") @db.Timestamp(6)
-
-  empresa   Empresa @relation(fields: [empresaId], references: [id])
-  modulo    Modulo  @relation(fields: [moduloId], references: [id])
+  id        Int          @id @default(autoincrement()) @map("emmo_id")
+  empresaId Int          @map("emmo_empresa_id")
+  moduloId  Int          @map("emmo_modulo_id")
+  token     String       @map("emmo_token") @db.VarChar
+  activo    Boolean      @map("emmo_estatus")
+  createdAt DateTime?    @map("emmo_created_at") @db.Timestamp(6)
+  empresa   Empresa      @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_empresa_modulo_empresa")
+  modulo    Modulo       @relation(fields: [moduloId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_empresa_modulo_modulo")
   permisos  Permission[]
 
   @@map("empresa_modulo")
 }
 
 model Role {
-  id        Int      @id @default(autoincrement()) @map("rol_id")
-  nombre    String   @map("rol_nombre")
-  empresaId Int      @map("rol_empresa_id")
-  activo    Boolean  @default(true) @map("rol_estatus")
-
-  empresa    Empresa      @relation(fields: [empresaId], references: [id])
-  permisos   Permission[]
-  usuarios   Usuario[]
+  id        Int          @id @default(autoincrement()) @map("rol_id")
+  nombre    String       @map("rol_nombre") @db.VarChar
+  activo    Boolean      @map("rol_estatus")
+  empresaId Int          @map("rol_empresa_id")
+  empresa   Empresa      @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_rol_empresa")
+  permisos  Permission[]
+  usuarios  Usuario[]
 
   @@map("rol")
 }
 
 model Permission {
-  id              Int     @id @default(autoincrement()) @map("romo_id")
-  roleId          Int     @map("romo_rol_id")
-  empresaModuloId Int     @map("romo_emmo_id")
-  activo          Boolean @default(true) @map("romo_estatus")
-
-  role          Role          @relation(fields: [roleId], references: [id])
-  empresaModulo EmpresaModulo @relation(fields: [empresaModuloId], references: [id])
+  id              Int           @id @default(autoincrement()) @map("romo_id")
+  roleId          Int           @map("romo_rol_id")
+  empresaModuloId Int           @map("romo_emmo_id")
+  activo          Boolean?      @map("romo_estatus")
+  empresaModulo   EmpresaModulo @relation(fields: [empresaModuloId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_rol_modulo_empresa_modulo")
+  role            Role          @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_rol_modulo_rol")
 
   @@map("rol_modulo")
 }
 
+model Recibo {
+  id                     Int       @id @default(autoincrement()) @map("recibo_id")
+  numero                 Int       @map("recibo_numero")
+  estatus                Boolean   @map("recibo_estatus")
+  monto                  Decimal   @map("recibo_monto") @db.Decimal
+  fechaDesde             DateTime  @map("recibo_fecha_desde") @db.Timestamp(6)
+  fechaHasta             DateTime  @map("recibo_fecha_hasta") @db.Timestamp(6)
+  recibo_fecha_pago      DateTime? @db.Timestamp(6)
+  recibo_fecha_anulacion DateTime? @db.Timestamp(6)
+  empresaId              Int       @map("recibo_empresa_id")
+  empresa                Empresa   @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_recibo_empresa")
+
+  @@map("recibo")
+}
+
+model Siniestro {
+  id                   Int       @id @default(autoincrement()) @map("siniestro_id")
+  numero               Int       @map("siniestro_numero")
+  fechaOcurrencia      DateTime  @map("siniestro_fecha_ocurrencia") @db.Timestamp(6)
+  fechaDeclaracion     DateTime? @map("siniestro_fecha_declaracion") @db.Timestamp(6)
+  siniestro_fecha_pago DateTime? @db.Timestamp(6)
+  estatus              DateTime? @map("siniestro_estatus") @db.Timestamp(6)
+  recibo_empresa_id    Int
+  empresa              Empresa   @relation(fields: [recibo_empresa_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_siniestro_empresa")
+
+  @@map("siniestro")
+}
+
 model Usuario {
   id        Int      @id @default(autoincrement()) @map("usuario_id")
-  email     String   @unique @map("usuario_email")
-  password  String   @map("usuario_password")
-  nombre    String   @map("usuario_nombre")
+  email     String   @unique @map("usuario_email") @db.VarChar
+  password  String   @map("usuario_password") @db.VarChar
+  nombre    String   @map("usuario_nombre") @db.VarChar
   empresaId Int      @map("usuario_empresa_id")
   roleId    Int      @map("usuario_role_id")
   activo    Boolean  @default(true) @map("usuario_estatus")
@@ -99,4 +123,10 @@ model Usuario {
   role      Role    @relation(fields: [roleId], references: [id])
 
   @@map("usuario")
+}
+
+model migrations {
+  id        Int    @id(map: "PK_8c82d7f526340ab734260ea46be") @default(autoincrement())
+  timestamp BigInt
+  name      String @db.VarChar
 }

@@ -70,7 +70,7 @@ export class AuthController {
         data: profile
       });
     } catch (error: unknown) {
-      res.status(401).json({ success: false, message: getErrorMessage(error) });
+      res.status(500).json({ success: false, message: getErrorMessage(error) });
     }
   }
 }
