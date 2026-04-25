@@ -7,7 +7,6 @@ async function main() {
   console.log('Iniciando seed adaptado a la base de datos existente...');
 
   // 1. Crear módulos base
-  // Nota: Usamos create ya que no hay campos únicos claros para upsert además del ID
   const moduloVentas = await prisma.modulo.create({
     data: {
       nombre: 'Ventas',
@@ -23,6 +22,17 @@ async function main() {
   });
 
   console.log('Módulos creados.');
+
+  // 1.1 Crear Submódulos para Ventas
+  await prisma.submodulo.createMany({
+    data: [
+      { nombre: 'Cotizaciones', moduloId: moduloVentas.id, activo: true },
+      { nombre: 'Facturación', moduloId: moduloVentas.id, activo: true },
+      { nombre: 'Clientes', moduloId: moduloVentas.id, activo: true }
+    ]
+  });
+
+  console.log('Submódulos de ventas creados.');
 
   // 2. Crear Empresa
   const empresa = await prisma.empresa.create({
@@ -68,7 +78,7 @@ async function main() {
 
   console.log('Permisos asignados.');
 
-  // 6. Crear Usuario (la tabla será creada por Prisma si no existe)
+  // 6. Crear Usuario
   const hashedPassword = await bcrypt.hash('admin123', 10);
   await prisma.usuario.create({
     data: {

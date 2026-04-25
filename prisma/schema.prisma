@@ -29,8 +29,20 @@ model Modulo {
   createdAt   DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
   
   empresas    EmpresaModulo[]
+  submodulos  Submodulo[]
 
   @@map("modulo")
+}
+
+model Submodulo {
+  id        Int     @id @default(autoincrement()) @map("submodulo_id")
+  nombre    String  @map("submodulo_nombre")
+  activo    Boolean @default(true) @map("submodulo_estatus")
+  moduloId  Int     @map("submodulo_modulo_id")
+
+  modulo    Modulo  @relation(fields: [moduloId], references: [id])
+
+  @@map("submodulo")
 }
 
 model EmpresaModulo {
