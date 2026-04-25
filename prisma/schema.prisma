@@ -1,92 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
-}
-
 model Empresa {
-  id        String   @id @default(uuid())
-  nombre    String
-  slug      String   @unique
-  activo    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id      Int     @id @default(autoincrement()) @map("empresa_id")
+  rif     String? @map("empresa_rif")
+  nombre  String  @map("empresa_nombre")
+  activo  Boolean @default(true) @map("empresa_estatus")
+  tipo    String? @map("empresa_tipo")
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
   modulos   EmpresaModulo[]
   roles     Role[]
   usuarios  Usuario[]
+
+  @@map("empresa")
 }
 
 model Modulo {
-  id          String   @id @default(uuid())
-  nombre      String   @unique
-  descripcion String?
-  key         String   @unique // e.g., 'ventas', 'inventario'
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
+  id          Int     @id @default(autoincrement()) @map("modulo_id")
+  nombre      String  @map("modulo_nombre")
+  activo      Boolean @default(true) @map("modulo_estatus")
+  createdAt   DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  
   empresas    EmpresaModulo[]
-  permisos    Permission[]
+
+  @@map("modulo")
 }
 
 model EmpresaModulo {
-  id        String   @id @default(uuid())
-  empresaId String
-  moduloId  String
-  activo    Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id        Int      @id @default(autoincrement()) @map("emmo_id")
+  empresaId Int      @map("emmo_empresa_id")
+  moduloId  Int      @map("emmo_modulo_id")
+  token     String?  @map("emmo_token")
+  activo    Boolean  @default(true) @map("emmo_estatus")
+  createdAt DateTime? @default(now()) @map("emmo_created_at") @db.Timestamp(6)
 
   empresa   Empresa @relation(fields: [empresaId], references: [id])
   modulo    Modulo  @relation(fields: [moduloId], references: [id])
+  permisos  Permission[]
 
-  @@unique([empresaId, moduloId])
+  @@map("empresa_modulo")
 }
 
 model Role {
-  id        String   @id @default(uuid())
-  nombre    String
-  empresaId String
-  isSystem  Boolean  @default(false) // Default roles like 'Admin', 'User'
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        Int      @id @default(autoincrement()) @map("rol_id")
+  nombre    String   @map("rol_nombre")
+  empresaId Int      @map("rol_empresa_id")
+  activo    Boolean  @default(true) @map("rol_estatus")
 
   empresa    Empresa      @relation(fields: [empresaId], references: [id])
   permisos   Permission[]
   usuarios   Usuario[]
 
-  @@unique([nombre, empresaId])
+  @@map("rol")
 }
 
 model Permission {
-  id        String   @id @default(uuid())
-  roleId    String
-  moduloId  String
-  canRead   Boolean  @default(false)
-  canWrite  Boolean  @default(false)
-  canDelete Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              Int     @id @default(autoincrement()) @map("romo_id")
+  roleId          Int     @map("romo_rol_id")
+  empresaModuloId Int     @map("romo_emmo_id")
+  activo          Boolean @default(true) @map("romo_estatus")
 
-  role      Role   @relation(fields: [roleId], references: [id])
-  modulo    Modulo @relation(fields: [moduloId], references: [id])
+  role          Role          @relation(fields: [roleId], references: [id])
+  empresaModulo EmpresaModulo @relation(fields: [empresaModuloId], references: [id])
 
-  @@unique([roleId, moduloId])
+  @@map("rol_modulo")
 }
 
 model Usuario {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  nombre    String
-  empresaId String
-  roleId    String
-  activo    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        Int      @id @default(autoincrement()) @map("usuario_id")
+  email     String   @unique @map("usuario_email")
+  password  String   @map("usuario_password")
+  nombre    String   @map("usuario_nombre")
+  empresaId Int      @map("usuario_empresa_id")
+  roleId    Int      @map("usuario_role_id")
+  activo    Boolean  @default(true) @map("usuario_estatus")
+  createdAt DateTime @default(now()) @map("created_at")
 
   empresa   Empresa @relation(fields: [empresaId], references: [id])
   role      Role    @relation(fields: [roleId], references: [id])
+
+  @@map("usuario")
 }
