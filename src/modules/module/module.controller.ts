@@ -61,8 +61,8 @@ export class ModuleController {
 
   async createModule(req: AuthRequest, res: Response) {
     try {
-      const { nombre, icono } = req.body;
-      const result = await moduleService.createModule(nombre, icono);
+      const { nombre } = req.body;
+      const result = await moduleService.createModule(nombre);
       res.status(201).json({ success: true, data: result });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });

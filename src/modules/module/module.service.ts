@@ -33,16 +33,16 @@ export class ModuleService {
   /**
    * Crea un nuevo módulo global.
    */
-  async createModule(nombre: string, icono?: string) {
+  async createModule(nombre: string) {
     return await prisma.modulo.create({
-      data: { nombre, icono, activo: true }
+      data: { nombre, activo: true }
     });
   }
 
   /**
    * Actualiza un módulo global.
    */
-  async updateModule(id: number, data: { nombre?: string; icono?: string; activo?: boolean }) {
+  async updateModule(id: number, data: { nombre?: string; activo?: boolean }) {
     return await prisma.modulo.update({
       where: { id },
       data
