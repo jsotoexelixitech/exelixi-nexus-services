@@ -2,8 +2,16 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import logger from '../utils/logger';
 
+interface CustomError extends Error {
+  statusCode?: number;
+  code?: string;
+  meta?: {
+    target?: string[];
+  };
+}
+
 export const errorHandler = (
-  err: any,
+  err: CustomError,
   req: Request,
   res: Response,
   next: NextFunction

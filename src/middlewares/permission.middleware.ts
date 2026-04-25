@@ -38,7 +38,7 @@ export const checkRolePermission = (moduleName: string) => {
       }
 
       next();
-    } catch (error) {
+    } catch (error: unknown) {
       return res.status(500).json({ message: 'Error validando permisos de rol.' });
     }
   };

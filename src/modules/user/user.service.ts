@@ -3,6 +3,7 @@ import * as bcrypt from 'bcrypt';
 import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
+import { getErrorMessage } from '../../utils/error-handler';
 
 export class UserService {
   /**
@@ -37,12 +38,12 @@ export class UserService {
           activo: true
         }
       });
-    } catch (error: any) {
-      if (error.code === 'P2002') {
+    } catch (error: unknown) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
         throw new AppError('Este correo electrónico ya está registrado en el sistema.', 400);
       }
       if (error instanceof AppError) throw error;
-      logger.error(`Error al crear usuario: ${error.message}`);
+      logger.error(`Error al crear usuario: ${getErrorMessage(error)}`);
       throw new AppError('No se pudo crear el usuario. Verifique los datos.', 500);
     }
   }
@@ -61,8 +62,8 @@ export class UserService {
         where: { id: uid, empresaId: eid },
         data
       });
-    } catch (error: any) {
-      logger.error(`Error al actualizar usuario: ${error.message}`);
+    } catch (error: unknown) {
+      logger.error(`Error al actualizar usuario: ${getErrorMessage(error)}`);
       throw new AppError('No se pudo actualizar la información del usuario.', 500);
     }
   }
@@ -79,9 +80,9 @@ export class UserService {
         where: { id: uid, empresaId: eid },
         data: { activo: !user.activo }
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof AppError) throw error;
-      logger.error(`Error al cambiar estado de usuario: ${error.message}`);
+      logger.error(`Error al cambiar estado de usuario: ${getErrorMessage(error)}`);
       throw new AppError('No se pudo cambiar el estado del usuario.', 500);
     }
   }
@@ -101,9 +102,9 @@ export class UserService {
         where: { id: uid, empresaId: eid },
         data: { password: hashedPassword }
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof AppError) throw error;
-      logger.error(`Error al cambiar contraseña: ${error.message}`);
+      logger.error(`Error al cambiar contraseña: ${getErrorMessage(error)}`);
       throw new AppError('No se pudo actualizar la contraseña.', 500);
     }
   }
@@ -122,8 +123,8 @@ export class UserService {
       ]);
 
       return { users, total };
-    } catch (error: any) {
-      logger.error(`Error al listar usuarios: ${error.message}`);
+    } catch (error: unknown) {
+      logger.error(`Error al listar usuarios: ${getErrorMessage(error)}`);
       throw new AppError('Error al recuperar el listado de usuarios.', 500);
     }
   }

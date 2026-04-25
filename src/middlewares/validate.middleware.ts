@@ -14,7 +14,7 @@ export const validate = (schema: AnyZodObject) => {
         params: req.params,
       });
       return next();
-    } catch (error) {
+    } catch (error: unknown) {
       return next(error);
     }
   };

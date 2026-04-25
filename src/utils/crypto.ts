@@ -34,7 +34,7 @@ export const decrypt = (text: string): string => {
     decrypted = Buffer.concat([decrypted, decipher.final()]);
     
     return decrypted.toString();
-  } catch (error) {
+  } catch (error: unknown) {
     throw new Error('No se pudo desencriptar el token. La llave es incorrecta o el formato es inválido.');
   }
 };

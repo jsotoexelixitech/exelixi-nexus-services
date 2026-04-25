@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
-
+import { getErrorMessage } from '../../utils/error-handler';
 import { encrypt } from '../../utils/crypto';
 
 export class AuthService {
@@ -68,9 +68,9 @@ export class AuthService {
           role: user.role.nombre
         }
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof AppError) throw error;
-      logger.error(`Error crítico en AuthService.login: ${error.message}`);
+      logger.error(`Error crítico en AuthService.login: ${getErrorMessage(error)}`);
       throw new AppError('Error interno durante la autenticación. Intente más tarde.', 500);
     }
   }

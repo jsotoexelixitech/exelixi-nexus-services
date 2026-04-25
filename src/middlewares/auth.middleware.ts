@@ -4,11 +4,18 @@ import { decrypt } from '../utils/crypto';
 
 export interface AuthRequest extends Request {
   user?: {
-    id: string;
+    id: number;
     email: string;
-    empresaId: string;
-    roleId: string;
+    empresaId: number;
+    roleId: number;
   };
+}
+
+interface JwtPayload {
+  id: number;
+  email: string;
+  empresaId: number;
+  roleId: number;
 }
 
 export const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -24,10 +31,10 @@ export const authenticate = (req: AuthRequest, res: Response, next: NextFunction
     const token = decrypt(encryptedToken);
 
     // 2. Verificar el JWT
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as unknown as JwtPayload;
     req.user = decoded;
     next();
-  } catch (error: any) {
+  } catch (error: unknown) {
     return res.status(401).json({ 
       success: false, 
       message: 'Token inválido, expirado o corrupto.' 

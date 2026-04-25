@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { RoleService } from './role.service';
 import { AuthRequest } from '../../middlewares/auth.middleware';
+import { getErrorMessage } from '../../utils/error-handler';
 
 const roleService = new RoleService();
 
@@ -12,9 +13,12 @@ export class RoleController {
 
       const { nombre } = req.body;
       const role = await roleService.createRole(empresaId, nombre);
-      res.status(201).json(role);
-    } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      res.status(201).json({
+        success: true,
+        data: role
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
 
@@ -26,9 +30,12 @@ export class RoleController {
       const { id } = req.params;
       const { nombre } = req.body;
       const role = await roleService.updateRole(id, empresaId, nombre);
-      res.json(role);
-    } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      res.json({
+        success: true,
+        data: role
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
 
@@ -39,9 +46,12 @@ export class RoleController {
 
       const { id } = req.params;
       await roleService.deleteRole(id, empresaId);
-      res.json({ message: 'Rol eliminado correctamente' });
-    } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      res.json({
+        success: true,
+        message: 'Rol eliminado correctamente'
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
 
@@ -52,18 +62,29 @@ export class RoleController {
 
       const { roleId, permissions } = req.body;
       const result = await roleService.assignPermissions(empresaId, roleId, permissions);
-      res.json({ message: 'Permisos asignados correctamente', result });
-    } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      res.json({
+        success: true,
+        message: 'Permisos asignados correctamente',
+        data: result
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
 
   async list(req: AuthRequest, res: Response) {
-    const empresaId = req.user?.empresaId;
-    if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
+    try {
+      const empresaId = req.user?.empresaId;
+      if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
 
-    const roles = await roleService.getRolesByEmpresa(empresaId);
-    res.json(roles);
+      const roles = await roleService.getRolesByEmpresa(empresaId);
+      res.json({
+        success: true,
+        data: roles
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
   }
 
   async getPermissionMatrix(req: AuthRequest, res: Response) {
@@ -73,9 +94,12 @@ export class RoleController {
 
       const { roleId } = req.params;
       const matrix = await roleService.getPermissionMatrix(empresaId, roleId);
-      res.json(matrix);
-    } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      res.json({
+        success: true,
+        data: matrix
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
 }

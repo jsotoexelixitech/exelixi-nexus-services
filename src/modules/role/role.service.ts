@@ -1,6 +1,7 @@
 import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
+import { getErrorMessage } from '../../utils/error-handler';
 
 export class RoleService {
   /**
@@ -17,8 +18,8 @@ export class RoleService {
           activo: true
         }
       });
-    } catch (error: any) {
-      logger.error(`Error al crear rol: ${error.message}`);
+    } catch (error: unknown) {
+      logger.error(`Error al crear rol: ${getErrorMessage(error)}`);
       throw new AppError('No se pudo crear el rol.', 500);
     }
   }
@@ -32,8 +33,8 @@ export class RoleService {
         where: { id: rid, empresaId: eid },
         data: { nombre }
       });
-    } catch (error: any) {
-      logger.error(`Error al actualizar rol: ${error.message}`);
+    } catch (error: unknown) {
+      logger.error(`Error al actualizar rol: ${getErrorMessage(error)}`);
       throw new AppError('No se pudo actualizar el rol.', 500);
     }
   }
@@ -56,9 +57,9 @@ export class RoleService {
       return await prisma.role.delete({
         where: { id: rid, empresaId: eid }
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof AppError) throw error;
-      logger.error(`Error al eliminar rol: ${error.message}`);
+      logger.error(`Error al eliminar rol: ${getErrorMessage(error)}`);
       throw new AppError('No se pudo eliminar el rol.', 500);
     }
   }

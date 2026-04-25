@@ -34,7 +34,7 @@ export const checkModuleAccess = (moduleName: string) => {
       }
 
       next();
-    } catch (error) {
+    } catch (error: unknown) {
       return res.status(500).json({ message: 'Error validando acceso al módulo.' });
     }
   };
