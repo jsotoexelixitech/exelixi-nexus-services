@@ -4,13 +4,10 @@ import { AuthRequest } from './auth.middleware';
 
 const prisma = new PrismaClient();
 
-type PermissionAction = 'canRead' | 'canWrite' | 'canDelete';
-
 /**
- * Valida si el rol del usuario tiene permiso específico (lectura, escritura, borrado) 
- * para un módulo determinado.
+ * Valida si el rol del usuario tiene permiso para un módulo determinado.
  */
-export const checkRolePermission = (moduleKey: string, action: PermissionAction) => {
+export const checkRolePermission = (moduleName: string) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     const roleId = req.user?.roleId;
 
@@ -19,20 +16,24 @@ export const checkRolePermission = (moduleKey: string, action: PermissionAction)
     }
 
     try {
+      // En este esquema, buscamos a través de EmpresaModulo
       const permission = await prisma.permission.findFirst({
         where: {
-          roleId,
-          modulo: {
-            key: moduleKey
+          roleId: Number(roleId),
+          empresaModulo: {
+            modulo: {
+              nombre: moduleName
+            },
+            activo: true
           },
-          [action]: true
+          activo: true
         }
       });
 
       if (!permission) {
         return res.status(403).json({ 
           error: 'INSUFFICIENT_PERMISSIONS',
-          message: `Su rol no tiene permisos de ${action.replace('can', '').toLowerCase()} para el módulo '${moduleKey}'.` 
+          message: `Su rol no tiene permisos para acceder al módulo '${moduleName}'.` 
         });
       }
 

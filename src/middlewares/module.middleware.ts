@@ -7,7 +7,7 @@ const prisma = new PrismaClient();
 /**
  * Valida si la empresa tiene el módulo activo en la tabla empresa_modulo.
  */
-export const checkModuleAccess = (moduleKey: string) => {
+export const checkModuleAccess = (moduleName: string) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     const empresaId = req.user?.empresaId;
 
@@ -18,9 +18,9 @@ export const checkModuleAccess = (moduleKey: string) => {
     try {
       const moduleAccess = await prisma.empresaModulo.findFirst({
         where: {
-          empresaId,
+          empresaId: Number(empresaId),
           modulo: {
-            key: moduleKey
+            nombre: moduleName
           },
           activo: true
         }
@@ -29,7 +29,7 @@ export const checkModuleAccess = (moduleKey: string) => {
       if (!moduleAccess) {
         return res.status(403).json({ 
           error: 'MODULE_INACTIVE',
-          message: `El módulo '${moduleKey}' no está contratado o activo para su empresa.` 
+          message: `El módulo '${moduleName}' no está contratado o activo para su empresa.` 
         });
       }
 
