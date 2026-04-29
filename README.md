@@ -37,25 +37,55 @@ Exelixi Nexus es una infraestructura backend de grado empresarial diseñada para
 
 ### 🔑 Autenticación (`/api/auth`)
 
-| Método | Endpoint | Descripción                                       |
-| :----- | :------- | :------------------------------------------------ |
-| `POST` | `/login` | Autenticación + Generación de Token Cifrado.      |
-| `GET`  | `/me`    | Perfil del usuario con matriz de permisos actual. |
+| Método | Endpoint           | Descripción                                       |
+| :----- | :----------------- | :------------------------------------------------ |
+| `POST` | `/login`           | Autenticación + Generación de Token Cifrado.      |
+| `GET`  | `/me`              | Perfil del usuario con matriz de permisos actual. |
+| `POST` | `/change-password` | Actualización segura de contraseña.               |
+
+### 🏢 Empresas (`/api/companies`)
+
+| Método   | Endpoint         | Descripción                                   |
+| :------- | :--------------- | :-------------------------------------------- |
+| `GET`    | `/`              | Listar todas las empresas (SaaS Admin).       |
+| `POST`   | `/`              | Crear una nueva empresa cliente.              |
+| `GET`    | `/:id`           | Detalle de una empresa específica.            |
+| `PUT`    | `/:id`           | Actualizar datos de la empresa.               |
+| `DELETE` | `/:id`           | Desactivar empresa.                           |
+| `POST`   | `/toggle-module` | Activar/Desactiva un módulo para una empresa. |
+
+### 👥 Usuarios (`/api/users`)
+
+| Método  | Endpoint      | Descripción                             |
+| :------ | :------------ | :-------------------------------------- |
+| `GET`   | `/`           | Listar usuarios de la empresa actual.   |
+| `POST`  | `/`           | Crear nuevo usuario vinculado a un rol. |
+| `PUT`   | `/:id`        | Actualizar información de usuario.      |
+| `PATCH` | `/:id/status` | Toggle de estado Activo/Inactivo.       |
+
+### 🛡️ Roles y Permisos (`/api/roles`)
+
+| Método   | Endpoint       | Descripción                                  |
+| :------- | :------------- | :------------------------------------------- |
+| `GET`    | `/`            | Listar roles de la empresa.                  |
+| `POST`   | `/`            | Crear un nuevo rol.                          |
+| `PUT`    | `/:id`         | Actualizar nombre del rol.                   |
+| `DELETE` | `/:id`         | Eliminar rol (si no tiene usuarios).         |
+| `GET`    | `/matrix/:id`  | Obtener matriz completa de permisos del rol. |
+| `POST`   | `/permissions` | Asignar permisos granulares (CRUD).          |
 
 ### 🧩 Gestión de Módulos (`/api/modules`)
 
-| Método | Endpoint     | Descripción                          |
-| :----- | :----------- | :----------------------------------- |
-| `GET`  | `/`          | Lista módulos activos de la empresa. |
-| `POST` | `/`          | Crea un nuevo módulo (Admin).        |
-| `POST` | `/submodule` | Crea una sub-funcionalidad.          |
-
-### 👥 Usuarios y Roles (`/api/users`, `/api/roles`)
-
-| Método  | Endpoint             | Descripción                             |
-| :------ | :------------------- | :-------------------------------------- |
-| `PATCH` | `/users/:id/status`  | Activación/Desactivación (Soft Delete). |
-| `POST`  | `/roles/permissions` | Asignación de matriz CRUD granular.     |
+| Método   | Endpoint         | Descripción                           |
+| :------- | :--------------- | :------------------------------------ |
+| `GET`    | `/`              | Listar módulos activos de la empresa. |
+| `GET`    | `/all`           | Listar todos los módulos (Admin).     |
+| `POST`   | `/`              | Crear un nuevo módulo global.         |
+| `PUT`    | `/:id`           | Editar configuración de módulo.       |
+| `DELETE` | `/:id`           | Eliminar módulo.                      |
+| `POST`   | `/submodule`     | Crear una sub-funcionalidad.          |
+| `PUT`    | `/submodule/:id` | Editar submódulo.                     |
+| `DELETE` | `/submodule/:id` | Eliminar submódulo.                   |
 
 ---
 
