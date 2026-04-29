@@ -24,85 +24,111 @@ graph TD
 
 El sistema utiliza `AsyncLocalStorage` para inyectar el contexto de la empresa (`empresaId`) en el hilo de ejecución.
 
-- **Garantía**: Ninguna consulta a la base de datos se realiza sin un filtro `where: { empresaId }`, lo que imposibilita fugas de información entre clientes del SaaS.
+- **Garantía**: Todas las consultas vía Prisma incluyen automáticamente el filtro de `empresaId` extraído del token encriptado.
 
 ---
 
 ## 🔐 Seguridad y Autenticación
 
-### Encriptación de Tokens
+### Encriptación de Tokens (AES-256-CBC)
 
-A diferencia de los sistemas estándar, Exelixi Nexus **cifra los JWT** antes de enviarlos.
+Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita que el contenido del token sea visible en herramientas de inspección si no se posee la llave.
 
-- **Algoritmo**: AES-256-CBC.
-- **Llave**: `ENCRYPTION_KEY` (32 bytes).
-- **Proceso**:
-  1. Generación de JWT estándar.
-  2. Encriptación del string del JWT.
-  3. Envío al cliente.
-  4. El middleware de auth desencripta y valida en cada petición.
+### Headers Globales Requeridos
 
-### Headers Requeridos
-
-| Header          | Valor                           | Obligatorio                     |
-| :-------------- | :------------------------------ | :------------------------------ |
-| `x-api-key`     | Token global definido en `.env` | **SÍ** (En todos los endpoints) |
-| `Authorization` | `Bearer <token_encriptado>`     | **SÍ** (En rutas protegidas)    |
-| `Content-Type`  | `application/json`              | **SÍ**                          |
+| Header          | Valor                                     |
+| :-------------- | :---------------------------------------- |
+| `x-api-key`     | Token de infraestructura (fijo en `.env`) |
+| `Authorization` | `Bearer <token_encriptado>`               |
 
 ---
 
-## 📡 Referencia Detallada de Endpoints
+## 📡 Referencia Completa de Endpoints
 
-### 🔑 Módulo: Auth (`/api/auth`)
-
-Gestiona el acceso y la identidad.
+### 1. Módulo: Autenticación (`/api/auth`)
 
 #### `POST /login`
 
-Autentica al usuario y devuelve el token cifrado.
-
-- **Body**: `{ "email": "...", "password": "..." }`
-- **Response**: `{ "token": "...", "user": { "id": 1, "nombre": "...", "empresaId": 1 } }`
+- **Descripción**: Valida credenciales y genera el token de sesión cifrado.
+- **Body**: `{ "email": "admin@acme.com", "password": "..." }`
+- **Éxito (200)**: Devuelve el token y datos básicos del usuario.
 
 #### `GET /me`
 
-Obtiene el perfil del usuario logueado y su **Matriz de Permisos**.
+- **Descripción**: Devuelve la identidad del usuario actual y su matriz de permisos.
+- **Headers**: Requiere Bearer Token.
 
-- **Response**: Incluye el objeto `permissions` con los módulos que el usuario puede CRUDear.
+#### `POST /change-password`
+
+- **Descripción**: Permite al usuario cambiar su propia contraseña.
+- **Body**: `{ "currentPassword": "...", "newPassword": "..." }`
 
 ---
 
-### 🧩 Módulo: Gestión de Módulos (`/api/modules`)
-
-Controla las funcionalidades disponibles en el ecosistema SaaS.
+### 2. Módulo: Empresas / Tenants (`/api/companies`)
 
 #### `GET /`
 
-Lista los módulos que la empresa del usuario tiene actualmente **contratados y activos**.
+- **Descripción**: Lista todas las empresas (Uso para SaaS Admin).
 
-- **Flujo**: Se usa para renderizar el menú lateral en el frontend.
+#### `POST /`
 
-#### `POST /submodule`
+- **Descripción**: Registra una nueva empresa en el ecosistema.
+- **Body**: `{ "nombre": "Empresa S.A", "rif": "J-123", "tipo": "CLIENTE" }`
 
-Crea una sub-funcionalidad vinculada a un módulo padre.
+#### `GET /:id` | `PUT /:id` | `DELETE /:id`
 
-- **Importante**: Permite granularidad extrema en los permisos (ej: Módulo "Ventas" -> Submódulo "Reportes").
+- **Descripción**: CRUD estándar de una empresa por su ID numérico.
+
+#### `POST /toggle-module`
+
+- **Descripción**: Vincula o desvincula un módulo global a una empresa específica.
+- **Body**: `{ "empresaId": 1, "moduloId": 5, "active": true }`
 
 ---
 
-### 👥 Módulo: Usuarios y Roles (`/api/users`, `/api/roles`)
+### 3. Módulo: Usuarios (`/api/users`)
 
-Implementa el modelo **RBAC (Role-Based Access Control)**.
+#### `GET /`
 
-#### `POST /roles/permissions`
+- **Descripción**: Lista los usuarios pertenecientes a la empresa del administrador que consulta.
 
-Define qué puede hacer un rol en cada módulo.
+#### `POST /`
 
-- **Payload**:
+- **Descripción**: Crea un nuevo usuario y lo vincula a un Rol.
+- **Body**: `{ "email": "...", "nombre": "...", "roleId": 10, "password": "..." }`
+
+#### `PUT /:id`
+
+- **Descripción**: Actualiza datos de perfil del usuario.
+
+#### `PATCH /:id/status`
+
+- **Descripción**: Cambia el estado `activo` (true/false) del usuario.
+
+---
+
+### 4. Módulo: Roles y Permisos (`/api/roles`)
+
+#### `GET /` | `POST /`
+
+- **Descripción**: Gestión de los perfiles de acceso de la empresa.
+
+#### `PUT /:id` | `DELETE /:id`
+
+- **Descripción**: Edición y borrado (protegido si el rol tiene usuarios).
+
+#### `GET /matrix/:roleId`
+
+- **Descripción**: Obtiene la matriz cruzada de Módulos Activos vs Permisos del Rol.
+
+#### `POST /permissions`
+
+- **Descripción**: Asigna permisos granulares CRUD a un rol.
+- **Body**:
   ```json
   {
-    "roleId": 10,
+    "roleId": 5,
     "permissions": [
       {
         "moduloId": 1,
@@ -115,45 +141,43 @@ Define qué puede hacer un rol en cada módulo.
   }
   ```
 
-#### `PATCH /users/:id/status`
+---
 
-Realiza un **Soft Delete**. El usuario no se borra de la DB para mantener integridad histórica, pero se le impide el acceso al sistema.
+### 5. Módulo: Gestión de Módulos (`/api/modules`)
+
+#### `GET /`
+
+- **Descripción**: Lista módulos activos para la empresa actual.
+
+#### `GET /all`
+
+- **Descripción**: Lista todos los módulos y sus submódulos (Global Admin).
+
+#### `POST /` | `PUT /:id` | `DELETE /:id`
+
+- **Descripción**: CRUD de definiciones de módulos globales.
+
+#### `POST /submodule`
+
+- **Descripción**: Crea una funcionalidad hija dentro de un módulo.
+- **Body**: `{ "moduloId": 1, "nombre": "Reportes PDF" }`
+
+#### `PUT /submodule/:id` | `DELETE /submodule/:id`
+
+- **Descripción**: Gestión de submódulos existentes.
 
 ---
 
-## 📡 Observabilidad y Debugging
+## 🛠️ Testing e Integración Continua
 
-### Correlación de Logs (`requestId`)
-
-Cada petición recibe un `requestId` único (UUID). Este ID aparece en:
-
-1. El header de respuesta `x-request-id`.
-2. Los logs de consola y archivos.
-3. Las alertas de **Sentry**.
-
-**Uso**: Si un usuario reporta un error, pídele el `x-request-id` y búscalo en los logs para ver la traza exacta de lo que ocurrió.
-
----
-
-## 🛠️ Desarrollo y QA
-
-### Suite de Pruebas Integrales
-
-Para validar que un cambio no rompió el flujo CRUD o la seguridad multi-tenant, ejecuta:
+Para asegurar que ningún cambio rompa estos flujos, el sistema cuenta con una **Suite de QA** integral:
 
 ```bash
 ./qa_test.sh
 ```
 
-El script realiza un ciclo de vida real:
-
-1. Crea una Empresa.
-2. Crea un Módulo.
-3. Crea un Rol y le asigna permisos al Módulo.
-4. Crea un Usuario con ese Rol.
-5. Intenta violar la seguridad accediendo a otros datos.
-6. Limpia los datos de prueba.
+Este script simula el 100% de los endpoints anteriores en una base de datos de prueba.
 
 ---
 
-👉 _Para dudas adicionales, consulta la documentación Swagger en el endpoint `/api-docs`._
+👉 _Para esquemas JSON detallados, consulte la documentación interactiva en `/api-docs`._
