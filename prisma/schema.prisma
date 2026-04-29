@@ -67,6 +67,7 @@ model Role {
   permisos  Permission[]
   usuarios  Usuario[]
 
+  @@unique([nombre, empresaId])
   @@map("rol")
 }
 

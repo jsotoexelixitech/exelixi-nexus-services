@@ -121,6 +121,15 @@ export class RoleController {
       if (!empresaId)
         return res.status(403).json({ message: 'Empresa no identificada' });
 
+      // QA: Verificar si intentan acceder a otra empresa
+      const queryEmpresaId = req.query.empresaId;
+      if (queryEmpresaId && Number(queryEmpresaId) !== empresaId) {
+        return res.status(403).json({
+          success: false,
+          message: 'No tienes permiso para acceder a los datos de otra empresa',
+        });
+      }
+
       const roles = await roleService.getRolesByEmpresa(empresaId);
       res.json({
         success: true,

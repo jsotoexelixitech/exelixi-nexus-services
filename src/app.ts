@@ -22,11 +22,13 @@ import moduleRoutes from './modules/module/module.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
+import { requestLogger } from './middlewares/logger.middleware';
 
 const app = express();
 
 // --- Request Context & Correlation ---
 app.use(requestIdMiddleware);
+app.use(requestLogger);
 
 // --- Security & Performance Middlewares ---
 app.use(helmet());
