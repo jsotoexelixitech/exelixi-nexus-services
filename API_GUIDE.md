@@ -179,6 +179,23 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
   }
   ```
 
+#### `PUT /submodule/:id`
+
+- **¿Qué hace?**: Modifica el nombre o vinculación de un submódulo existente.
+- **Response Example**:
+  ```json
+  { "success": true, "data": { "id": 22, "nombre": "Reportes Excel" } }
+  ```
+
+#### `DELETE /submodule/:id`
+
+- **¿Qué hace?**: Elimina permanentemente una sub-funcionalidad.
+- **Lógica**: Al eliminarlo, se borran automáticamente las relaciones en la matriz de permisos de todos los roles que lo tenían asignado.
+- **Response Example**:
+  ```json
+  { "success": true, "message": "Submódulo eliminado" }
+  ```
+
 ---
 
 ## 📡 Observabilidad y Diagnóstico
