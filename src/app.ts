@@ -21,8 +21,12 @@ import userRoutes from './modules/user/user.routes';
 import moduleRoutes from './modules/module/module.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
+import { requestIdMiddleware } from './middlewares/request-id.middleware';
 
 const app = express();
+
+// --- Request Context & Correlation ---
+app.use(requestIdMiddleware);
 
 // --- Security & Performance Middlewares ---
 app.use(helmet());
