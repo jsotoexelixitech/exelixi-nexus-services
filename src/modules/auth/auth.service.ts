@@ -6,6 +6,17 @@ import prisma from '../../config/prisma';
 import { getErrorMessage } from '../../utils/error-handler';
 import { encrypt } from '../../utils/crypto';
 
+interface RolePermissionDetail {
+  id: number;
+  roleId: number;
+  moduloId: number;
+  submoduloId: number | null;
+  canCreate: boolean;
+  canRead: boolean;
+  canUpdate: boolean;
+  canDelete: boolean;
+}
+
 export class AuthService {
   /**
    * Autentica a un usuario y genera un token JWT con el contexto de su empresa y rol.
@@ -114,7 +125,7 @@ export class AuthService {
       // 1. Obtener detalles granulares de la nueva tabla
       const granularDetails = await (prisma as any).rolePermissionDetail.findMany({
         where: { roleId: user.roleId }
-      });
+      }) as RolePermissionDetail[];
 
       // 2. Mapear módulos y submódulos con sus flags CRUD
       const modulesAccess = empresa.modulos.map(em => {
