@@ -2,6 +2,8 @@
 
 Exelixi Nexus es una infraestructura backend de grado empresarial diseñada para orquestar sistemas SaaS multi-tenant con un enfoque radical en la **seguridad, observabilidad y robustez del tipado**.
 
+👉 **[Consulta la Guía Técnica Detallada (API & Flujos)](./API_GUIDE.md)**
+
 ---
 
 ## 🌟 Diferenciadores de Grado Producción
