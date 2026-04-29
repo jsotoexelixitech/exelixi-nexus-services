@@ -2,6 +2,10 @@ import app from './app';
 import { env } from './config/env';
 import logger from './utils/logger';
 import prisma from './config/prisma';
+import { initSentry } from './config/sentry';
+
+// Inicializar Sentry antes de cualquier otra cosa
+initSentry();
 
 const PORT = env.PORT || 3000;
 

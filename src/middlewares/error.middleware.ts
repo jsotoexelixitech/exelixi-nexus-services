@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import logger from '../utils/logger';
+import { getRequestContext } from '../utils/request-context';
+import { captureError } from '../config/sentry';
 
 interface CustomError extends Error {
   statusCode?: number;
@@ -16,8 +18,24 @@ export const errorHandler = (
   res: Response,
   _next: NextFunction,
 ) => {
-  // Log the error
+  const ctx = getRequestContext();
+  const requestId = ctx?.requestId || 'no-context';
+
+  // Log the error con requestId (Winston lo inyecta automáticamente via el contexto)
   logger.error(`${err.message} - ${req.method} ${req.url} - ${req.ip}`);
+
+  // Capturar en Sentry con contexto enriquecido
+  captureError(err, {
+    userId: ctx?.userId,
+    empresaId: ctx?.empresaId,
+    requestId,
+    extra: {
+      method: req.method,
+      url: req.originalUrl,
+      statusCode: err.statusCode,
+      errorCode: err.code,
+    },
+  });
 
   // Zod Validation Errors
   if (err instanceof ZodError) {
@@ -25,6 +43,7 @@ export const errorHandler = (
       success: false,
       error: 'VALIDATION_ERROR',
       message: 'Los datos proporcionados no son válidos.',
+      requestId,
       details: err.errors.map((e) => ({
         field: e.path.join('.'),
         message: e.message,
@@ -38,6 +57,17 @@ export const errorHandler = (
       success: false,
       error: 'DUPLICATE_ENTRY',
       message: `Ya existe un registro con ese valor en el campo: ${err.meta?.target}`,
+      requestId,
+    });
+  }
+
+  // Prisma Not Found
+  if (err.code === 'P2025') {
+    return res.status(404).json({
+      success: false,
+      error: 'NOT_FOUND',
+      message: 'El registro solicitado no existe.',
+      requestId,
     });
   }
 
@@ -49,6 +79,7 @@ export const errorHandler = (
     success: false,
     error: err.name || 'INTERNAL_SERVER_ERROR',
     message,
+    requestId,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 };
