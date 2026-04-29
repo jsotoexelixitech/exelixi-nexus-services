@@ -40,7 +40,13 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 - **¿Qué hace?**: Valida credenciales y genera el token cifrado.
 - **Body (JSON)**: `{ "email": "admin@acme.com", "password": "..." }`
-- **Response**: `{ "token": "...", "user": { ... } }`
+- **Response Example**:
+  ```json
+  {
+    "token": "c1f2r3a4... (JWT Cifrado)",
+    "user": { "id": 1, "nombre": "Admin", "empresaId": 1 }
+  }
+  ```
 
 #### `GET /me`
 
@@ -51,6 +57,10 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 - **¿Qué hace?**: Actualización segura de contraseña por el propio usuario.
 - **Body (JSON)**: `{ "currentPassword": "...", "newPassword": "..." }`
+- **Response Example**:
+  ```json
+  { "success": true, "message": "Contraseña actualizada exitosamente" }
+  ```
 
 ---
 
@@ -77,6 +87,13 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 - **¿Qué hace?**: Activa/Desactiva módulos globales para una empresa específica.
 - **Body (JSON)**: `{ "empresaId": 1, "moduloId": 5, "active": true }`
+- **Response Example**:
+  ```json
+  {
+    "success": true,
+    "data": { "empresaId": 1, "moduloId": 5, "activo": true }
+  }
+  ```
 
 ---
 
@@ -98,7 +115,14 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 #### `PATCH /:id/status`
 
 - **¿Qué hace?**: Activación/Desactivación (Soft Delete).
-- **Response**: `{ "message": "Estado actualizado", "active": false }`
+- **Response Example**:
+  ```json
+  {
+    "success": true,
+    "message": "Estado del usuario actualizado",
+    "data": { "id": 5, "activo": false }
+  }
+  ```
 
 ---
 
@@ -116,12 +140,27 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 #### `GET /matrix/:roleId`
 
 - **¿Qué hace?**: Devuelve la matriz completa de Módulos Activos vs Permisos.
-- **Response**: `[ { "moduloId": 1, "nombre": "Ventas", "canRead": true, ... } ]`
+- **Response Example**:
+  ```json
+  [
+    {
+      "moduloId": 1,
+      "nombre": "Ventas",
+      "canRead": true,
+      "canCreate": false,
+      "submodulos": []
+    }
+  ]
+  ```
 
 #### `POST /permissions`
 
 - **¿Qué hace?**: Asignación atómica de permisos CRUD.
 - **Body (JSON)**: `{ "roleId": 5, "permissions": [ { "moduloId": 1, "canRead": true, ... } ] }`
+- **Response Example**:
+  ```json
+  { "success": true, "message": "Matriz de permisos actualizada" }
+  ```
 
 ---
 
@@ -140,6 +179,13 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 - **¿Qué hace?**: Crea una funcionalidad hija vinculada a un módulo.
 - **Body (JSON)**: `{ "moduloId": 1, "nombre": "Nombre Submódulo" }`
+- **Response Example**:
+  ```json
+  {
+    "success": true,
+    "data": { "id": 105, "nombre": "Nuevo Submódulo", "moduloId": 1 }
+  }
+  ```
 
 #### `PUT /submodule/:id` | `DELETE /submodule/:id`
 
