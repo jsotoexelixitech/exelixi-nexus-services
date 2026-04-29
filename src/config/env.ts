@@ -22,6 +22,7 @@ const envSchema = z.object({
       'ENCRYPTION_KEY debe tener exactamente 32 caracteres (AES-256)',
     ),
   ALLOWED_ORIGINS: z.string().default('*'),
+  SENTRY_DSN: z.string().url().optional(),
 });
 
 const _env = envSchema.safeParse(process.env);
