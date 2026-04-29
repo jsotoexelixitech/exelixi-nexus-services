@@ -1,83 +1,101 @@
 # 🚀 Exelixi Nexus - SaaS Multi-Tenant Backend
 
-Exelixi Nexus es una infraestructura backend de grado empresarial diseñada para orquestar sistemas SaaS multi-tenant con un enfoque radical en la **seguridad, escalabilidad y robustez del tipado**.
-
-## 🌟 Diferenciadores Clave
-
-- **🛡️ Seguridad de Doble Capa**: Protección mediante Global API Key y JWTs encriptados (AES-256-CBC).
-- **💪 Tipado Estricto (Zero-Any Policy)**: Base de código 100% TypeScript con política estricta de cero uso de `any`.
-- **🏢 Compatibilidad Legacy**: Integración con bases de datos preexistentes (IDs enteros, mapeos `snake_case`).
-- **🧩 Sistema de Módulos Dinámicos**: Control total sobre qué funcionalidades tiene activas cada empresa.
+Exelixi Nexus es una infraestructura backend de grado empresarial diseñada para orquestar sistemas SaaS multi-tenant con un enfoque radical en la **seguridad, observabilidad y robustez del tipado**.
 
 ---
 
-## 🔐 Flujo de Seguridad y Autenticación
+## 🌟 Diferenciadores de Grado Producción
 
-El sistema implementa una **Defensa en Profundidad** con el siguiente flujo:
+### 🛡️ Seguridad y Blindaje (Hardening)
 
-1.  **Capa de Infraestructura (API Key)**: Todas las peticiones deben incluir el header `x-api-key`. Sin esto, el servidor rechaza la conexión antes de procesar lógica.
-2.  **Capa de Autenticación (Login)**: Al loguearse, el sistema genera un JWT que es **encriptado simétricamente (AES-256-CBC)** antes de enviarse al cliente.
-3.  **Capa de Sesión (Bearer Token)**: Para rutas protegidas, se debe enviar el token en el header `Authorization: Bearer <token_encriptado>`.
-4.  **Capa de Aislamiento (Multi-tenancy)**: El sistema extrae el `empresaId` del token y garantiza que el usuario NUNCA pueda ver o modificar datos de otra empresa.
+- **Defensa en Profundidad**: Protección mediante **Global API Key** (`x-api-key`) y JWTs con **encriptación simétrica AES-256-CBC**.
+- **Aislamiento Multi-tenant Estricto**: Middlewares que garantizan que una empresa NUNCA pueda acceder a datos de otra, incluso con tokens válidos.
+- **Validación de Entorno**: El servidor utiliza **Zod** para validar las variables de entorno al arrancar. Si falta una llave secreta o la DB está mal configurada, el sistema falla inmediatamente con un error claro.
+
+### 📡 Observabilidad 360°
+
+- **Trazabilidad Total**: Cada petición genera un `x-request-id` único que viaja a través de todos los logs (Winston) y trazas de error.
+- **Sentry Deep Integration**: Captura de errores en tiempo real con filtrado de PII (Datos Sensibles) y breadcrumbs automáticos de base de datos (Prisma).
+- **Performance Tracking**: Logs automáticos del tiempo de ejecución de cada endpoint en milisegundos.
+
+### 🧪 Quality Assurance (QA) Suite
+
+- **100% CRUD Coverage**: Suite de pruebas automatizada (`qa_test.sh`) que valida el ciclo de vida completo (Create, Read, Update, Delete) de cada módulo.
+- **Zero-Regression Policy**: Pruebas integrales de seguridad (Cross-tenant access attempts) incluidas en cada ejecución.
 
 ---
 
-## 📡 Guía de API (Endpoints Principales)
+## 🔐 Flujo de Seguridad
+
+1.  **API Key Guard**: Filtro global inicial.
+2.  **JWT Encrypted**: Los tokens viajan cifrados, imposibles de leer sin la `ENCRYPTION_KEY`.
+3.  **Tenant Context**: `AsyncLocalStorage` propaga el ID de la empresa y el ID de la petición sin contaminar la firma de las funciones.
+
+---
+
+## 📡 Endpoints de Arquitectura
 
 ### 🔑 Autenticación (`/api/auth`)
 
-| Método | Endpoint | Descripción                                      | Payload                                 |
-| :----- | :------- | :----------------------------------------------- | :-------------------------------------- |
-| `POST` | `/login` | Inicia sesión y devuelve un token encriptado.    | `{ "email": "...", "password": "..." }` |
-| `GET`  | `/me`    | Devuelve el perfil completo, empresa y permisos. | Requiere Bearer Token                   |
+| Método | Endpoint | Descripción                                       |
+| :----- | :------- | :------------------------------------------------ |
+| `POST` | `/login` | Autenticación + Generación de Token Cifrado.      |
+| `GET`  | `/me`    | Perfil del usuario con matriz de permisos actual. |
 
-### 🏢 Empresas (`/api/companies`)
+### 🧩 Gestión de Módulos (`/api/modules`)
 
-| Método | Endpoint         | Descripción                                  | Payload                                             |
-| :----- | :--------------- | :------------------------------------------- | :-------------------------------------------------- |
-| `GET`  | `/`              | Lista todas las empresas (SaaS Admin).       | -                                                   |
-| `POST` | `/toggle-module` | Activa/Desactiva un módulo para una empresa. | `{ "empresaId": 1, "moduloId": 2, "active": true }` |
+| Método | Endpoint     | Descripción                          |
+| :----- | :----------- | :----------------------------------- |
+| `GET`  | `/`          | Lista módulos activos de la empresa. |
+| `POST` | `/`          | Crea un nuevo módulo (Admin).        |
+| `POST` | `/submodule` | Crea una sub-funcionalidad.          |
 
-### 🧩 Módulos y Roles (`/api/modules`, `/api/roles`)
+### 👥 Usuarios y Roles (`/api/users`, `/api/roles`)
 
-| Método | Endpoint             | Descripción                                      | Payload                                  |
-| :----- | :------------------- | :----------------------------------------------- | :--------------------------------------- |
-| `GET`  | `/modules/active`    | Módulos que la empresa actual tiene contratados. | -                                        |
-| `POST` | `/modules/submodule` | Crea una sub-funcionalidad dentro de un módulo.  | `{ "moduloId": 1, "nombre": "..." }`     |
-| `POST` | `/roles`             | Crea un rol (ej. "Vendedor") para la empresa.    | `{ "nombre": "Vendedor" }`               |
-| `POST` | `/roles/assign`      | Asigna permisos de módulos a un rol.             | `{ "roleId": 1, "permissions": [1, 2] }` |
-
----
-
-## 🚦 Límites y Funcionalidades
-
-### 🛡️ Rate Limiting (Protección Anti-DDoS)
-
-El sistema tiene un límite estricto por IP:
-
-- **Límite**: 100 peticiones.
-- **Ventana de tiempo**: 15 minutos.
-- **Identificador**: Dirección IP del cliente.
-- **Respuesta**: HTTP 429 (Too Many Requests).
-
-### 📊 Matriz de Permisos (RBAC)
-
-El acceso no es solo por "URL", sino por **Módulo**.
-
-1. Una empresa "contrata" un módulo.
-2. El administrador crea un Rol.
-3. El Rol se vincula a los módulos activos.
-4. El usuario, al heredar el Rol, solo puede operar en los módulos permitidos.
+| Método  | Endpoint             | Descripción                             |
+| :------ | :------------------- | :-------------------------------------- |
+| `PATCH` | `/users/:id/status`  | Activación/Desactivación (Soft Delete). |
+| `POST`  | `/roles/permissions` | Asignación de matriz CRUD granular.     |
 
 ---
 
-## 🚀 Instalación Rápida
+## 🚀 Instalación y QA
 
-1.  **Configurar Entorno**: `cp .env.example .env` (Asegúrate de poner una `ENCRYPTION_KEY` de 32 caracteres).
-2.  **Instalar**: `pnpm install`
-3.  **Base de Datos**: `npx prisma db push && npx prisma db seed`
-4.  **Desarrollo**: `npm run dev`
+### Configuración
+
+1. `cp .env.example .env`
+2. Configura `SENTRY_DSN` para habilitar la monitorización.
+3. `pnpm install`
+
+### Base de Datos
+
+```bash
+npx prisma db push
+npx prisma db seed
+```
+
+### Ejecutar Pruebas de Calidad
+
+```bash
+# Ejecuta la suite completa de QA v4.3
+./qa_test.sh
+```
 
 ---
 
-👉 **Documentación Interactiva**: `http://localhost:3000/api-docs`
+## 📊 Monitoreo de Logs
+
+El sistema genera logs estructurados en `combined.log`:
+
+```json
+{
+  "level": "info",
+  "message": "Finished Request: GET /api/roles 200 - 5ms",
+  "requestId": "db89...",
+  "timestamp": "..."
+}
+```
+
+---
+
+👉 **Documentación Swagger**: `http://localhost:3021/api-docs`
