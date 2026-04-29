@@ -34,17 +34,38 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 #### `POST /login`
 
-- **¿Qué hace?**: Autentica al usuario contra la base de datos, valida que la empresa esté activa y genera un token de sesión.
-- **Lógica**: La contraseña se verifica mediante `bcrypt`. El token resultante se encripta simétricamente para proteger la privacidad del usuario incluso si el tráfico es interceptado.
+- **¿Qué hace?**: Autentica al usuario, valida que la empresa esté activa y genera un token de sesión.
+- **Lógica**: La contraseña se verifica mediante `bcrypt`. El token resultante se encripta simétricamente.
 - **Response Example**:
   ```json
-  { "token": "...", "user": { "id": 1, "nombre": "Admin", "empresaId": 1 } }
+  {
+    "token": "a1b2c3d4... (Token Cifrado)",
+    "user": {
+      "id": 1,
+      "nombre": "Admin Usuario",
+      "email": "admin@acme.com",
+      "empresaId": 1
+    }
+  }
   ```
 
 #### `GET /me`
 
 - **¿Qué hace?**: Recupera el estado actual de la sesión del usuario.
-- **Lógica**: Es vital para el frontend, ya que devuelve no solo el perfil, sino la **Matriz de Permisos** actualizada. Esto permite al cliente habilitar o deshabilitar botones y vistas en tiempo real según el rol del usuario.
+- **Lógica**: Devuelve el perfil y la **Matriz de Permisos** actualizada para el frontend.
+- **Response Example**:
+  ```json
+  {
+    "id": 1,
+    "nombre": "Admin Usuario",
+    "email": "admin@acme.com",
+    "empresaId": 1,
+    "role": { "id": 5, "nombre": "Administrador" },
+    "permissions": [
+      { "moduloId": 1, "nombre": "Ventas", "canRead": true, "canCreate": true }
+    ]
+  }
+  ```
 
 ---
 
@@ -53,12 +74,33 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 #### `POST /`
 
 - **¿Qué hace?**: Registra un nuevo cliente (Empresa) en el sistema SaaS.
-- **Lógica**: Inicializa la estructura base de la empresa. Por defecto, las empresas se crean en estado `activo`.
+- **Lógica**: Inicializa la estructura base de la empresa en estado `activo`.
+- **Response Example**:
+  ```json
+  {
+    "success": true,
+    "message": "Empresa creada exitosamente",
+    "data": {
+      "id": 15,
+      "nombre": "Empresa S.A",
+      "rif": "J-123",
+      "activo": true
+    }
+  }
+  ```
 
 #### `POST /toggle-module`
 
-- **¿Qué hace?**: Gestiona el catálogo de funcionalidades (módulos) contratados por una empresa.
-- **Lógica**: Al activar un módulo, este se vuelve visible para la configuración de Roles de esa empresa. Si se desactiva, ningún usuario de esa empresa podrá acceder a dicha funcionalidad, independientemente de sus permisos.
+- **¿Qué hace?**: Activa/Desactiva funcionalidades para una empresa específica.
+- **Lógica**: Si se desactiva, ningún usuario de esa empresa podrá acceder a dicha funcionalidad.
+- **Response Example**:
+  ```json
+  {
+    "success": true,
+    "message": "Módulo activado exitosamente",
+    "data": { "id": 45, "empresaId": 1, "moduloId": 5, "activo": true }
+  }
+  ```
 
 ---
 
@@ -67,12 +109,28 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 #### `POST /`
 
 - **¿Qué hace?**: Crea un nuevo colaborador dentro de una empresa.
-- **Lógica**: El usuario debe estar obligatoriamente vinculado a un `roleId` válido de la misma empresa. El sistema hace un hash automático de la contraseña antes de guardarla.
+- **Lógica**: Vincula el usuario a un `roleId` y hashea la contraseña automáticamente.
+- **Response Example**:
+  ```json
+  {
+    "id": 54,
+    "nombre": "QA User",
+    "email": "qa@test.com",
+    "roleId": 10
+  }
+  ```
 
 #### `PATCH /:id/status`
 
 - **¿Qué hace?**: Activa o desactiva a un usuario (**Soft Delete**).
-- **Lógica**: En lugar de borrar el registro (lo cual rompería la integridad de auditorías y logs), se marca como inactivo. Un usuario inactivo no puede generar nuevos tokens de sesión.
+- **Lógica**: Mantiene la integridad histórica sin borrar el registro físico.
+- **Response Example**:
+  ```json
+  {
+    "message": "Estado del usuario actualizado",
+    "active": false
+  }
+  ```
 
 ---
 
@@ -80,13 +138,30 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 #### `GET /matrix/:roleId`
 
-- **¿Qué hace?**: Genera un mapa completo de permisos para un rol específico.
-- **Lógica**: Cruza la tabla de módulos activos de la empresa con los permisos granulares asignados al rol. Es la herramienta principal para la interfaz de administración de permisos.
+- **¿Qué hace?**: Genera un mapa completo de permisos para un rol.
+- **Lógica**: Cruza módulos activos de la empresa con permisos granulares del rol.
+- **Response Example**:
+  ```json
+  [
+    {
+      "moduloId": 1,
+      "nombre": "Ventas",
+      "activo": true,
+      "canCreate": true,
+      "canRead": true,
+      "submodulos": []
+    }
+  ]
+  ```
 
 #### `POST /permissions`
 
 - **¿Qué hace?**: Define las capacidades CRUD del rol.
-- **Lógica**: Utiliza una **transacción de base de datos** para limpiar permisos antiguos y asignar los nuevos de forma atómica, garantizando que el rol nunca quede en un estado inconsistente si la operación falla.
+- **Lógica**: Usa una transacción atómica para garantizar consistencia total.
+- **Response Example**:
+  ```json
+  { "success": true }
+  ```
 
 ---
 
@@ -94,8 +169,15 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 #### `POST /submodule`
 
-- **¿Qué hace?**: Añade granularidad a un módulo principal.
-- **Lógica**: Permite crear secciones específicas (ej: Módulo "Recursos Humanos" -> Submódulo "Nómina"). Los submódulos heredan la visibilidad del módulo padre pero tienen sus propios permisos CRUD.
+- **¿Qué hace?**: Añade granularidad (sub-funcionalidades) a un módulo principal.
+- **Lógica**: Permite aislar permisos de secciones específicas dentro de un módulo padre.
+- **Response Example**:
+  ```json
+  {
+    "success": true,
+    "data": { "id": 22, "moduloId": 1, "nombre": "Reportes PDF" }
+  }
+  ```
 
 ---
 
@@ -103,9 +185,9 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 ### Trazabilidad con `requestId`
 
-Cada petición HTTP es marcada con un UUID único. Si un endpoint falla, el sistema loguea el error junto con este ID en **Sentry** y en los archivos de log locales.
-**Propósito**: Permite correlacionar un error reportado por un usuario con la línea exacta de código que falló en el servidor.
+Cada petición HTTP es marcada con un UUID único disponible en el header `x-request-id`.
+**Uso**: Permite correlacionar errores en Sentry con logs específicos en el servidor.
 
 ---
 
-👉 _Para dudas adicionales, consulta la documentación Swagger en el endpoint `/api-docs`._
+👉 _Para esquemas JSON detallados, consulte la documentación interactiva en `/api-docs`._
