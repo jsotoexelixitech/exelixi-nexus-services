@@ -20,7 +20,7 @@ graph TD
 
 ### 2. Aislamiento Multi-tenant
 
-- **Garantía**: Todas las consultas vía Prisma incluyen automáticamente el filtro de `empresaId`. Ningún usuario puede ver datos de otra empresa.
+- **Lógica**: Utilizamos `AsyncLocalStorage` para inyectar el `empresaId` en el contexto de la petición. Prisma añade automáticamente este filtro en cada query, garantizando que un cliente nunca vea datos de otro.
 
 ---
 
@@ -28,7 +28,7 @@ graph TD
 
 ### Encriptación de Tokens (AES-256-CBC)
 
-Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita que el contenido del token sea visible en herramientas de inspección.
+- **¿Por qué?**: Los JWT estándar pueden ser decodificados por cualquiera (base64). Nosotros aplicamos una capa de cifrado simétrico para que el payload sea ilegible sin la `ENCRYPTION_KEY`.
 
 ---
 
@@ -38,6 +38,8 @@ Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita qu
 
 #### `POST /login`
 
+- **¿Qué hace?**: Valida credenciales y genera el token cifrado.
+- **Lógica**: Las contraseñas se comparan usando `bcrypt`. Si la empresa está inactiva, se deniega el acceso.
 - **Body**: `{ "email": "...", "password": "..." }`
 - **Response Example**:
   ```json
@@ -46,6 +48,8 @@ Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita qu
 
 #### `GET /me`
 
+- **¿Qué hace?**: Devuelve la identidad y matriz de permisos del usuario actual.
+- **Lógica**: Vital para que el frontend habilite/deshabilite opciones de UI según el rol.
 - **Response Example**:
   ```json
   {
@@ -57,6 +61,7 @@ Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita qu
 
 #### `POST /change-password`
 
+- **¿Qué hace?**: Actualización segura de contraseña.
 - **Body**: `{ "currentPassword": "...", "newPassword": "..." }`
 - **Response Example**:
   ```json
@@ -67,37 +72,20 @@ Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita qu
 
 ### 2. Módulo: Empresas / Tenants (`/api/companies`)
 
-#### `GET /`
-
-- **Response Example**:
-  ```json
-  [{ "id": 1, "nombre": "Empresa A", "rif": "J-123" }]
-  ```
-
 #### `POST /`
 
+- **¿Qué hace?**: Crea una nueva empresa cliente.
+- **Lógica**: Inicializa la configuración básica del tenant en el ecosistema SaaS.
 - **Body**: `{ "nombre": "...", "rif": "...", "tipo": "CLIENTE" }`
 - **Response Example**:
   ```json
   { "success": true, "data": { "id": 10, "nombre": "Acme" } }
   ```
 
-#### `GET /:id` | `PUT /:id`
-
-- **Response Example**:
-  ```json
-  { "id": 1, "nombre": "Acme Corp", "rif": "J-123" }
-  ```
-
-#### `DELETE /:id`
-
-- **Response Example**:
-  ```json
-  { "success": true, "message": "Empresa desactivada" }
-  ```
-
 #### `POST /toggle-module`
 
+- **¿Qué hace?**: Activa/Desactiva módulos para una empresa específica.
+- **Lógica**: Es el interruptor maestro de funcionalidades por cliente.
 - **Body**: `{ "empresaId": 1, "moduloId": 5, "active": true }`
 - **Response Example**:
   ```json
@@ -108,31 +96,20 @@ Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita qu
 
 ### 3. Módulo: Usuarios (`/api/users`)
 
-#### `GET /`
-
-- **Response Example**:
-  ```json
-  [{ "id": 5, "nombre": "Juan", "email": "juan@test.com", "role": "Admin" }]
-  ```
-
 #### `POST /`
 
+- **¿Qué hace?**: Crea un usuario vinculado a un rol y empresa.
+- **Lógica**: El sistema valida que el `roleId` pertenezca a la misma empresa del creador.
 - **Body**: `{ "email": "...", "nombre": "...", "roleId": 10, "password": "..." }`
 - **Response Example**:
   ```json
   { "id": 50, "nombre": "Juan", "email": "juan@test.com" }
   ```
 
-#### `PUT /:id`
-
-- **Body**: `{ "nombre": "..." }`
-- **Response Example**:
-  ```json
-  { "id": 50, "nombre": "Juan Modificado" }
-  ```
-
 #### `PATCH /:id/status`
 
+- **¿Qué hace?**: Activación/Desactivación (**Soft Delete**).
+- **Lógica**: No borramos registros para mantener trazabilidad histórica y auditoría.
 - **Response Example**:
   ```json
   {
@@ -146,30 +123,10 @@ Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita qu
 
 ### 4. Módulo: Roles y Permisos (`/api/roles`)
 
-#### `GET /`
-
-- **Response Example**:
-  ```json
-  [{ "id": 1, "nombre": "Administrador" }]
-  ```
-
-#### `POST /`
-
-- **Body**: `{ "nombre": "Nuevo Rol" }`
-- **Response Example**:
-  ```json
-  { "id": 10, "nombre": "Nuevo Rol" }
-  ```
-
-#### `PUT /:id` | `DELETE /:id`
-
-- **Response Example**:
-  ```json
-  { "success": true, "message": "Operación exitosa" }
-  ```
-
 #### `GET /matrix/:roleId`
 
+- **¿Qué hace?**: Genera el mapa de permisos (Módulos vs CRUD).
+- **Lógica**: Cruza módulos contratados por la empresa con permisos del rol.
 - **Response Example**:
   ```json
   [{ "moduloId": 1, "nombre": "Ventas", "canRead": true, "submodulos": [] }]
@@ -177,6 +134,8 @@ Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita qu
 
 #### `POST /permissions`
 
+- **¿Qué hace?**: Asignación atómica de permisos.
+- **Lógica**: Usa una **transacción Prisma** para asegurar que el rol nunca quede sin permisos si la operación falla a mitad de camino.
 - **Body**: `{ "roleId": 5, "permissions": [...] }`
 - **Response Example**:
   ```json
@@ -187,41 +146,38 @@ Los JWT se cifran usando una llave de 32 bytes (`ENCRYPTION_KEY`). Esto evita qu
 
 ### 5. Módulo: Gestión de Módulos (`/api/modules`)
 
-#### `GET /` | `GET /all`
+#### `GET /`
 
+- **¿Qué hace?**: Lista módulos con sus submódulos anidados.
+- **Lógica**: Facilita la construcción de menús jerárquicos en una sola petición.
 - **Response Example**:
   ```json
   [
     {
       "id": 1,
       "nombre": "Ventas",
-      "submodulos": [{ "id": 10, "nombre": "Facturación" }]
+      "submodulos": [{ "id": 10, "nombre": "Facturas" }]
     }
   ]
   ```
 
-#### `POST /` | `PUT /:id` | `DELETE /:id`
-
-- **Response Example**:
-  ```json
-  { "success": true, "data": { "id": 1, "nombre": "Modulo" } }
-  ```
-
 #### `POST /submodule`
 
+- **¿Qué hace?**: Crea una funcionalidad hija.
 - **Body**: `{ "moduloId": 1, "nombre": "Sub-A" }`
 - **Response Example**:
   ```json
   { "success": true, "data": { "id": 20, "nombre": "Sub-A" } }
   ```
 
-#### `PUT /submodule/:id` | `DELETE /submodule/:id`
+---
 
-- **Response Example**:
-  ```json
-  { "success": true, "message": "Submódulo actualizado/eliminado" }
-  ```
+## 📡 Observabilidad
+
+### Correlación `x-request-id`
+
+Todas las respuestas incluyen el header `x-request-id`. Este ID permite rastrear una petición fallida desde el frontend hasta los logs de Sentry y Winston.
 
 ---
 
-👉 _Consulte `/api-docs` para especificaciones técnicas adicionales._
+👉 _Consulte `/api-docs` para esquemas JSON técnicos completos._
