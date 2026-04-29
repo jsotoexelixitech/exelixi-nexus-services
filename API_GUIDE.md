@@ -167,6 +167,28 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 ### 5. Módulo: Gestión de Módulos (`/api/modules`)
 
+#### `GET /`
+
+- **¿Qué hace?**: Lista los módulos activos para la empresa, incluyendo sus submódulos.
+- **Lógica**: Devuelve la estructura jerárquica necesaria para construir el menú de navegación. Los submódulos vienen anidados en el array `submodulos`.
+- **Response Example**:
+  ```json
+  {
+    "success": true,
+    "data": [
+      {
+        "id": 1,
+        "nombre": "Configuración",
+        "activo": true,
+        "submodulos": [
+          { "id": 10, "nombre": "Perfiles" },
+          { "id": 11, "nombre": "Empresas" }
+        ]
+      }
+    ]
+  }
+  ```
+
 #### `POST /submodule`
 
 - **¿Qué hace?**: Añade granularidad (sub-funcionalidades) a un módulo principal.
