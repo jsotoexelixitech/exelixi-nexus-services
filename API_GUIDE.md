@@ -18,6 +18,10 @@ graph TD
     F -->|Prisma Client| G[(PostgreSQL)]
 ```
 
+### 2. Aislamiento Multi-tenant
+
+- **Garantía**: Todas las consultas vía Prisma incluyen automáticamente el filtro de `empresaId` extraído del token encriptado. Ningún usuario puede ver datos de otra empresa.
+
 ---
 
 ## 🔐 Seguridad y Autenticación
@@ -34,149 +38,121 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 #### `POST /login`
 
-- **¿Qué hace?**: Autentica al usuario y genera el token cifrado.
-- **Body (JSON)**:
-  ```json
-  {
-    "email": "admin@acme.com",
-    "password": "mi_password_seguro"
-  }
-  ```
-- **Response Example**:
-  ```json
-  { "token": "...", "user": { "id": 1, "nombre": "Admin", "empresaId": 1 } }
-  ```
+- **¿Qué hace?**: Valida credenciales y genera el token cifrado.
+- **Body (JSON)**: `{ "email": "admin@acme.com", "password": "..." }`
+- **Response**: `{ "token": "...", "user": { ... } }`
+
+#### `GET /me`
+
+- **¿Qué hace?**: Devuelve la identidad y matriz de permisos del usuario actual.
+- **Lógica**: Vital para que el frontend habilite/deshabilite opciones de UI.
 
 #### `POST /change-password`
 
-- **¿Qué hace?**: Permite al usuario cambiar su propia contraseña.
-- **Body (JSON)**:
-  ```json
-  {
-    "currentPassword": "password_actual",
-    "newPassword": "nuevo_password_123"
-  }
-  ```
+- **¿Qué hace?**: Actualización segura de contraseña por el propio usuario.
+- **Body (JSON)**: `{ "currentPassword": "...", "newPassword": "..." }`
 
 ---
 
 ### 2. Módulo: Empresas / Tenants (`/api/companies`)
 
+#### `GET /`
+
+- **¿Qué hace?**: Listado global de empresas (SaaS Admin).
+
 #### `POST /`
 
-- **¿Qué hace?**: Registra una nueva empresa SaaS.
-- **Body (JSON)**:
-  ```json
-  {
-    "nombre": "Acme Corp",
-    "rif": "J-31234567",
-    "tipo": "CLIENTE"
-  }
-  ```
+- **¿Qué hace?**: Crea una nueva empresa cliente.
+- **Body (JSON)**: `{ "nombre": "...", "rif": "...", "tipo": "CLIENTE" }`
+
+#### `GET /:id` | `PUT /:id`
+
+- **¿Qué hace?**: Consulta y edición de datos fiscales de la empresa.
+
+#### `DELETE /:id`
+
+- **¿Qué hace?**: Desactivación lógica de la empresa.
 
 #### `POST /toggle-module`
 
-- **¿Qué hace?**: Activa/Desactiva módulos para una empresa.
-- **Body (JSON)**:
-  ```json
-  {
-    "empresaId": 1,
-    "moduloId": 5,
-    "active": true
-  }
-  ```
+- **¿Qué hace?**: Activa/Desactiva módulos globales para una empresa específica.
+- **Body (JSON)**: `{ "empresaId": 1, "moduloId": 5, "active": true }`
 
 ---
 
 ### 3. Módulo: Usuarios (`/api/users`)
 
+#### `GET /`
+
+- **¿Qué hace?**: Lista los usuarios de la empresa actual del administrador.
+
 #### `POST /`
 
-- **¿Qué hace?**: Crea un nuevo usuario en la empresa.
-- **Body (JSON)**:
-  ```json
-  {
-    "email": "nuevo@empresa.com",
-    "nombre": "Juan Pérez",
-    "roleId": 10,
-    "password": "password_temporal"
-  }
-  ```
+- **¿Qué hace?**: Crea un usuario vinculado a un rol y empresa.
+- **Body (JSON)**: `{ "email": "...", "nombre": "...", "roleId": 10, "password": "..." }`
 
 #### `PUT /:id`
 
-- **Body (JSON)**:
-  ```json
-  {
-    "nombre": "Juan Pérez Actualizado",
-    "email": "juan.nuevo@empresa.com"
-  }
-  ```
+- **¿Qué hace?**: Actualiza perfil de usuario.
+
+#### `PATCH /:id/status`
+
+- **¿Qué hace?**: Activación/Desactivación (Soft Delete).
+- **Response**: `{ "message": "Estado actualizado", "active": false }`
 
 ---
 
 ### 4. Módulo: Roles y Permisos (`/api/roles`)
 
-#### `POST /`
+#### `GET /` | `POST /`
 
-- **Body (JSON)**:
-  ```json
-  {
-    "nombre": "Supervisor de Ventas"
-  }
-  ```
+- **¿Qué hace?**: Gestión de roles de la empresa.
+- **Body (POST)**: `{ "nombre": "Nombre del Rol" }`
+
+#### `PUT /:id` | `DELETE /:id`
+
+- **¿Qué hace?**: Edición y borrado (protegido si el rol tiene usuarios asignados).
+
+#### `GET /matrix/:roleId`
+
+- **¿Qué hace?**: Devuelve la matriz completa de Módulos Activos vs Permisos.
+- **Response**: `[ { "moduloId": 1, "nombre": "Ventas", "canRead": true, ... } ]`
 
 #### `POST /permissions`
 
-- **¿Qué hace?**: Define capacidades CRUD.
-- **Body (JSON)**:
-  ```json
-  {
-    "roleId": 5,
-    "permissions": [
-      {
-        "moduloId": 1,
-        "canRead": true,
-        "canCreate": true,
-        "canUpdate": false,
-        "canDelete": false
-      }
-    ]
-  }
-  ```
+- **¿Qué hace?**: Asignación atómica de permisos CRUD.
+- **Body (JSON)**: `{ "roleId": 5, "permissions": [ { "moduloId": 1, "canRead": true, ... } ] }`
 
 ---
 
 ### 5. Módulo: Gestión de Módulos (`/api/modules`)
 
-#### `POST /`
+#### `GET /` | `GET /all`
 
-- **Body (JSON)**:
-  ```json
-  {
-    "nombre": "Nuevo Módulo Core"
-  }
-  ```
+- **¿Qué hace?**: `/` lista activos para la empresa. `/all` lista el catálogo global.
+- **Lógica**: Los módulos incluyen sus `submodulos` anidados en la respuesta.
+
+#### `POST /` | `PUT /:id` | `DELETE /:id`
+
+- **¿Qué hace?**: Gestión del catálogo maestro de funcionalidades (Admin).
 
 #### `POST /submodule`
 
-- **¿Qué hace?**: Crea una sub-funcionalidad.
-- **Body (JSON)**:
-  ```json
-  {
-    "moduloId": 1,
-    "nombre": "Reportes Mensuales"
-  }
-  ```
+- **¿Qué hace?**: Crea una funcionalidad hija vinculada a un módulo.
+- **Body (JSON)**: `{ "moduloId": 1, "nombre": "Nombre Submódulo" }`
+
+#### `PUT /submodule/:id` | `DELETE /submodule/:id`
+
+- **¿Qué hace?**: Edición y borrado de submódulos.
 
 ---
 
-## 📡 Observabilidad y Diagnóstico
+## 📡 Observabilidad
 
-### Trazabilidad con `requestId`
+### Correlación `x-request-id`
 
-Cada petición HTTP es marcada con un UUID único en el header `x-request-id`.
+Todas las respuestas incluyen el header `x-request-id` para trazabilidad en Sentry y Logs.
 
 ---
 
-👉 _Para esquemas JSON detallados, consulte la documentación interactiva en `/api-docs`._
+👉 _Consulte `/api-docs` para especificaciones técnicas adicionales._
