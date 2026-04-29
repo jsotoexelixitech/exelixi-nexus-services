@@ -34,36 +34,27 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 #### `POST /login`
 
-- **¿Qué hace?**: Autentica al usuario, valida que la empresa esté activa y genera un token de sesión.
-- **Lógica**: La contraseña se verifica mediante `bcrypt`. El token resultante se encripta simétricamente.
-- **Response Example**:
+- **¿Qué hace?**: Autentica al usuario y genera el token cifrado.
+- **Body (JSON)**:
   ```json
   {
-    "token": "a1b2c3d4... (Token Cifrado)",
-    "user": {
-      "id": 1,
-      "nombre": "Admin Usuario",
-      "email": "admin@acme.com",
-      "empresaId": 1
-    }
+    "email": "admin@acme.com",
+    "password": "mi_password_seguro"
   }
   ```
-
-#### `GET /me`
-
-- **¿Qué hace?**: Recupera el estado actual de la sesión del usuario.
-- **Lógica**: Devuelve el perfil y la **Matriz de Permisos** actualizada para el frontend.
 - **Response Example**:
   ```json
+  { "token": "...", "user": { "id": 1, "nombre": "Admin", "empresaId": 1 } }
+  ```
+
+#### `POST /change-password`
+
+- **¿Qué hace?**: Permite al usuario cambiar su propia contraseña.
+- **Body (JSON)**:
+  ```json
   {
-    "id": 1,
-    "nombre": "Admin Usuario",
-    "email": "admin@acme.com",
-    "empresaId": 1,
-    "role": { "id": 5, "nombre": "Administrador" },
-    "permissions": [
-      { "moduloId": 1, "nombre": "Ventas", "canRead": true, "canCreate": true }
-    ]
+    "currentPassword": "password_actual",
+    "newPassword": "nuevo_password_123"
   }
   ```
 
@@ -73,32 +64,25 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 #### `POST /`
 
-- **¿Qué hace?**: Registra un nuevo cliente (Empresa) en el sistema SaaS.
-- **Lógica**: Inicializa la estructura base de la empresa en estado `activo`.
-- **Response Example**:
+- **¿Qué hace?**: Registra una nueva empresa SaaS.
+- **Body (JSON)**:
   ```json
   {
-    "success": true,
-    "message": "Empresa creada exitosamente",
-    "data": {
-      "id": 15,
-      "nombre": "Empresa S.A",
-      "rif": "J-123",
-      "activo": true
-    }
+    "nombre": "Acme Corp",
+    "rif": "J-31234567",
+    "tipo": "CLIENTE"
   }
   ```
 
 #### `POST /toggle-module`
 
-- **¿Qué hace?**: Activa/Desactiva funcionalidades para una empresa específica.
-- **Lógica**: Si se desactiva, ningún usuario de esa empresa podrá acceder a dicha funcionalidad.
-- **Response Example**:
+- **¿Qué hace?**: Activa/Desactiva módulos para una empresa.
+- **Body (JSON)**:
   ```json
   {
-    "success": true,
-    "message": "Módulo activado exitosamente",
-    "data": { "id": 45, "empresaId": 1, "moduloId": 5, "activo": true }
+    "empresaId": 1,
+    "moduloId": 5,
+    "active": true
   }
   ```
 
@@ -108,27 +92,24 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 #### `POST /`
 
-- **¿Qué hace?**: Crea un nuevo colaborador dentro de una empresa.
-- **Lógica**: Vincula el usuario a un `roleId` y hashea la contraseña automáticamente.
-- **Response Example**:
+- **¿Qué hace?**: Crea un nuevo usuario en la empresa.
+- **Body (JSON)**:
   ```json
   {
-    "id": 54,
-    "nombre": "QA User",
-    "email": "qa@test.com",
-    "roleId": 10
+    "email": "nuevo@empresa.com",
+    "nombre": "Juan Pérez",
+    "roleId": 10,
+    "password": "password_temporal"
   }
   ```
 
-#### `PATCH /:id/status`
+#### `PUT /:id`
 
-- **¿Qué hace?**: Activa o desactiva a un usuario (**Soft Delete**).
-- **Lógica**: Mantiene la integridad histórica sin borrar el registro físico.
-- **Response Example**:
+- **Body (JSON)**:
   ```json
   {
-    "message": "Estado del usuario actualizado",
-    "active": false
+    "nombre": "Juan Pérez Actualizado",
+    "email": "juan.nuevo@empresa.com"
   }
   ```
 
@@ -136,86 +117,56 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 ### 4. Módulo: Roles y Permisos (`/api/roles`)
 
-#### `GET /matrix/:roleId`
+#### `POST /`
 
-- **¿Qué hace?**: Genera un mapa completo de permisos para un rol.
-- **Lógica**: Cruza módulos activos de la empresa con permisos granulares del rol.
-- **Response Example**:
+- **Body (JSON)**:
   ```json
-  [
-    {
-      "moduloId": 1,
-      "nombre": "Ventas",
-      "activo": true,
-      "canCreate": true,
-      "canRead": true,
-      "submodulos": []
-    }
-  ]
+  {
+    "nombre": "Supervisor de Ventas"
+  }
   ```
 
 #### `POST /permissions`
 
-- **¿Qué hace?**: Define las capacidades CRUD del rol.
-- **Lógica**: Usa una transacción atómica para garantizar consistencia total.
-- **Response Example**:
+- **¿Qué hace?**: Define capacidades CRUD.
+- **Body (JSON)**:
   ```json
-  { "success": true }
+  {
+    "roleId": 5,
+    "permissions": [
+      {
+        "moduloId": 1,
+        "canRead": true,
+        "canCreate": true,
+        "canUpdate": false,
+        "canDelete": false
+      }
+    ]
+  }
   ```
 
 ---
 
 ### 5. Módulo: Gestión de Módulos (`/api/modules`)
 
-#### `GET /`
+#### `POST /`
 
-- **¿Qué hace?**: Lista los módulos activos para la empresa, incluyendo sus submódulos.
-- **Lógica**: Devuelve la estructura jerárquica necesaria para construir el menú de navegación. Los submódulos vienen anidados en el array `submodulos`.
-- **Response Example**:
+- **Body (JSON)**:
   ```json
   {
-    "success": true,
-    "data": [
-      {
-        "id": 1,
-        "nombre": "Configuración",
-        "activo": true,
-        "submodulos": [
-          { "id": 10, "nombre": "Perfiles" },
-          { "id": 11, "nombre": "Empresas" }
-        ]
-      }
-    ]
+    "nombre": "Nuevo Módulo Core"
   }
   ```
 
 #### `POST /submodule`
 
-- **¿Qué hace?**: Añade granularidad (sub-funcionalidades) a un módulo principal.
-- **Lógica**: Permite aislar permisos de secciones específicas dentro de un módulo padre.
-- **Response Example**:
+- **¿Qué hace?**: Crea una sub-funcionalidad.
+- **Body (JSON)**:
   ```json
   {
-    "success": true,
-    "data": { "id": 22, "moduloId": 1, "nombre": "Reportes PDF" }
+    "moduloId": 1,
+    "nombre": "Reportes Mensuales"
   }
-  ```
-
-#### `PUT /submodule/:id`
-
-- **¿Qué hace?**: Modifica el nombre o vinculación de un submódulo existente.
-- **Response Example**:
-  ```json
-  { "success": true, "data": { "id": 22, "nombre": "Reportes Excel" } }
-  ```
-
-#### `DELETE /submodule/:id`
-
-- **¿Qué hace?**: Elimina permanentemente una sub-funcionalidad.
-- **Lógica**: Al eliminarlo, se borran automáticamente las relaciones en la matriz de permisos de todos los roles que lo tenían asignado.
-- **Response Example**:
-  ```json
-  { "success": true, "message": "Submódulo eliminado" }
   ```
 
 ---
@@ -224,8 +175,7 @@ Los JWT no viajan en texto plano. Se cifran usando una llave de 32 bytes (`ENCRY
 
 ### Trazabilidad con `requestId`
 
-Cada petición HTTP es marcada con un UUID único disponible en el header `x-request-id`.
-**Uso**: Permite correlacionar errores en Sentry con logs específicos en el servidor.
+Cada petición HTTP es marcada con un UUID único en el header `x-request-id`.
 
 ---
 
