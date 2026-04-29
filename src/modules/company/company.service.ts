@@ -10,15 +10,16 @@ export class CompanyService {
     try {
       logger.info(`Creando nueva empresa: ${nombre} (${rif || 'S/R'})`);
       return await prisma.empresa.create({
-        data: { 
-          nombre, 
+        data: {
+          nombre,
           rif,
           tipo,
-          activo: true 
-        }
+          activo: true,
+        },
       });
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Error desconocido';
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
       logger.error(`Error al crear empresa: ${message}`);
       throw new AppError('No se pudo crear la empresa.', 500);
     }
@@ -32,9 +33,9 @@ export class CompanyService {
       where: { id },
       include: {
         modulos: {
-          include: { modulo: true }
-        }
-      }
+          include: { modulo: true },
+        },
+      },
     });
 
     if (!company) {
@@ -47,15 +48,19 @@ export class CompanyService {
   /**
    * Actualiza los datos de una empresa.
    */
-  async updateCompany(id: number, data: { nombre?: string; rif?: string; tipo?: string; activo?: boolean }) {
+  async updateCompany(
+    id: number,
+    data: { nombre?: string; rif?: string; tipo?: string; activo?: boolean },
+  ) {
     try {
       logger.info(`Actualizando empresa ${id}`);
       return await prisma.empresa.update({
         where: { id },
-        data
+        data,
       });
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Error desconocido';
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
       logger.error(`Error al actualizar empresa: ${message}`);
       throw new AppError('No se pudo actualizar la empresa.', 500);
     }
@@ -69,10 +74,11 @@ export class CompanyService {
       logger.info(`Desactivando empresa ${id}`);
       return await prisma.empresa.update({
         where: { id },
-        data: { activo: false }
+        data: { activo: false },
       });
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Error desconocido';
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
       logger.error(`Error al desactivar empresa: ${message}`);
       throw new AppError('No se pudo desactivar la empresa.', 500);
     }
@@ -83,29 +89,32 @@ export class CompanyService {
    */
   async toggleModule(empresaId: number, moduloId: number, active: boolean) {
     try {
-      logger.info(`${active ? 'Activando' : 'Desactivando'} módulo ${moduloId} para empresa ${empresaId}`);
-      
+      logger.info(
+        `${active ? 'Activando' : 'Desactivando'} módulo ${moduloId} para empresa ${empresaId}`,
+      );
+
       const existing = await prisma.empresaModulo.findFirst({
-        where: { empresaId, moduloId }
+        where: { empresaId, moduloId },
       });
 
       if (existing) {
         return await prisma.empresaModulo.update({
           where: { id: existing.id },
-          data: { activo: active }
+          data: { activo: active },
         });
       } else {
         return await prisma.empresaModulo.create({
-          data: { 
-            empresaId, 
-            moduloId, 
+          data: {
+            empresaId,
+            moduloId,
             activo: active,
-            token: `token-${empresaId}-${moduloId}`
-          }
+            token: `token-${empresaId}-${moduloId}`,
+          },
         });
       }
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Error desconocido';
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
       logger.error(`Error al modificar módulo: ${message}`);
       throw new AppError('No se pudo actualizar el estado del módulo.', 500);
     }
@@ -116,12 +125,13 @@ export class CompanyService {
       return await prisma.empresa.findMany({
         include: {
           modulos: {
-            include: { modulo: true }
-          }
-        }
+            include: { modulo: true },
+          },
+        },
       });
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Error desconocido';
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
       logger.error(`Error al listar empresas: ${message}`);
       throw new AppError('Error al recuperar el listado de empresas.', 500);
     }

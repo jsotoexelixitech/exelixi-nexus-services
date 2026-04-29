@@ -12,7 +12,9 @@ export const checkModuleAccess = (moduleName: string) => {
     const empresaId = req.user?.empresaId;
 
     if (!empresaId) {
-      return res.status(403).json({ message: 'Contexto de empresa no encontrado en el token.' });
+      return res
+        .status(403)
+        .json({ message: 'Contexto de empresa no encontrado en el token.' });
     }
 
     try {
@@ -20,22 +22,24 @@ export const checkModuleAccess = (moduleName: string) => {
         where: {
           empresaId: Number(empresaId),
           modulo: {
-            nombre: moduleName
+            nombre: moduleName,
           },
-          activo: true
-        }
+          activo: true,
+        },
       });
 
       if (!moduleAccess) {
-        return res.status(403).json({ 
+        return res.status(403).json({
           error: 'MODULE_INACTIVE',
-          message: `El módulo '${moduleName}' no está contratado o activo para su empresa.` 
+          message: `El módulo '${moduleName}' no está contratado o activo para su empresa.`,
         });
       }
 
       next();
-    } catch (error: unknown) {
-      return res.status(500).json({ message: 'Error validando acceso al módulo.' });
+    } catch (_error: unknown) {
+      return res
+        .status(500)
+        .json({ message: 'Error validando acceso al módulo.' });
     }
   };
 };

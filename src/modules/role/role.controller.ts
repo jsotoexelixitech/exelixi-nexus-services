@@ -31,13 +31,14 @@ export class RoleController {
   async create(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;
-      if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
+      if (!empresaId)
+        return res.status(403).json({ message: 'Empresa no identificada' });
 
       const { nombre } = req.body;
       const role = await roleService.createRole(empresaId, nombre);
       res.status(201).json({
         success: true,
-        data: role
+        data: role,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
@@ -47,14 +48,15 @@ export class RoleController {
   async update(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;
-      if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
+      if (!empresaId)
+        return res.status(403).json({ message: 'Empresa no identificada' });
 
       const { id } = req.params;
       const { nombre } = req.body;
       const role = await roleService.updateRole(id, empresaId, nombre);
       res.json({
         success: true,
-        data: role
+        data: role,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
@@ -64,13 +66,14 @@ export class RoleController {
   async delete(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;
-      if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
+      if (!empresaId)
+        return res.status(403).json({ message: 'Empresa no identificada' });
 
       const { id } = req.params;
       await roleService.deleteRole(id, empresaId);
       res.json({
         success: true,
-        message: 'Rol eliminado correctamente'
+        message: 'Rol eliminado correctamente',
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
@@ -80,14 +83,19 @@ export class RoleController {
   async assignPermissions(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;
-      if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
+      if (!empresaId)
+        return res.status(403).json({ message: 'Empresa no identificada' });
 
       const { roleId, permissions } = req.body;
-      const result = await roleService.assignPermissions(empresaId, roleId, permissions);
+      const result = await roleService.assignPermissions(
+        empresaId,
+        roleId,
+        permissions,
+      );
       res.json({
         success: true,
         message: 'Permisos asignados correctamente',
-        data: result
+        data: result,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
@@ -110,12 +118,13 @@ export class RoleController {
   async list(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;
-      if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
+      if (!empresaId)
+        return res.status(403).json({ message: 'Empresa no identificada' });
 
       const roles = await roleService.getRolesByEmpresa(empresaId);
       res.json({
         success: true,
-        data: roles
+        data: roles,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
@@ -125,13 +134,14 @@ export class RoleController {
   async getPermissionMatrix(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;
-      if (!empresaId) return res.status(403).json({ message: 'Empresa no identificada' });
+      if (!empresaId)
+        return res.status(403).json({ message: 'Empresa no identificada' });
 
       const { roleId } = req.params;
       const matrix = await roleService.getPermissionMatrix(empresaId, roleId);
       res.json({
         success: true,
-        data: matrix
+        data: matrix,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });

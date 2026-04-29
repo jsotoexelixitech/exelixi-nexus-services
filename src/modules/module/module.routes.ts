@@ -15,7 +15,12 @@ router.put('/:id', authenticate, controller.updateModule);
 router.delete('/:id', authenticate, controller.deleteModule);
 
 // Submódulos
-router.post('/submodule', authenticate, validate(createSubmoduleSchema), controller.createSubmodule);
+router.post(
+  '/submodule',
+  authenticate,
+  validate(createSubmoduleSchema),
+  controller.createSubmodule,
+);
 router.put('/submodule/:id', authenticate, controller.updateSubmodule);
 router.delete('/submodule/:id', authenticate, controller.deleteSubmodule);
 

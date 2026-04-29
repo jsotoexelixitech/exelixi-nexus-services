@@ -7,16 +7,16 @@ export class ModuleService {
    */
   async getActiveModules(empresaId: string) {
     const active = await prisma.empresaModulo.findMany({
-      where: { 
-        empresaId: Number(empresaId), 
-        activo: true 
+      where: {
+        empresaId: Number(empresaId),
+        activo: true,
       },
-      include: { 
-        modulo: true 
-      }
+      include: {
+        modulo: true,
+      },
     });
-    
-    return active.map(a => a.modulo);
+
+    return active.map((a) => a.modulo);
   }
 
   /**
@@ -25,8 +25,8 @@ export class ModuleService {
   async getAllModules() {
     return await prisma.modulo.findMany({
       include: {
-        submodulos: true
-      }
+        submodulos: true,
+      },
     });
   }
 
@@ -35,7 +35,7 @@ export class ModuleService {
    */
   async createModule(nombre: string) {
     return await prisma.modulo.create({
-      data: { nombre, activo: true }
+      data: { nombre, activo: true },
     });
   }
 
@@ -45,7 +45,7 @@ export class ModuleService {
   async updateModule(id: number, data: { nombre?: string; activo?: boolean }) {
     return await prisma.modulo.update({
       where: { id },
-      data
+      data,
     });
   }
 
@@ -55,7 +55,7 @@ export class ModuleService {
   async deleteModule(id: number) {
     return await prisma.modulo.update({
       where: { id },
-      data: { activo: false }
+      data: { activo: false },
     });
   }
 
@@ -67,18 +67,21 @@ export class ModuleService {
       data: {
         nombre,
         moduloId,
-        activo: true
-      }
+        activo: true,
+      },
     });
   }
 
   /**
    * Actualiza un submódulo.
    */
-  async updateSubmodule(id: number, data: { nombre?: string; activo?: boolean }) {
+  async updateSubmodule(
+    id: number,
+    data: { nombre?: string; activo?: boolean },
+  ) {
     return await prisma.submodulo.update({
       where: { id },
-      data
+      data,
     });
   }
 
@@ -87,7 +90,7 @@ export class ModuleService {
    */
   async deleteSubmodule(id: number) {
     return await prisma.submodulo.delete({
-      where: { id }
+      where: { id },
     });
   }
 }

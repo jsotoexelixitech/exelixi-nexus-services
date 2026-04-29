@@ -17,7 +17,12 @@ export const getPagination = (query: Record<string, unknown>) => {
 /**
  * Formatea la respuesta paginada estandarizada.
  */
-export const formatPaginatedResponse = <T>(data: T[], total: number, page: number, limit: number) => {
+export const formatPaginatedResponse = <T>(
+  data: T[],
+  total: number,
+  page: number,
+  limit: number,
+) => {
   return {
     data,
     meta: {
@@ -25,6 +30,6 @@ export const formatPaginatedResponse = <T>(data: T[], total: number, page: numbe
       page,
       limit,
       totalPages: Math.ceil(total / limit),
-    }
+    },
   };
 };

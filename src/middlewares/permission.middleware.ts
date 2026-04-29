@@ -12,7 +12,9 @@ export const checkRolePermission = (moduleName: string) => {
     const roleId = req.user?.roleId;
 
     if (!roleId) {
-      return res.status(403).json({ message: 'Contexto de rol no encontrado.' });
+      return res
+        .status(403)
+        .json({ message: 'Contexto de rol no encontrado.' });
     }
 
     try {
@@ -22,24 +24,26 @@ export const checkRolePermission = (moduleName: string) => {
           roleId: Number(roleId),
           empresaModulo: {
             modulo: {
-              nombre: moduleName
+              nombre: moduleName,
             },
-            activo: true
+            activo: true,
           },
-          activo: true
-        }
+          activo: true,
+        },
       });
 
       if (!permission) {
-        return res.status(403).json({ 
+        return res.status(403).json({
           error: 'INSUFFICIENT_PERMISSIONS',
-          message: `Su rol no tiene permisos para acceder al módulo '${moduleName}'.` 
+          message: `Su rol no tiene permisos para acceder al módulo '${moduleName}'.`,
         });
       }
 
       next();
-    } catch (error: unknown) {
-      return res.status(500).json({ message: 'Error validando permisos de rol.' });
+    } catch (_error: unknown) {
+      return res
+        .status(500)
+        .json({ message: 'Error validando permisos de rol.' });
     }
   };
 };

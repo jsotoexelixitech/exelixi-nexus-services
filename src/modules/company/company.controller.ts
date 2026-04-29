@@ -23,7 +23,7 @@ export class CompanyController {
       const companies = await companyService.getAllCompanies();
       res.json({
         success: true,
-        data: companies
+        data: companies,
       });
     } catch (error: unknown) {
       res.status(500).json({ success: false, message: getErrorMessage(error) });
@@ -32,10 +32,12 @@ export class CompanyController {
 
   async getById(req: Request, res: Response) {
     try {
-      const company = await companyService.getCompanyById(Number(req.params.id));
+      const company = await companyService.getCompanyById(
+        Number(req.params.id),
+      );
       res.json({
         success: true,
-        data: company
+        data: company,
       });
     } catch (error: unknown) {
       res.status(404).json({ success: false, message: getErrorMessage(error) });
@@ -78,7 +80,7 @@ export class CompanyController {
       res.status(201).json({
         success: true,
         message: 'Empresa creada exitosamente',
-        data: company
+        data: company,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
@@ -87,11 +89,14 @@ export class CompanyController {
 
   async update(req: Request, res: Response) {
     try {
-      const company = await companyService.updateCompany(Number(req.params.id), req.body);
+      const company = await companyService.updateCompany(
+        Number(req.params.id),
+        req.body,
+      );
       res.json({
         success: true,
         message: 'Empresa actualizada exitosamente',
-        data: company
+        data: company,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
@@ -103,7 +108,7 @@ export class CompanyController {
       await companyService.deleteCompany(Number(req.params.id));
       res.json({
         success: true,
-        message: 'Empresa desactivada exitosamente'
+        message: 'Empresa desactivada exitosamente',
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
@@ -113,11 +118,15 @@ export class CompanyController {
   async toggleModule(req: Request, res: Response) {
     try {
       const { empresaId, moduloId, active } = req.body;
-      const result = await companyService.toggleModule(Number(empresaId), Number(moduloId), active);
+      const result = await companyService.toggleModule(
+        Number(empresaId),
+        Number(moduloId),
+        active,
+      );
       res.json({
         success: true,
         message: `Módulo ${active ? 'activado' : 'desactivado'} exitosamente`,
-        data: result
+        data: result,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });

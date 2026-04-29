@@ -18,10 +18,17 @@ interface JwtPayload {
   roleId: number;
 }
 
-export const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
+export const authenticate = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, message: 'Acceso denegado: Token no proporcionado.' });
+    return res.status(401).json({
+      success: false,
+      message: 'Acceso denegado: Token no proporcionado.',
+    });
   }
 
   const encryptedToken = authHeader.split(' ')[1];
@@ -31,13 +38,16 @@ export const authenticate = (req: AuthRequest, res: Response, next: NextFunction
     const token = decrypt(encryptedToken);
 
     // 2. Verificar el JWT
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as unknown as JwtPayload;
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || 'secret',
+    ) as unknown as JwtPayload;
     req.user = decoded;
     next();
-  } catch (error: unknown) {
-    return res.status(401).json({ 
-      success: false, 
-      message: 'Token inválido, expirado o corrupto.' 
+  } catch (_error: unknown) {
+    return res.status(401).json({
+      success: false,
+      message: 'Token inválido, expirado o corrupto.',
     });
   }
 };

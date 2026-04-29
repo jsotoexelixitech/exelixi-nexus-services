@@ -1,7 +1,24 @@
-import logger from "../../utils/logger";
-import prisma from "../../config/prisma";
-import { AppError } from "../../utils/app-error";
-import { getErrorMessage } from "../../utils/error-handler";
+import logger from '../../utils/logger';
+import prisma from '../../config/prisma';
+import { AppError } from '../../utils/app-error';
+import { getErrorMessage } from '../../utils/error-handler';
+
+interface SubmodulePermission {
+  submoduloId: number;
+  canCreate?: boolean;
+  canRead?: boolean;
+  canUpdate?: boolean;
+  canDelete?: boolean;
+}
+
+interface ModulePermission {
+  moduloId: number;
+  canCreate?: boolean;
+  canRead?: boolean;
+  canUpdate?: boolean;
+  canDelete?: boolean;
+  submodulos?: SubmodulePermission[];
+}
 
 export class RoleService {
   /**
@@ -20,7 +37,7 @@ export class RoleService {
       });
     } catch (error: unknown) {
       logger.error(`Error al crear rol: ${getErrorMessage(error)}`);
-      throw new AppError("No se pudo crear el rol.", 500);
+      throw new AppError('No se pudo crear el rol.', 500);
     }
   }
 
@@ -39,7 +56,7 @@ export class RoleService {
       });
     } catch (error: unknown) {
       logger.error(`Error al actualizar rol: ${getErrorMessage(error)}`);
-      throw new AppError("No se pudo actualizar el rol.", 500);
+      throw new AppError('No se pudo actualizar el rol.', 500);
     }
   }
 
@@ -56,7 +73,7 @@ export class RoleService {
 
       if (usersCount > 0) {
         throw new AppError(
-          "No se puede eliminar un rol que tiene usuarios asignados.",
+          'No se puede eliminar un rol que tiene usuarios asignados.',
           400,
         );
       }
@@ -67,7 +84,7 @@ export class RoleService {
     } catch (error: unknown) {
       if (error instanceof AppError) throw error;
       logger.error(`Error al eliminar rol: ${getErrorMessage(error)}`);
-      throw new AppError("No se pudo eliminar el rol.", 500);
+      throw new AppError('No se pudo eliminar el rol.', 500);
     }
   }
 
@@ -78,7 +95,7 @@ export class RoleService {
   async assignPermissions(
     empresaId: string | number,
     roleId: string | number,
-    permissions: any[],
+    permissions: ModulePermission[],
   ) {
     const eid = Number(empresaId);
     const rid = Number(roleId);

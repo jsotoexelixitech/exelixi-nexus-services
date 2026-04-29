@@ -12,6 +12,11 @@ router.post('/', authenticate, validate(createRoleSchema), controller.create);
 router.put('/:id', authenticate, validate(createRoleSchema), controller.update);
 router.delete('/:id', authenticate, controller.delete);
 router.get('/matrix/:roleId', authenticate, controller.getPermissionMatrix);
-router.post('/permissions', authenticate, validate(assignPermissionsSchema), controller.assignPermissions);
+router.post(
+  '/permissions',
+  authenticate,
+  validate(assignPermissionsSchema),
+  controller.assignPermissions,
+);
 
 export default router;

@@ -14,7 +14,7 @@ export const errorHandler = (
   err: CustomError,
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction,
 ) => {
   // Log the error
   logger.error(`${err.message} - ${req.method} ${req.url} - ${req.ip}`);

@@ -1,10 +1,10 @@
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
-import { AppError } from "../../utils/app-error";
-import logger from "../../utils/logger";
-import prisma from "../../config/prisma";
-import { getErrorMessage } from "../../utils/error-handler";
-import { encrypt } from "../../utils/crypto";
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import { AppError } from '../../utils/app-error';
+import logger from '../../utils/logger';
+import prisma from '../../config/prisma';
+import { getErrorMessage } from '../../utils/error-handler';
+import { encrypt } from '../../utils/crypto';
 
 interface RolePermissionDetail {
   id: number;
@@ -35,13 +35,13 @@ export class AuthService {
 
       if (!user) {
         logger.warn(`Login fallido: Usuario no encontrado (${email})`);
-        throw new AppError("El correo electrónico no está registrado.", 401);
+        throw new AppError('El correo electrónico no está registrado.', 401);
       }
 
       if (!user.activo) {
         logger.warn(`Login bloqueado: Cuenta inactiva (${email})`);
         throw new AppError(
-          "Su cuenta ha sido desactivada. Por favor, contacte con soporte técnico.",
+          'Su cuenta ha sido desactivada. Por favor, contacte con soporte técnico.',
           403,
         );
       }
@@ -51,7 +51,7 @@ export class AuthService {
 
       if (!isPasswordValid) {
         logger.warn(`Login fallido: Contraseña incorrecta (${email})`);
-        throw new AppError("La contraseña ingresada es incorrecta.", 401);
+        throw new AppError('La contraseña ingresada es incorrecta.', 401);
       }
 
       logger.info(`Login exitoso: ${email} [Empresa: ${user.empresa.nombre}]`);
@@ -64,8 +64,8 @@ export class AuthService {
           empresaId: user.empresaId,
           roleId: user.roleId,
         },
-        process.env.JWT_SECRET || "secret",
-        { expiresIn: "12h" },
+        process.env.JWT_SECRET || 'secret',
+        { expiresIn: '12h' },
       );
 
       // --- ENCRIPTACIÓN DEL TOKEN ---
@@ -88,7 +88,7 @@ export class AuthService {
         `Error crítico en AuthService.login: ${getErrorMessage(error)}`,
       );
       throw new AppError(
-        "Error interno durante la autenticación. Intente más tarde.",
+        'Error interno durante la autenticación. Intente más tarde.',
         500,
       );
     }
@@ -129,7 +129,7 @@ export class AuthService {
         },
       });
 
-      if (!user) throw new AppError("Usuario no encontrado", 404);
+      if (!user) throw new AppError('Usuario no encontrado', 404);
 
       // Extraemos empresa y rol con sus relaciones tipadas
       const { empresa, role } = user;
@@ -187,7 +187,7 @@ export class AuthService {
     } catch (error: unknown) {
       if (error instanceof AppError) throw error;
       logger.error(`Error al obtener perfil: ${getErrorMessage(error)}`);
-      throw new AppError("Error al recuperar información del perfil.", 500);
+      throw new AppError('Error al recuperar información del perfil.', 500);
     }
   }
 }

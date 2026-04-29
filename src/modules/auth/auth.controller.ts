@@ -63,11 +63,11 @@ export class AuthController {
     try {
       const userId = req.user?.id;
       if (!userId) throw new AppError('No autenticado', 401);
-      
+
       const profile = await authService.getUserProfile(userId);
       res.json({
         success: true,
-        data: profile
+        data: profile,
       });
     } catch (error: unknown) {
       res.status(500).json({ success: false, message: getErrorMessage(error) });
