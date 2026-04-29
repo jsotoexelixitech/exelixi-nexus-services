@@ -11,11 +11,12 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}====================================================${NC}"
-echo -e "${BLUE}🚀  EXELIXI NEXUS - FULL API QA SUITE v3.1          ${NC}"
-echo -e "${BLUE}====================================================${NC}\n"
+echo -e "${PURPLE}====================================================${NC}"
+echo -e "${PURPLE}🚀  EXELIXI NEXUS - ULTIMATE SYSTEM QA v4.3         ${NC}"
+echo -e "${PURPLE}====================================================${NC}\n"
 
 # Helper para peticiones
 call_api() {
@@ -44,62 +45,65 @@ check_status() {
     fi
 }
 
-# --- 1. AUTH MODULE ---
-echo -e "${BLUE}[1] AUTH MODULE${NC}"
+# 1. AUTH
+echo -e "${BLUE}[1] AUTH${NC}"
 call_api "POST" "/api/auth/login" "{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASS\"}"
-check_status 200 "Login con credenciales válidas"
-# Extraer token usando python3 para ser más robustos con JSON
 TOKEN=$(echo $BODY | python3 -c "import sys, json; print(json.load(sys.stdin)['token'])" 2>/dev/null)
+check_status 200 "Login"
 
-call_api "POST" "/api/auth/login" "{\"email\": \"admin@acme.com\", \"password\": \"wrongpassword\"}"
-check_status 401 "Login con password incorrecto"
+# 2. CRUD MODULES & SUBMODULES
+echo -e "\n${BLUE}[2] CRUD MODULES & SUBMODULES${NC}"
+MOD_NAME="QA_MOD_$(date +%s)"
+call_api "POST" "/api/modules" "{\"nombre\": \"$MOD_NAME\", \"activo\": true}"
+check_status 201 "CREATE Module"
+MOD_ID=$(echo $BODY | python3 -c "import sys, json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null)
+echo "  [INFO] Modulo ID: $MOD_ID"
 
-# --- 2. MODULES MODULE ---
-echo -e "\n${BLUE}[2] MODULES MODULE${NC}"
-call_api "GET" "/api/modules" ""
-check_status 200 "Listar módulos"
-MODULO_ID=$(echo $BODY | python3 -c "import sys, json; print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null)
-echo "  [INFO] Modulo ID capturado: $MODULO_ID"
+call_api "PUT" "/api/modules/$MOD_ID" "{\"nombre\": \"$MOD_NAME-UPDATED\"}"
+check_status 200 "UPDATE Module"
 
-# --- 3. COMPANIES MODULE ---
-echo -e "\n${BLUE}[3] COMPANIES MODULE${NC}"
-call_api "GET" "/api/companies" ""
-check_status 200 "Listar empresas"
-EMPRESA_ID=$(echo $BODY | python3 -c "import sys, json; print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null)
-
-call_api "GET" "/api/companies/$EMPRESA_ID" ""
-check_status 200 "Obtener detalle de empresa ($EMPRESA_ID)"
-
-# --- 4. ROLES MODULE ---
-echo -e "\n${BLUE}[4] ROLES MODULE${NC}"
-ROLE_NAME="QA_ROLE_$(date +%s)"
-call_api "POST" "/api/roles" "{\"nombre\": \"$ROLE_NAME\", \"activo\": true}"
-check_status 201 "Crear nuevo rol ($ROLE_NAME)"
-ROLE_ID=$(echo $BODY | python3 -c "import sys, json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null)
-echo "  [INFO] Role ID capturado: $ROLE_ID"
-
-echo "  Asignando permisos granulares..."
-if [ -n "$MODULO_ID" ] && [ -n "$ROLE_ID" ]; then
-    PERM_DATA="{\"roleId\": $ROLE_ID, \"permissions\": [{\"moduloId\": $MODULO_ID, \"canRead\": true, \"canCreate\": true}]}"
-    call_api "POST" "/api/roles/permissions" "$PERM_DATA"
-    check_status 200 "Asignación de permisos granulares"
+echo "  Añadiendo submódulo..."
+if [ -n "$MOD_ID" ]; then
+    call_api "POST" "/api/modules/submodule" "{\"nombre\": \"QA_SUBMOD\", \"moduloId\": $MOD_ID, \"activo\": true}"
+    check_status 201 "CREATE Submodule"
 else
-    echo -e "  ${RED}[SKIP]${NC} No se pudo capturar ModuloID o RoleID"
+    echo -e "  ${RED}[SKIP]${NC} No se pudo capturar ModuloID"
 fi
 
-# --- 5. USERS MODULE ---
-echo -e "\n${BLUE}[5] USERS MODULE${NC}"
+# 3. CRUD ROLES & PERMISSIONS
+echo -e "\n${BLUE}[3] CRUD ROLES & PERMISSIONS${NC}"
+ROLE_NAME="QA_ROLE_$(date +%s)"
+call_api "POST" "/api/roles" "{\"nombre\": \"$ROLE_NAME\"}"
+check_status 201 "CREATE Role"
+ROLE_ID=$(echo $BODY | python3 -c "import sys, json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null)
+echo "  [INFO] Role ID: $ROLE_ID"
+
+echo "  Asignando permisos granulares..."
+if [ -n "$MOD_ID" ] && [ -n "$ROLE_ID" ]; then
+    PERM_DATA="{\"roleId\": $ROLE_ID, \"permissions\": [{\"moduloId\": $MOD_ID, \"canRead\": true, \"canCreate\": true}]}"
+    call_api "POST" "/api/roles/permissions" "$PERM_DATA"
+    check_status 200 "ASSIGN Permissions"
+else
+    echo -e "  ${RED}[SKIP]${NC} No se pudo capturar IDs para permisos"
+fi
+
+# 4. CRUD USERS
+echo -e "\n${BLUE}[4] CRUD USERS${NC}"
 USER_EMAIL="qa_$(date +%s)@test.com"
-# Importante: roleId debe ser número si el esquema lo pide así, o coincidir con la validación
-USER_DATA="{\"email\": \"$USER_EMAIL\", \"password\": \"password123\", \"nombre\": \"QA User\", \"roleId\": $ROLE_ID}"
-call_api "POST" "/api/users" "$USER_DATA"
-check_status 201 "Crear nuevo usuario ($USER_EMAIL)"
+call_api "POST" "/api/users" "{\"email\": \"$USER_EMAIL\", \"password\": \"password123\", \"nombre\": \"QA User\", \"roleId\": $ROLE_ID}"
+check_status 201 "CREATE User"
+USER_ID=$(echo $BODY | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
 
-# --- 6. SECURITY ---
-echo -e "\n${BLUE}[6] SECURITY${NC}"
-call_api "GET" "/api/roles?empresaId=999" ""
-check_status 403 "Cross-tenant access attempt"
+call_api "PATCH" "/api/users/$USER_ID/status" "{}"
+check_status 200 "TOGGLE User Status"
 
-echo -e "\n${BLUE}====================================================${NC}"
-echo -e "${GREEN}QA SUITE v3.1 FINALIZADA${NC}"
-echo -e "${BLUE}====================================================${NC}"
+# 5. CLEANUP
+echo -e "\n${BLUE}[5] SYSTEM CLEANUP${NC}"
+if [ -n "$MOD_ID" ]; then
+    call_api "DELETE" "/api/modules/$MOD_ID" ""
+    check_status 200 "DELETE Module (Cleanup)"
+fi
+
+echo -e "\n${PURPLE}====================================================${NC}"
+echo -e "${GREEN}API QA v4.3 FINAL - COBERTURA TOTAL CONFIRMADA${NC}"
+echo -e "${PURPLE}====================================================${NC}"

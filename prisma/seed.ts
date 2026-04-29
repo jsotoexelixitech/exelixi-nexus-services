@@ -1,10 +1,10 @@
-import { PrismaClient } from "@prisma/client";
-import * as bcrypt from "bcrypt";
+import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("🚀 Iniciando Seed de Pruebas Masivas...");
+  console.log('🚀 Iniciando Seed de Pruebas Masivas...');
 
   // 1. Limpiar datos existentes (Opcional, pero recomendado para pruebas limpias)
   // Nota: El orden importa por las llaves foráneas
@@ -16,34 +16,34 @@ async function main() {
   await prisma.modulo.deleteMany();
   await prisma.empresa.deleteMany();
 
-  console.log("🧹 Base de datos limpia.");
+  console.log('🧹 Base de datos limpia.');
 
   // 2. Crear Módulos y Submódulos
   const modulos = [
     {
-      nombre: "Ventas",
+      nombre: 'Ventas',
       submodulos: [
-        "Cotizaciones",
-        "Facturación",
-        "Clientes",
-        "Reportes de Ventas",
+        'Cotizaciones',
+        'Facturación',
+        'Clientes',
+        'Reportes de Ventas',
       ],
     },
     {
-      nombre: "Inventario",
-      submodulos: ["Productos", "Almacenes", "Movimientos", "Stock Mínimo"],
+      nombre: 'Inventario',
+      submodulos: ['Productos', 'Almacenes', 'Movimientos', 'Stock Mínimo'],
     },
     {
-      nombre: "Recursos Humanos",
-      submodulos: ["Empleados", "Nómina", "Asistencia", "Vacaciones"],
+      nombre: 'Recursos Humanos',
+      submodulos: ['Empleados', 'Nómina', 'Asistencia', 'Vacaciones'],
     },
     {
-      nombre: "Contabilidad",
+      nombre: 'Contabilidad',
       submodulos: [
-        "Libro Mayor",
-        "Asientos Contables",
-        "Balances",
-        "Impuestos",
+        'Libro Mayor',
+        'Asientos Contables',
+        'Balances',
+        'Impuestos',
       ],
     },
   ];
@@ -68,15 +68,15 @@ async function main() {
   // 3. Crear Empresas de Prueba (Tenants)
   const empresasData = [
     {
-      nombre: "Tecnologías Globales S.A.",
-      rif: "J-11111111-1",
-      tipo: "Enterprise",
+      nombre: 'Tecnologías Globales S.A.',
+      rif: 'J-11111111-1',
+      tipo: 'Enterprise',
     },
-    { nombre: "Distribuidora Oriente", rif: "J-22222222-2", tipo: "Retail" },
-    { nombre: "Servicios Médicos Nexus", rif: "J-33333333-3", tipo: "Salud" },
+    { nombre: 'Distribuidora Oriente', rif: 'J-22222222-2', tipo: 'Retail' },
+    { nombre: 'Servicios Médicos Nexus', rif: 'J-33333333-3', tipo: 'Salud' },
   ];
 
-  const hashedPassword = await bcrypt.hash("password123", 10);
+  const hashedPassword = await bcrypt.hash('password123', 10);
 
   for (const ed of empresasData) {
     const empresa = await prisma.empresa.create({
@@ -104,7 +104,7 @@ async function main() {
       // 5. Crear Roles por Empresa
       const adminRole = await prisma.role.create({
         data: {
-          nombre: "Admin " + m.nombre,
+          nombre: 'Admin ' + m.nombre,
           empresaId: empresa.id,
           activo: true,
         },
@@ -120,7 +120,7 @@ async function main() {
       });
 
       // 7. Crear Usuarios de Prueba
-      const userEmail = `${m.nombre.toLowerCase().replace(" ", "")}@${empresa.id}.com`;
+      const userEmail = `${m.nombre.toLowerCase().replace(' ', '')}@${empresa.id}.com`;
       await prisma.usuario.create({
         data: {
           email: userEmail,
@@ -137,26 +137,26 @@ async function main() {
   // Usuario Global de Prueba para el README (admin@acme.com)
   const acme = await prisma.empresa.create({
     data: {
-      nombre: "ACME Corp",
-      rif: "J-12345678-9",
-      tipo: "SaaS",
+      nombre: 'ACME Corp',
+      rif: 'J-12345678-9',
+      tipo: 'SaaS',
       activo: true,
     },
   });
 
-  const ventasMod = allModules.find((m) => m.nombre === "Ventas")!;
+  const ventasMod = allModules.find((m) => m.nombre === 'Ventas')!;
   const acmeEM = await prisma.empresaModulo.create({
     data: {
       empresaId: acme.id,
       moduloId: ventasMod.id,
-      token: "acme-ventas-token",
+      token: 'acme-ventas-token',
       activo: true,
     },
   });
 
   const acmeRole = await prisma.role.create({
     data: {
-      nombre: "SuperAdmin",
+      nombre: 'SuperAdmin',
       empresaId: acme.id,
       activo: true,
     },
@@ -172,22 +172,22 @@ async function main() {
 
   await prisma.usuario.create({
     data: {
-      email: "admin@acme.com",
+      email: 'admin@acme.com',
       password: hashedPassword,
-      nombre: "Admin ACME",
+      nombre: 'Admin ACME',
       empresaId: acme.id,
       roleId: acmeRole.id,
       activo: true,
     },
   });
 
-  console.log("✨ Seed completado con éxito.");
-  console.log("👉 Usuario de prueba: admin@acme.com / password123");
+  console.log('✨ Seed completado con éxito.');
+  console.log('👉 Usuario de prueba: admin@acme.com / password123');
 }
 
 main()
   .catch((e) => {
-    console.error("❌ Error durante el seed:", e);
+    console.error('❌ Error durante el seed:', e);
     process.exit(1);
   })
   .finally(async () => {

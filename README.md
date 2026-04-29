@@ -25,38 +25,45 @@ El sistema implementa una **Defensa en Profundidad** con el siguiente flujo:
 ## 📡 Guía de API (Endpoints Principales)
 
 ### 🔑 Autenticación (`/api/auth`)
-| Método | Endpoint | Descripción | Payload |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/login` | Inicia sesión y devuelve un token encriptado. | `{ "email": "...", "password": "..." }` |
-| `GET` | `/me` | Devuelve el perfil completo, empresa y permisos. | Requiere Bearer Token |
+
+| Método | Endpoint | Descripción                                      | Payload                                 |
+| :----- | :------- | :----------------------------------------------- | :-------------------------------------- |
+| `POST` | `/login` | Inicia sesión y devuelve un token encriptado.    | `{ "email": "...", "password": "..." }` |
+| `GET`  | `/me`    | Devuelve el perfil completo, empresa y permisos. | Requiere Bearer Token                   |
 
 ### 🏢 Empresas (`/api/companies`)
-| Método | Endpoint | Descripción | Payload |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Lista todas las empresas (SaaS Admin). | - |
+
+| Método | Endpoint         | Descripción                                  | Payload                                             |
+| :----- | :--------------- | :------------------------------------------- | :-------------------------------------------------- |
+| `GET`  | `/`              | Lista todas las empresas (SaaS Admin).       | -                                                   |
 | `POST` | `/toggle-module` | Activa/Desactiva un módulo para una empresa. | `{ "empresaId": 1, "moduloId": 2, "active": true }` |
 
 ### 🧩 Módulos y Roles (`/api/modules`, `/api/roles`)
-| Método | Endpoint | Descripción | Payload |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/modules/active` | Módulos que la empresa actual tiene contratados. | - |
-| `POST` | `/modules/submodule`| Crea una sub-funcionalidad dentro de un módulo. | `{ "moduloId": 1, "nombre": "..." }` |
-| `POST` | `/roles` | Crea un rol (ej. "Vendedor") para la empresa. | `{ "nombre": "Vendedor" }` |
-| `POST` | `/roles/assign` | Asigna permisos de módulos a un rol. | `{ "roleId": 1, "permissions": [1, 2] }` |
+
+| Método | Endpoint             | Descripción                                      | Payload                                  |
+| :----- | :------------------- | :----------------------------------------------- | :--------------------------------------- |
+| `GET`  | `/modules/active`    | Módulos que la empresa actual tiene contratados. | -                                        |
+| `POST` | `/modules/submodule` | Crea una sub-funcionalidad dentro de un módulo.  | `{ "moduloId": 1, "nombre": "..." }`     |
+| `POST` | `/roles`             | Crea un rol (ej. "Vendedor") para la empresa.    | `{ "nombre": "Vendedor" }`               |
+| `POST` | `/roles/assign`      | Asigna permisos de módulos a un rol.             | `{ "roleId": 1, "permissions": [1, 2] }` |
 
 ---
 
 ## 🚦 Límites y Funcionalidades
 
 ### 🛡️ Rate Limiting (Protección Anti-DDoS)
+
 El sistema tiene un límite estricto por IP:
+
 - **Límite**: 100 peticiones.
 - **Ventana de tiempo**: 15 minutos.
 - **Identificador**: Dirección IP del cliente.
 - **Respuesta**: HTTP 429 (Too Many Requests).
 
 ### 📊 Matriz de Permisos (RBAC)
-El acceso no es solo por "URL", sino por **Módulo**. 
+
+El acceso no es solo por "URL", sino por **Módulo**.
+
 1. Una empresa "contrata" un módulo.
 2. El administrador crea un Rol.
 3. El Rol se vincula a los módulos activos.
@@ -72,4 +79,5 @@ El acceso no es solo por "URL", sino por **Módulo**.
 4.  **Desarrollo**: `npm run dev`
 
 ---
+
 👉 **Documentación Interactiva**: `http://localhost:3000/api-docs`
