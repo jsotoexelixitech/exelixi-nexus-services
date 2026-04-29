@@ -1,10 +1,10 @@
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import { AppError } from '../../utils/app-error';
-import logger from '../../utils/logger';
-import prisma from '../../config/prisma';
-import { getErrorMessage } from '../../utils/error-handler';
-import { encrypt } from '../../utils/crypto';
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import { AppError } from "../../utils/app-error";
+import logger from "../../utils/logger";
+import prisma from "../../config/prisma";
+import { getErrorMessage } from "../../utils/error-handler";
+import { encrypt } from "../../utils/crypto";
 
 interface RolePermissionDetail {
   id: number;
@@ -29,18 +29,21 @@ export class AuthService {
         where: { email },
         include: {
           empresa: true,
-          role: true
-        }
+          role: true,
+        },
       });
 
       if (!user) {
         logger.warn(`Login fallido: Usuario no encontrado (${email})`);
-        throw new AppError('El correo electrónico no está registrado.', 401);
+        throw new AppError("El correo electrónico no está registrado.", 401);
       }
 
       if (!user.activo) {
         logger.warn(`Login bloqueado: Cuenta inactiva (${email})`);
-        throw new AppError('Su cuenta ha sido desactivada. Por favor, contacte con soporte técnico.', 403);
+        throw new AppError(
+          "Su cuenta ha sido desactivada. Por favor, contacte con soporte técnico.",
+          403,
+        );
       }
 
       // Verificar contraseña
@@ -48,7 +51,7 @@ export class AuthService {
 
       if (!isPasswordValid) {
         logger.warn(`Login fallido: Contraseña incorrecta (${email})`);
-        throw new AppError('La contraseña ingresada es incorrecta.', 401);
+        throw new AppError("La contraseña ingresada es incorrecta.", 401);
       }
 
       logger.info(`Login exitoso: ${email} [Empresa: ${user.empresa.nombre}]`);
@@ -59,10 +62,10 @@ export class AuthService {
           id: user.id,
           email: user.email,
           empresaId: user.empresaId,
-          roleId: user.roleId
+          roleId: user.roleId,
         },
-        process.env.JWT_SECRET || 'secret',
-        { expiresIn: '12h' }
+        process.env.JWT_SECRET || "secret",
+        { expiresIn: "12h" },
       );
 
       // --- ENCRIPTACIÓN DEL TOKEN ---
@@ -76,13 +79,18 @@ export class AuthService {
           nombre: user.nombre,
           email: user.email,
           empresa: user.empresa.nombre,
-          role: user.role.nombre
-        }
+          role: user.role.nombre,
+        },
       };
     } catch (error: unknown) {
       if (error instanceof AppError) throw error;
-      logger.error(`Error crítico en AuthService.login: ${getErrorMessage(error)}`);
-      throw new AppError('Error interno durante la autenticación. Intente más tarde.', 500);
+      logger.error(
+        `Error crítico en AuthService.login: ${getErrorMessage(error)}`,
+      );
+      throw new AppError(
+        "Error interno durante la autenticación. Intente más tarde.",
+        500,
+      );
     }
   }
 
@@ -98,9 +106,13 @@ export class AuthService {
             include: {
               modulos: {
                 where: { activo: true },
-                include: { modulo: { include: { submodulos: { where: { activo: true } } } } }
-              }
-            }
+                include: {
+                  modulo: {
+                    include: { submodulos: { where: { activo: true } } },
+                  },
+                },
+              },
+            },
           },
           role: {
             include: {
@@ -108,29 +120,31 @@ export class AuthService {
                 where: { activo: true },
                 include: {
                   empresaModulo: {
-                    include: { modulo: true }
-                  }
-                }
-              }
-            }
-          }
-        }
+                    include: { modulo: true },
+                  },
+                },
+              },
+            },
+          },
+        },
       });
 
-      if (!user) throw new AppError('Usuario no encontrado', 404);
+      if (!user) throw new AppError("Usuario no encontrado", 404);
 
       // Extraemos empresa y rol con sus relaciones tipadas
       const { empresa, role } = user;
 
       // 1. Obtener detalles granulares de la nueva tabla
-      const granularDetails = await (prisma as any).rolePermissionDetail.findMany({
-        where: { roleId: user.roleId }
-      }) as RolePermissionDetail[];
+      const granularDetails = (await prisma.rolePermissionDetail.findMany({
+        where: { roleId: user.roleId },
+      })) as RolePermissionDetail[];
 
       // 2. Mapear módulos y submódulos con sus flags CRUD
-      const modulesAccess = empresa.modulos.map(em => {
-        const moduleDetail = granularDetails.find(d => d.moduloId === em.moduloId && !d.submoduloId);
-        
+      const modulesAccess = empresa.modulos.map((em) => {
+        const moduleDetail = granularDetails.find(
+          (d) => d.moduloId === em.moduloId && !d.submoduloId,
+        );
+
         return {
           id: em.modulo.id,
           nombre: em.modulo.nombre,
@@ -139,8 +153,10 @@ export class AuthService {
           canRead: moduleDetail?.canRead || false,
           canUpdate: moduleDetail?.canUpdate || false,
           canDelete: moduleDetail?.canDelete || false,
-          submodulos: em.modulo.submodulos.map(s => {
-            const smDetail = granularDetails.find(d => d.submoduloId === s.id);
+          submodulos: em.modulo.submodulos.map((s) => {
+            const smDetail = granularDetails.find(
+              (d) => d.submoduloId === s.id,
+            );
             return {
               id: s.id,
               nombre: s.nombre,
@@ -148,9 +164,9 @@ export class AuthService {
               canCreate: smDetail?.canCreate || false,
               canRead: smDetail?.canRead || false,
               canUpdate: smDetail?.canUpdate || false,
-              canDelete: smDetail?.canDelete || false
+              canDelete: smDetail?.canDelete || false,
             };
-          })
+          }),
         };
       });
 
@@ -159,19 +175,19 @@ export class AuthService {
           id: user.id,
           nombre: user.nombre,
           email: user.email,
-          role: role.nombre
+          role: role.nombre,
         },
         empresa: {
           id: empresa.id,
           nombre: empresa.nombre,
-          rif: empresa.rif
+          rif: empresa.rif,
         },
-        permissions: modulesAccess
+        permissions: modulesAccess,
       };
     } catch (error: unknown) {
       if (error instanceof AppError) throw error;
       logger.error(`Error al obtener perfil: ${getErrorMessage(error)}`);
-      throw new AppError('Error al recuperar información del perfil.', 500);
+      throw new AppError("Error al recuperar información del perfil.", 500);
     }
   }
 }
