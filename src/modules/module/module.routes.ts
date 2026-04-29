@@ -8,6 +8,7 @@ const router = Router();
 const controller = new ModuleController();
 
 // Módulos
+router.get('/', authenticate, controller.getActive);
 router.get('/active', authenticate, controller.getActive);
 router.get('/all', authenticate, controller.listAll);
 router.post('/', authenticate, controller.createModule);
