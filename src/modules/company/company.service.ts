@@ -12,7 +12,7 @@ export class CompanyService {
       return await prisma.empresa.create({
         data: {
           nombre,
-          rif,
+          rif: rif || '',
           tipo,
           activo: true,
         },
