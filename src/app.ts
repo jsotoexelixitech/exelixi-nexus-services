@@ -30,8 +30,28 @@ const app = express();
 app.use(requestIdMiddleware);
 app.use(requestLogger);
 
+// --- API Documentation (Public) ---
+// Colocamos esto antes que cualquier middleware de seguridad o compresión para evitar conflictos con los assets
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(specs, {
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
+    customSiteTitle: 'Exelixi Nexus API Docs',
+  }),
+);
+
+// Redirección para evitar duplicidad y problemas de assets
+app.use('/api/api-docs', (req, res) => res.redirect('/api-docs'));
+
 // --- Security & Performance Middlewares ---
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+  }),
+);
 app.use(
   cors({
     origin: env.ALLOWED_ORIGINS?.split(',') || '*',
@@ -43,9 +63,6 @@ app.use(cookieParser());
 app.use(express.json({ limit: '10kb' }));
 app.use(morgan('dev'));
 
-// Protección Global con API Key
-app.use(apiKeyGuard);
-
 // Rate Limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -55,10 +72,14 @@ const limiter = rateLimit({
     message: 'Demasiadas peticiones, intente más tarde.',
   },
 });
-app.use('/api/', limiter);
 
-// --- API Documentation ---
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
+// --- Public Endpoints ---
+app.use('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date(), env: env.NODE_ENV });
+});
+
+// --- Protected API Routes ---
+app.use('/api', apiKeyGuard, limiter);
 
 // --- Routes Registration ---
 app.use('/api/auth', authRoutes);
@@ -66,11 +87,6 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/modules', moduleRoutes);
-
-// --- Health Check ---
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date(), env: env.NODE_ENV });
-});
 
 // --- 404 Handler ---
 app.use((req, res) => {

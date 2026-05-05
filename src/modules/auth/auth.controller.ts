@@ -7,33 +7,6 @@ import { getErrorMessage } from '../../utils/error-handler';
 const authService = new AuthService();
 
 export class AuthController {
-  /**
-   * @openapi
-   * /api/auth/login:
-   *   post:
-   *     tags:
-   *       - Auth
-   *     summary: Iniciar sesión
-   *     requestBody:
-   *       required: true
-   *       content:
-   *         application/json:
-   *           schema:
-   *             type: object
-   *             required:
-   *               - email
-   *               - password
-   *             properties:
-   *               email:
-   *                 type: string
-   *               password:
-   *                 type: string
-   *     responses:
-   *       200:
-   *         description: Login exitoso
-   *       401:
-   *         description: Credenciales inválidas
-   */
   async login(req: Request, res: Response) {
     try {
       const { email, password } = req.body;
@@ -44,21 +17,6 @@ export class AuthController {
     }
   }
 
-  /**
-   * @openapi
-   * /api/auth/me:
-   *   get:
-   *     tags:
-   *       - Auth
-   *     summary: Obtener perfil del usuario actual
-   *     security:
-   *       - bearerAuth: []
-   *     responses:
-   *       200:
-   *         description: Perfil devuelto con éxito
-   *       401:
-   *         description: No autorizado
-   */
   async me(req: AuthRequest, res: Response) {
     try {
       const userId = req.user?.id;

@@ -11,8 +11,12 @@ export const apiKeyGuard = (
   res: Response,
   next: NextFunction,
 ) => {
-  // Permitir health check y docs sin API Key si se desea,
-  // pero el usuario pidió "ninguno de los endpoints".
+  // Excluir rutas públicas de la validación de API Key
+  const publicPaths = ['/health', '/api-docs', '/api/api-docs'];
+  if (publicPaths.some((path) => req.originalUrl.startsWith(path))) {
+    return next();
+  }
+
   const apiKey = req.headers['x-api-key'];
 
   if (!apiKey || apiKey !== env.API_KEY) {
