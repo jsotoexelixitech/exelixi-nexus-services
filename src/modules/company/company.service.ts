@@ -54,18 +54,43 @@ export class CompanyService {
   async getCompanyById(id: number) {
     const company = await prisma.empresa.findUnique({
       where: { id },
-      include: {
-        modulos: {
-          include: { modulo: true },
-        },
-      },
     });
 
     if (!company) {
       throw new AppError('Empresa no encontrada.', 404);
     }
 
-    return company;
+    // Para el dashboard admin: retornar siempre el catálogo global de módulos,
+    // mezclado con la configuración específica de la empresa.
+    const [catalogo, empresaModulos] = await Promise.all([
+      prisma.modulo.findMany({
+        include: { submodulos: true },
+      }),
+      prisma.empresaModulo.findMany({
+        where: { empresaId: id },
+      }),
+    ]);
+
+    const byModuloId = new Map<number, (typeof empresaModulos)[number]>();
+    for (const em of empresaModulos) byModuloId.set(em.moduloId, em);
+
+    const modulos = catalogo.map((m) => {
+      const em = byModuloId.get(m.id);
+      return {
+        id: em?.id ?? null,
+        empresaId: id,
+        moduloId: m.id,
+        token: em?.token ?? null,
+        activo: em?.activo ?? false,
+        createdAt: em?.createdAt ?? null,
+        modulo: m,
+      };
+    });
+
+    return {
+      ...company,
+      modulos,
+    };
   }
 
   /**
@@ -145,6 +170,8 @@ export class CompanyService {
 
   async getAllCompanies() {
     try {
+      // Mantener el retorno existente (con modulos reales) para listados,
+      // y dejar el merge completo para getCompanyById.
       return await prisma.empresa.findMany({
         include: {
           modulos: {
