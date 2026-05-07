@@ -6,6 +6,37 @@ type TxClient = Omit<
   '$extends' | '$transaction' | '$disconnect' | '$connect' | '$on' | '$use'
 >;
 
+type EmpresaSubmoduloRow = {
+  id: number;
+  empresaId: number;
+  submoduloId: number;
+  activo: boolean;
+  createdAt: Date | null;
+};
+
+type EmpresaSubmoduloDelegate = {
+  findMany(args: {
+    where: { empresaId: number };
+  }): Promise<EmpresaSubmoduloRow[]>;
+  findFirst(args: {
+    where: { empresaId: number; submoduloId: number };
+  }): Promise<EmpresaSubmoduloRow | null>;
+  create(args: {
+    data: { empresaId: number; submoduloId: number; activo: boolean };
+  }): Promise<EmpresaSubmoduloRow>;
+  update(args: {
+    where: { id: number };
+    data: { activo: boolean };
+  }): Promise<EmpresaSubmoduloRow>;
+};
+
+function getEmpresaSubmoduloDelegate(
+  client: unknown,
+): EmpresaSubmoduloDelegate {
+  return (client as { empresaSubmodulo: EmpresaSubmoduloDelegate })
+    .empresaSubmodulo;
+}
+
 export class CompanyService {
   /**
    * Crea una nueva empresa (Tenant).
@@ -66,11 +97,15 @@ export class CompanyService {
 
     // Para el dashboard admin: retornar siempre el catálogo global de módulos,
     // mezclado con la configuración específica de la empresa.
-    const [catalogo, empresaModulos] = await Promise.all([
+    const empresaSubmodulo = getEmpresaSubmoduloDelegate(prisma);
+    const [catalogo, empresaModulos, empresaSubmodulos] = await Promise.all([
       prisma.modulo.findMany({
         include: { submodulos: true },
       }),
       prisma.empresaModulo.findMany({
+        where: { empresaId: id },
+      }),
+      empresaSubmodulo.findMany({
         where: { empresaId: id },
       }),
     ]);
@@ -78,9 +113,32 @@ export class CompanyService {
     const byModuloId = new Map<number, (typeof empresaModulos)[number]>();
     for (const em of empresaModulos) byModuloId.set(em.moduloId, em);
 
+    const bySubmoduloId = new Map<number, (typeof empresaSubmodulos)[number]>();
+    for (const esm of empresaSubmodulos) {
+      bySubmoduloId.set(esm.submoduloId, esm);
+    }
+
     const modulos = catalogo.map(
-      (m: { id: number; [key: string]: unknown }) => {
+      (m: { id: number; submodulos?: unknown; [key: string]: unknown }) => {
         const em = byModuloId.get(m.id);
+        const submodulos = Array.isArray(m.submodulos)
+          ? (
+              m.submodulos as Array<{
+                id: number;
+                nombre: string;
+                activo: boolean;
+                moduloId: number;
+                [key: string]: unknown;
+              }>
+            ).map((sm) => {
+              const esm = bySubmoduloId.get(sm.id);
+              return {
+                ...sm,
+                activoEmpresa: esm?.activo ?? false,
+              };
+            })
+          : m.submodulos;
+
         return {
           id: em?.id ?? null,
           empresaId: id,
@@ -88,7 +146,10 @@ export class CompanyService {
           token: em?.token ?? null,
           activo: em?.activo ?? false,
           createdAt: em?.createdAt ?? null,
-          modulo: m,
+          modulo: {
+            ...m,
+            submodulos,
+          },
         };
       },
     );
@@ -171,6 +232,47 @@ export class CompanyService {
         error instanceof Error ? error.message : 'Error desconocido';
       logger.error(`Error al modificar módulo: ${message}`);
       throw new AppError('No se pudo actualizar el estado del módulo.', 500);
+    }
+  }
+
+  /**
+   * Activa o desactiva un submódulo para una empresa específica.
+   */
+  async toggleSubmodule(
+    empresaId: number,
+    submoduloId: number,
+    active: boolean,
+  ) {
+    try {
+      logger.info(
+        `${active ? 'Activando' : 'Desactivando'} submódulo ${submoduloId} para empresa ${empresaId}`,
+      );
+
+      const empresaSubmodulo = getEmpresaSubmoduloDelegate(prisma);
+
+      const existing = await empresaSubmodulo.findFirst({
+        where: { empresaId, submoduloId },
+      });
+
+      if (existing) {
+        return await empresaSubmodulo.update({
+          where: { id: existing.id },
+          data: { activo: active },
+        });
+      }
+
+      return await empresaSubmodulo.create({
+        data: {
+          empresaId,
+          submoduloId,
+          activo: active,
+        },
+      });
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
+      logger.error(`Error al modificar submódulo: ${message}`);
+      throw new AppError('No se pudo actualizar el estado del submódulo.', 500);
     }
   }
 

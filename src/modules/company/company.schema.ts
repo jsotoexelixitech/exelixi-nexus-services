@@ -33,3 +33,11 @@ export const toggleModuleSchema = z.object({
     active: z.boolean(),
   }),
 });
+
+export const toggleSubmoduleSchema = z.object({
+  body: z.object({
+    empresaId: z.number({ required_error: 'ID de empresa es requerido' }),
+    submoduloId: z.number({ required_error: 'ID de submódulo es requerido' }),
+    active: z.boolean(),
+  }),
+});

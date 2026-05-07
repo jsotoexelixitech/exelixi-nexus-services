@@ -15,6 +15,7 @@ model Empresa {
   tipo      String          @map("empresa_tipo") @db.VarChar
   createdAt DateTime?       @map("created_at") @db.Timestamp(6)
   modulos   EmpresaModulo[]
+  submodulos EmpresaSubmodulo[]
   recibos   Recibo[]
   roles     Role[]
   siniestro Siniestro[]
@@ -40,8 +41,23 @@ model Submodulo {
   activo   Boolean @map("submodulo_estatus")
   moduloId Int     @map("submodulo_modulo_id")
   modulo   Modulo  @relation(fields: [moduloId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_submodulo_modulo")
+  empresas EmpresaSubmodulo[]
 
   @@map("submodulo")
+}
+
+model EmpresaSubmodulo {
+  id         Int       @id @default(autoincrement()) @map("emsm_id")
+  empresaId  Int       @map("emsm_empresa_id")
+  submoduloId Int      @map("emsm_submodulo_id")
+  activo     Boolean   @map("emsm_estatus")
+  createdAt  DateTime? @map("emsm_created_at") @db.Timestamp(6)
+
+  empresa   Empresa   @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_empresa_submodulo_empresa")
+  submodulo Submodulo @relation(fields: [submoduloId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_empresa_submodulo_submodulo")
+
+  @@unique([empresaId, submoduloId])
+  @@map("empresa_submodulo")
 }
 
 model EmpresaModulo {

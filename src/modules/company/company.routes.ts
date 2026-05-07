@@ -6,6 +6,7 @@ import {
   createCompanySchema,
   updateCompanySchema,
   toggleModuleSchema,
+  toggleSubmoduleSchema,
 } from './company.schema';
 
 const router = Router();
@@ -101,6 +102,7 @@ router.post('/', validate(createCompanySchema), controller.create);
  *                                     id: { type: integer, example: 99 }
  *                                     nombre: { type: string, example: "Cotizaciones" }
  *                                     activo: { type: boolean, example: true }
+ *                                     activoEmpresa: { type: boolean, example: false }
  *                                     moduloId: { type: integer, example: 31 }
  *   put:
  *     tags: [Companies]
@@ -158,6 +160,33 @@ router.post(
   '/toggle-module',
   validate(toggleModuleSchema),
   controller.toggleModule,
+);
+
+/**
+ * @openapi
+ * /api/companies/toggle-submodule:
+ *   post:
+ *     tags: [Companies]
+ *     summary: Activar/Desactivar submódulo para empresa
+ *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [empresaId, submoduloId, active]
+ *             properties:
+ *               empresaId: { type: number, example: 1 }
+ *               submoduloId: { type: number, example: 99 }
+ *               active: { type: boolean }
+ *     responses:
+ *       200: { description: Estado del submódulo actualizado }
+ */
+router.post(
+  '/toggle-submodule',
+  validate(toggleSubmoduleSchema),
+  controller.toggleSubmodule,
 );
 
 export default router;

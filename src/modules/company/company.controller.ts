@@ -132,4 +132,22 @@ export class CompanyController {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
+
+  async toggleSubmodule(req: Request, res: Response) {
+    try {
+      const { empresaId, submoduloId, active } = req.body;
+      const result = await companyService.toggleSubmodule(
+        Number(empresaId),
+        Number(submoduloId),
+        active,
+      );
+      res.json({
+        success: true,
+        message: `Submódulo ${active ? 'activado' : 'desactivado'} exitosamente`,
+        data: result,
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
 }
