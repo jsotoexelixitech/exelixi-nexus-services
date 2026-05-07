@@ -26,11 +26,9 @@ const controller = new RoleController();
  *         application/json:
  *           schema:
  *             type: object
- *             required: [name, companyId]
+ *             required: [nombre]
  *             properties:
- *               name: { type: string }
- *               description: { type: string }
- *               companyId: { type: string }
+ *               nombre: { type: string, example: "Admin" }
  *     responses:
  *       201: { description: Creado }
  */
@@ -47,7 +45,7 @@ router.post('/', authenticate, validate(createRoleSchema), controller.create);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 2 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: Actualizado }
@@ -58,7 +56,7 @@ router.post('/', authenticate, validate(createRoleSchema), controller.create);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 2 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: Eliminado }
@@ -76,7 +74,7 @@ router.delete('/:id', authenticate, controller.delete);
  *       - in: path
  *         name: roleId
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 2 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: OK }
@@ -98,14 +96,27 @@ router.get('/matrix/:roleId', authenticate, controller.getPermissionMatrix);
  *             type: object
  *             required: [roleId, permissions]
  *             properties:
- *               roleId: { type: string }
+ *               roleId: { type: number, example: 2 }
  *               permissions:
  *                 type: array
  *                 items:
  *                   type: object
  *                   properties:
- *                     moduleId: { type: string }
- *                     action: { type: string, enum: [create, read, update, delete] }
+ *                     moduloId: { type: number, example: 3 }
+ *                     canCreate: { type: boolean, example: true }
+ *                     canRead: { type: boolean, example: true }
+ *                     canUpdate: { type: boolean, example: false }
+ *                     canDelete: { type: boolean, example: false }
+ *                     submodulos:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           submoduloId: { type: number, example: 10 }
+ *                           canCreate: { type: boolean, example: true }
+ *                           canRead: { type: boolean, example: true }
+ *                           canUpdate: { type: boolean, example: false }
+ *                           canDelete: { type: boolean, example: false }
  *     responses:
  *       200: { description: Permisos asignados }
  */

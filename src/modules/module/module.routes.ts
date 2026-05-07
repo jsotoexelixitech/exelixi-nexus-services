@@ -50,7 +50,7 @@ router.post('/', authenticate, controller.createModule);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 1 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: OK }
@@ -61,7 +61,7 @@ router.post('/', authenticate, controller.createModule);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 1 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: OK }
@@ -82,10 +82,10 @@ router.delete('/:id', authenticate, controller.deleteModule);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [name, moduleId]
+ *             required: [moduloId, nombre]
  *             properties:
- *               name: { type: string }
- *               moduleId: { type: string }
+ *               moduloId: { type: number, example: 1 }
+ *               nombre: { type: string, example: "Pagos" }
  *     responses:
  *       201: { description: Creado }
  */
@@ -106,7 +106,7 @@ router.post(
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 10 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: OK }
@@ -117,7 +117,7 @@ router.post(
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 10 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: OK }

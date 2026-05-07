@@ -33,10 +33,11 @@ router.use(authenticate);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [name, slug]
+ *             required: [nombre]
  *             properties:
- *               name: { type: string }
- *               slug: { type: string }
+ *               nombre: { type: string, example: "Colegio San Martín" }
+ *               rif: { type: string, example: "J-12345678-9" }
+ *               tipo: { type: string, example: "Colegio" }
  *     responses:
  *       201: { description: Creado }
  */
@@ -53,7 +54,7 @@ router.post('/', validate(createCompanySchema), controller.create);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 1 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: OK }
@@ -64,7 +65,7 @@ router.post('/', validate(createCompanySchema), controller.create);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 1 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     requestBody:
  *       content:
@@ -79,7 +80,7 @@ router.post('/', validate(createCompanySchema), controller.create);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 1 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200: { description: Eliminado }
@@ -101,10 +102,10 @@ router.delete('/:id', controller.delete);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [companyId, moduleId, active]
+ *             required: [empresaId, moduloId, active]
  *             properties:
- *               companyId: { type: string }
- *               moduleId: { type: string }
+ *               empresaId: { type: number, example: 1 }
+ *               moduloId: { type: number, example: 3 }
  *               active: { type: boolean }
  *     responses:
  *       200: { description: Estado del módulo actualizado }

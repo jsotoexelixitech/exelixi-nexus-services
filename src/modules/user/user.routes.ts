@@ -37,13 +37,12 @@ const controller = new UserController();
  *         application/json:
  *           schema:
  *             type: object
- *             required: [name, email, password, roleId, companyId]
+ *             required: [nombre, email, password, roleId]
  *             properties:
- *               name: { type: string }
+ *               nombre: { type: string, example: "María Pérez" }
  *               email: { type: string, format: email }
  *               password: { type: string, minLength: 6 }
- *               roleId: { type: string }
- *               companyId: { type: string }
+ *               roleId: { type: number, example: 2 }
  *     responses:
  *       201:
  *         description: Usuario creado
@@ -62,7 +61,7 @@ router.post('/', authenticate, validate(createUserSchema), controller.create);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 1 }
  *     security:
  *       - apiKeyAuth: []
  *       - bearerAuth: []
@@ -88,7 +87,7 @@ router.put('/:id', authenticate, validate(updateUserSchema), controller.update);
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string }
+ *         schema: { type: integer, example: 1 }
  *     security:
  *       - apiKeyAuth: []
  *       - bearerAuth: []

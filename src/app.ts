@@ -27,6 +27,7 @@ import { requestLogger } from './middlewares/logger.middleware';
 const app = express();
 
 // --- Request Context & Correlation ---
+app.set('trust proxy', 1); // Confiar en el proxy inverso (Nginx, PM2, etc.)
 app.use(requestIdMiddleware);
 app.use(requestLogger);
 
@@ -65,12 +66,14 @@ app.use(morgan('dev'));
 
 // Rate Limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: env.NODE_ENV === 'production' ? 100 : 1000, // Más permisivo en desarrollo
   message: {
     success: false,
     message: 'Demasiadas peticiones, intente más tarde.',
   },
+  standardHeaders: true, // Retorna info del límite en los headers `RateLimit-*`
+  legacyHeaders: false, // Desactiva los headers `X-RateLimit-*`
 });
 
 // --- Public Endpoints ---
