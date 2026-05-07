@@ -1,6 +1,10 @@
 import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
+type TxClient = Omit<
+  typeof prisma,
+  '$extends' | '$transaction' | '$disconnect' | '$connect' | '$on' | '$use'
+>;
 
 export class CompanyService {
   /**
@@ -9,7 +13,7 @@ export class CompanyService {
   async createCompany(nombre: string, rif?: string, tipo: string = 'cliente') {
     try {
       logger.info(`Creando nueva empresa: ${nombre} (${rif || 'S/R'})`);
-      return await prisma.$transaction(async (tx: typeof prisma) => {
+      return await prisma.$transaction(async (tx: TxClient) => {
         const empresa = await tx.empresa.create({
           data: {
             nombre,
