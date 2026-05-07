@@ -32,9 +32,10 @@ type EmpresaSubmoduloDelegate = {
 
 function getEmpresaSubmoduloDelegate(
   client: unknown,
-): EmpresaSubmoduloDelegate {
-  return (client as { empresaSubmodulo: EmpresaSubmoduloDelegate })
+): EmpresaSubmoduloDelegate | null {
+  const delegate = (client as { empresaSubmodulo?: EmpresaSubmoduloDelegate })
     .empresaSubmodulo;
+  return delegate ?? null;
 }
 
 export class CompanyService {
@@ -54,24 +55,8 @@ export class CompanyService {
           },
         });
 
-        // Provisionar módulos por defecto: si existen módulos globales activos,
-        // se activan para la nueva empresa para evitar que /api/modules retorne [].
-        const globalModules = await tx.modulo.findMany({
-          where: { activo: true },
-          select: { id: true },
-        });
-
-        if (globalModules.length > 0) {
-          await tx.empresaModulo.createMany({
-            data: globalModules.map((m: { id: number }) => ({
-              empresaId: empresa.id,
-              moduloId: m.id,
-              activo: true,
-              token: `token-${empresa.id}-${m.id}`,
-            })),
-            skipDuplicates: true,
-          });
-        }
+        // No provisionamos módulos/submódulos automáticamente.
+        // El admin los activará explícitamente vía toggle-module / toggle-submodule.
 
         return empresa;
       });
@@ -251,6 +236,12 @@ export class CompanyService {
       );
 
       const empresaSubmodulo = getEmpresaSubmoduloDelegate(prisma);
+      if (!empresaSubmodulo) {
+        throw new AppError(
+          'La funcionalidad de submódulos por empresa no está disponible en este ambiente (falta aplicar migración/deploy).',
+          400,
+        );
+      }
 
       const existing = await empresaSubmodulo.findFirst({
         where: { empresaId, submoduloId },
