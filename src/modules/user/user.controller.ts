@@ -12,12 +12,14 @@ export class UserController {
       if (!empresaId)
         return res.status(403).json({ message: 'Empresa no identificada' });
 
-      const user = await userService.createUser(empresaId, req.body);
+      const result = await userService.createUser(empresaId, req.body);
+      const user = result.user;
       res.status(201).json({
         id: user.id,
         nombre: user.nombre,
         email: user.email,
         roleId: user.roleId,
+        temporaryPassword: result.temporaryPassword,
       });
     } catch (error: unknown) {
       res.status(400).json({ message: getErrorMessage(error) });

@@ -1,4 +1,3 @@
-import { Usuario } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
@@ -6,12 +5,28 @@ import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
 
 export class UserService {
+  private generateTemporaryPassword(length: number = 10) {
+    // Evitamos caracteres ambiguos para reducir errores al transcribir.
+    const alphabet =
+      'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    let out = '';
+    for (let i = 0; i < length; i++) {
+      out += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    return out;
+  }
+
   /**
    * Crea un usuario vinculado a una empresa y un rol.
    */
   async createUser(
     empresaId: string | number,
-    data: Omit<Usuario, 'id' | 'createdAt' | 'empresaId' | 'activo'>,
+    data: {
+      nombre: string;
+      email: string;
+      password?: string;
+      roleId: number;
+    },
   ) {
     try {
       const eid = Number(empresaId);
@@ -33,10 +48,11 @@ export class UserService {
       }
 
       // 2. Hash de contraseña
-      const hashedPassword = await bcrypt.hash(data.password, 10);
+      const plainPassword = data.password ?? this.generateTemporaryPassword(10);
+      const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
       // 3. Crear usuario
-      return await prisma.usuario.create({
+      const user = await prisma.usuario.create({
         data: {
           ...data,
           password: hashedPassword,
@@ -44,6 +60,9 @@ export class UserService {
           activo: true,
         },
       });
+
+      const generated = !data.password;
+      return { user, temporaryPassword: generated ? plainPassword : null };
     } catch (error: unknown) {
       if (
         typeof error === 'object' &&
@@ -68,7 +87,13 @@ export class UserService {
   async updateUser(
     id: string | number,
     empresaId: string | number,
-    data: Partial<Usuario>,
+    data: {
+      nombre?: string;
+      email?: string;
+      password?: string;
+      roleId?: number;
+      activo?: boolean;
+    },
   ) {
     try {
       const uid = Number(id);

@@ -37,11 +37,15 @@ const controller = new UserController();
  *         application/json:
  *           schema:
  *             type: object
- *             required: [nombre, email, password, roleId]
+ *             required: [nombre, email, roleId]
  *             properties:
  *               nombre: { type: string, example: "María Pérez" }
  *               email: { type: string, format: email }
- *               password: { type: string, minLength: 6 }
+ *               password:
+ *                 type: string
+ *                 minLength: 6
+ *                 nullable: true
+ *                 description: Si no se envía, el backend genera una contraseña temporal y la devuelve en la respuesta.
  *               roleId: { type: number, example: 2 }
  *     responses:
  *       201:

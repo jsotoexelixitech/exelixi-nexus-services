@@ -9,7 +9,7 @@ export class CompanyService {
   async createCompany(nombre: string, rif?: string, tipo: string = 'cliente') {
     try {
       logger.info(`Creando nueva empresa: ${nombre} (${rif || 'S/R'})`);
-      return await prisma.$transaction(async (tx) => {
+      return await prisma.$transaction(async (tx: typeof prisma) => {
         const empresa = await tx.empresa.create({
           data: {
             nombre,
@@ -28,7 +28,7 @@ export class CompanyService {
 
         if (globalModules.length > 0) {
           await tx.empresaModulo.createMany({
-            data: globalModules.map((m) => ({
+            data: globalModules.map((m: { id: number }) => ({
               empresaId: empresa.id,
               moduloId: m.id,
               activo: true,
@@ -74,18 +74,20 @@ export class CompanyService {
     const byModuloId = new Map<number, (typeof empresaModulos)[number]>();
     for (const em of empresaModulos) byModuloId.set(em.moduloId, em);
 
-    const modulos = catalogo.map((m) => {
-      const em = byModuloId.get(m.id);
-      return {
-        id: em?.id ?? null,
-        empresaId: id,
-        moduloId: m.id,
-        token: em?.token ?? null,
-        activo: em?.activo ?? false,
-        createdAt: em?.createdAt ?? null,
-        modulo: m,
-      };
-    });
+    const modulos = catalogo.map(
+      (m: { id: number; [key: string]: unknown }) => {
+        const em = byModuloId.get(m.id);
+        return {
+          id: em?.id ?? null,
+          empresaId: id,
+          moduloId: m.id,
+          token: em?.token ?? null,
+          activo: em?.activo ?? false,
+          createdAt: em?.createdAt ?? null,
+          modulo: m,
+        };
+      },
+    );
 
     return {
       ...company,
