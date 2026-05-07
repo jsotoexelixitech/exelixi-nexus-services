@@ -57,7 +57,51 @@ router.post('/', validate(createCompanySchema), controller.create);
  *         schema: { type: integer, example: 1 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
- *       200: { description: OK }
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id: { type: integer, example: 32 }
+ *                     rif: { type: string, example: "J-12345678-9" }
+ *                     nombre: { type: string, example: "ACME Corp" }
+ *                     activo: { type: boolean, example: true }
+ *                     tipo: { type: string, example: "SaaS" }
+ *                     createdAt: { type: string, nullable: true }
+ *                     modulos:
+ *                       type: array
+ *                       description: Catálogo global mezclado con la configuración de la empresa (empresa_modulo). Si no existe relación, `activo=false` y `id/token=null`.
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id: { type: integer, nullable: true, example: 79 }
+ *                           empresaId: { type: integer, example: 32 }
+ *                           moduloId: { type: integer, example: 31 }
+ *                           token: { type: string, nullable: true, example: "acme-ventas-token" }
+ *                           activo: { type: boolean, example: true }
+ *                           createdAt: { type: string, nullable: true }
+ *                           modulo:
+ *                             type: object
+ *                             properties:
+ *                               id: { type: integer, example: 31 }
+ *                               nombre: { type: string, example: "Ventas" }
+ *                               activo: { type: boolean, example: true }
+ *                               createdAt: { type: string, nullable: true }
+ *                               submodulos:
+ *                                 type: array
+ *                                 items:
+ *                                   type: object
+ *                                   properties:
+ *                                     id: { type: integer, example: 99 }
+ *                                     nombre: { type: string, example: "Cotizaciones" }
+ *                                     activo: { type: boolean, example: true }
+ *                                     moduloId: { type: integer, example: 31 }
  *   put:
  *     tags: [Companies]
  *     summary: Actualizar empresa
