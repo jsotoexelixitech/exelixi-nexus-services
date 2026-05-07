@@ -9,13 +9,36 @@ export class CompanyService {
   async createCompany(nombre: string, rif?: string, tipo: string = 'cliente') {
     try {
       logger.info(`Creando nueva empresa: ${nombre} (${rif || 'S/R'})`);
-      return await prisma.empresa.create({
-        data: {
-          nombre,
-          rif: rif || '',
-          tipo,
-          activo: true,
-        },
+      return await prisma.$transaction(async (tx) => {
+        const empresa = await tx.empresa.create({
+          data: {
+            nombre,
+            rif: rif || '',
+            tipo,
+            activo: true,
+          },
+        });
+
+        // Provisionar módulos por defecto: si existen módulos globales activos,
+        // se activan para la nueva empresa para evitar que /api/modules retorne [].
+        const globalModules = await tx.modulo.findMany({
+          where: { activo: true },
+          select: { id: true },
+        });
+
+        if (globalModules.length > 0) {
+          await tx.empresaModulo.createMany({
+            data: globalModules.map((m) => ({
+              empresaId: empresa.id,
+              moduloId: m.id,
+              activo: true,
+              token: `token-${empresa.id}-${m.id}`,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        return empresa;
       });
     } catch (error: unknown) {
       const message =

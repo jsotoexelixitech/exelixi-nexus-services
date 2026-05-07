@@ -26,6 +26,10 @@ import { requestLogger } from './middlewares/logger.middleware';
 
 const app = express();
 
+// Evitar respuestas 304 (ETag) en endpoints JSON.
+// Swagger UI y algunos clientes no siempre reutilizan correctamente el body cacheado.
+app.set('etag', false);
+
 // --- Request Context & Correlation ---
 app.set('trust proxy', 1); // Confiar en el proxy inverso (Nginx, PM2, etc.)
 app.use(requestIdMiddleware);
@@ -83,6 +87,18 @@ app.use('/health', (req, res) => {
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);
+app.use('/api', (_req, res, next) => {
+  // Evitar cache en clientes/proxies y prevenir 304 sin body.
+  res.setHeader(
+    'Cache-Control',
+    'no-store, no-cache, must-revalidate, proxy-revalidate',
+  );
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  // Si algún middleware llegara a setear ETag, lo anulamos para evitar If-None-Match → 304.
+  res.removeHeader('ETag');
+  next();
+});
 
 // --- Routes Registration ---
 app.use('/api/auth', authRoutes);
