@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { CompanyService } from './company.service';
 import { getErrorMessage } from '../../utils/error-handler';
+import { AppError } from '../../utils/app-error';
 
 const companyService = new CompanyService();
 
@@ -40,7 +41,10 @@ export class CompanyController {
         data: company,
       });
     } catch (error: unknown) {
-      res.status(404).json({ success: false, message: getErrorMessage(error) });
+      const statusCode = error instanceof AppError ? error.statusCode : 500;
+      res
+        .status(statusCode)
+        .json({ success: false, message: getErrorMessage(error) });
     }
   }
 

@@ -105,9 +105,11 @@ export class CompanyService {
       prisma.empresaModulo.findMany({
         where: { empresaId: id },
       }),
-      empresaSubmodulo.findMany({
-        where: { empresaId: id },
-      }),
+      empresaSubmodulo
+        ? empresaSubmodulo.findMany({
+            where: { empresaId: id },
+          })
+        : Promise.resolve([]),
     ]);
 
     const byModuloId = new Map<number, (typeof empresaModulos)[number]>();
