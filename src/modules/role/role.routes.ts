@@ -51,7 +51,7 @@ router.post('/', authenticate, validate(createRoleSchema), controller.create);
  *       200: { description: Actualizado }
  *   delete:
  *     tags: [Roles]
- *     summary: Eliminar rol
+ *     summary: Desactivar rol
  *     parameters:
  *       - in: path
  *         name: id
@@ -59,7 +59,7 @@ router.post('/', authenticate, validate(createRoleSchema), controller.create);
  *         schema: { type: integer, example: 2 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
- *       200: { description: Eliminado }
+ *       200: { description: Desactivado }
  */
 router.put('/:id', authenticate, validate(createRoleSchema), controller.update);
 router.delete('/:id', authenticate, controller.delete);

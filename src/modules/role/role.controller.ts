@@ -73,7 +73,7 @@ export class RoleController {
       await roleService.deleteRole(id, empresaId);
       res.json({
         success: true,
-        message: 'Rol eliminado correctamente',
+        message: 'Rol desactivado correctamente',
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });

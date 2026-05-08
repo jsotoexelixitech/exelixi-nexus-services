@@ -89,8 +89,9 @@ export class ModuleService {
    * Elimina un submódulo.
    */
   async deleteSubmodule(id: number) {
-    return await prisma.submodulo.delete({
+    return await prisma.submodulo.update({
       where: { id },
+      data: { activo: false },
     });
   }
 }

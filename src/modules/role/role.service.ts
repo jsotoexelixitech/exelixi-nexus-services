@@ -64,7 +64,7 @@ export class RoleService {
     try {
       const rid = Number(id);
       const eid = Number(empresaId);
-      logger.info(`Intentando eliminar rol ${rid}`);
+      logger.info(`Intentando desactivar rol ${rid}`);
 
       // Validar si tiene usuarios asignados
       const usersCount = await prisma.usuario.count({
@@ -78,8 +78,9 @@ export class RoleService {
         );
       }
 
-      return await prisma.role.delete({
+      return await prisma.role.update({
         where: { id: rid, empresaId: eid },
+        data: { activo: false },
       });
     } catch (error: unknown) {
       if (error instanceof AppError) throw error;

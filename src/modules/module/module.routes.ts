@@ -112,7 +112,7 @@ router.post(
  *       200: { description: OK }
  *   delete:
  *     tags: [Modules]
- *     summary: Eliminar submódulo
+ *     summary: Desactivar submódulo
  *     parameters:
  *       - in: path
  *         name: id

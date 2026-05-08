@@ -149,7 +149,10 @@ export class ModuleController {
     try {
       const { id } = req.params;
       await moduleService.deleteSubmodule(Number(id));
-      res.json({ success: true, message: 'Submódulo eliminado correctamente' });
+      res.json({
+        success: true,
+        message: 'Submódulo desactivado correctamente',
+      });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
