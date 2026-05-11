@@ -6,28 +6,6 @@ import { getErrorMessage } from '../../utils/error-handler';
 const roleService = new RoleService();
 
 export class RoleController {
-  /**
-   * @openapi
-   * /api/roles:
-   *   post:
-   *     tags:
-   *       - Roles
-   *     summary: Crear un nuevo rol para la empresa actual
-   *     security:
-   *       - bearerAuth: []
-   *     requestBody:
-   *       required: true
-   *       content:
-   *         application/json:
-   *           schema:
-   *             type: object
-   *             properties:
-   *               nombre:
-   *                 type: string
-   *     responses:
-   *       201:
-   *         description: Rol creado
-   */
   async create(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;
@@ -102,19 +80,6 @@ export class RoleController {
     }
   }
 
-  /**
-   * @openapi
-   * /api/roles:
-   *   get:
-   *     tags:
-   *       - Roles
-   *     summary: Listar roles de la empresa actual
-   *     security:
-   *       - bearerAuth: []
-   *     responses:
-   *       200:
-   *         description: Lista de roles
-   */
   async list(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;

@@ -12,7 +12,6 @@ import {
 const router = Router();
 const controller = new CompanyController();
 
-// Todas las rutas de empresas requieren autenticación
 router.use(authenticate);
 
 /**
@@ -20,13 +19,39 @@ router.use(authenticate);
  * /api/companies:
  *   get:
  *     tags: [Companies]
- *     summary: Listar todas las empresas
+ *     summary: Listar empresas
+ *     description: Devuelve todas las empresas registradas (uso típico administración SaaS).
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
- *       200: { description: OK }
+ *       200:
+ *         description: Lista obtenida correctamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ApiSuccessWithData'
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: 1
+ *                   nombre: "Colegio San Martín"
+ *                   rif: "J-12345678-9"
+ *                   tipo: "Colegio"
+ *                   activo: true
+ *                 - id: 2
+ *                   nombre: "Otra Empresa"
+ *                   rif: "J-87654321-0"
+ *                   tipo: "SaaS"
+ *                   activo: true
+ *       500:
+ *         description: Error interno
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  *   post:
  *     tags: [Companies]
- *     summary: Crear una nueva empresa
+ *     summary: Crear empresa
+ *     description: Solo **nombre** es obligatorio por validación; `rif` y `tipo` son opcionales.
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -36,11 +61,35 @@ router.use(authenticate);
  *             type: object
  *             required: [nombre]
  *             properties:
- *               nombre: { type: string, example: "Colegio San Martín" }
+ *               nombre: { type: string, minLength: 3, example: "Colegio San Martín" }
  *               rif: { type: string, example: "J-12345678-9" }
  *               tipo: { type: string, example: "Colegio" }
+ *           example:
+ *             nombre: "Colegio San Martín"
+ *             rif: "J-12345678-9"
+ *             tipo: "Colegio"
  *     responses:
- *       201: { description: Creado }
+ *       201:
+ *         description: Empresa persistida
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 message: { type: string }
+ *                 data: { type: object }
+ *             example:
+ *               success: true
+ *               message: "Empresa creada exitosamente"
+ *               data:
+ *                 id: 32
+ *                 nombre: "Colegio San Martín"
+ *                 rif: "J-12345678-9"
+ *                 tipo: "Colegio"
+ *                 activo: true
+ *       400:
+ *         $ref: '#/components/responses/BadRequestError'
  */
 router.get('/', controller.list);
 router.post('/', validate(createCompanySchema), controller.create);
@@ -50,7 +99,11 @@ router.post('/', validate(createCompanySchema), controller.create);
  * /api/companies/{id}:
  *   get:
  *     tags: [Companies]
- *     summary: Obtener empresa por ID
+ *     summary: Detalle de empresa con módulos y submódulos
+ *     description: |
+ *       Incluye `modulos` como lista de relaciones empresa–módulo mezcladas con el catálogo:
+ *       cada ítem trae `activo`, `modulo` anidado y en `modulo.submodulos` el flag **`activoEmpresa`**
+ *       según la tabla empresa–submódulo.
  *     parameters:
  *       - in: path
  *         name: id
@@ -59,7 +112,7 @@ router.post('/', validate(createCompanySchema), controller.create);
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
  *       200:
- *         description: OK
+ *         description: Empresa encontrada
  *         content:
  *           application/json:
  *             schema:
@@ -69,59 +122,93 @@ router.post('/', validate(createCompanySchema), controller.create);
  *                 data:
  *                   type: object
  *                   properties:
- *                     id: { type: integer, example: 32 }
- *                     rif: { type: string, example: "J-12345678-9" }
- *                     nombre: { type: string, example: "ACME Corp" }
- *                     activo: { type: boolean, example: true }
- *                     tipo: { type: string, example: "SaaS" }
+ *                     id: { type: integer }
+ *                     rif: { type: string }
+ *                     nombre: { type: string }
+ *                     activo: { type: boolean }
+ *                     tipo: { type: string }
  *                     createdAt: { type: string, nullable: true }
  *                     modulos:
  *                       type: array
- *                       description: Catálogo global mezclado con la configuración de la empresa (empresa_modulo). Si no existe relación, `activo=false` y `id/token=null`.
  *                       items:
  *                         type: object
  *                         properties:
- *                           id: { type: integer, nullable: true, example: 79 }
- *                           empresaId: { type: integer, example: 32 }
- *                           moduloId: { type: integer, example: 31 }
- *                           token: { type: string, nullable: true, example: "acme-ventas-token" }
- *                           activo: { type: boolean, example: true }
- *                           createdAt: { type: string, nullable: true }
+ *                           id: { type: integer, nullable: true }
+ *                           empresaId: { type: integer }
+ *                           moduloId: { type: integer }
+ *                           token: { type: string, nullable: true }
+ *                           activo: { type: boolean }
  *                           modulo:
  *                             type: object
  *                             properties:
- *                               id: { type: integer, example: 31 }
- *                               nombre: { type: string, example: "Ventas" }
- *                               activo: { type: boolean, example: true }
- *                               createdAt: { type: string, nullable: true }
+ *                               id: { type: integer }
+ *                               nombre: { type: string }
  *                               submodulos:
  *                                 type: array
  *                                 items:
  *                                   type: object
  *                                   properties:
- *                                     id: { type: integer, example: 99 }
- *                                     nombre: { type: string, example: "Cotizaciones" }
- *                                     activo: { type: boolean, example: true }
- *                                     activoEmpresa: { type: boolean, example: false }
- *                                     moduloId: { type: integer, example: 31 }
+ *                                     id: { type: integer }
+ *                                     nombre: { type: string }
+ *                                     url: { type: string, nullable: true }
+ *                                     activo: { type: boolean }
+ *                                     activoEmpresa: { type: boolean }
+ *       404:
+ *         description: Empresa no encontrada
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *             example:
+ *               success: false
+ *               message: "Empresa no encontrada"
+ *       500:
+ *         description: Error interno
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  *   put:
  *     tags: [Companies]
  *     summary: Actualizar empresa
+ *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
  *         schema: { type: integer, example: 1 }
- *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     requestBody:
  *       content:
  *         application/json:
- *           schema: { type: object }
+ *           schema:
+ *             type: object
+ *             properties:
+ *               nombre: { type: string, minLength: 3 }
+ *               rif: { type: string }
+ *               tipo: { type: string }
+ *               activo: { type: boolean }
+ *           example:
+ *             nombre: "Colegio San Martín Actualizado"
+ *             activo: true
  *     responses:
- *       200: { description: Actualizado }
+ *       200:
+ *         description: Cambios guardados
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Empresa actualizada exitosamente"
+ *               data:
+ *                 id: 1
+ *                 nombre: "Colegio San Martín Actualizado"
+ *                 rif: "J-12345678-9"
+ *                 activo: true
+ *       400:
+ *         $ref: '#/components/responses/BadRequestError'
  *   delete:
  *     tags: [Companies]
- *     summary: Eliminar empresa
+ *     summary: Desactivar empresa
+ *     description: Baja lógica (`activo` false), no borrado físico.
  *     parameters:
  *       - in: path
  *         name: id
@@ -129,7 +216,17 @@ router.post('/', validate(createCompanySchema), controller.create);
  *         schema: { type: integer, example: 1 }
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     responses:
- *       200: { description: Eliminado }
+ *       200:
+ *         description: Empresa desactivada
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ApiSuccessWithMessage'
+ *             example:
+ *               success: true
+ *               message: "Empresa desactivada exitosamente"
+ *       400:
+ *         $ref: '#/components/responses/BadRequestError'
  */
 router.get('/:id', controller.getById);
 router.put('/:id', validate(updateCompanySchema), controller.update);
@@ -140,7 +237,10 @@ router.delete('/:id', controller.delete);
  * /api/companies/toggle-module:
  *   post:
  *     tags: [Companies]
- *     summary: Activar/Desactivar módulo para empresa
+ *     summary: Activar o desactivar un módulo para una empresa
+ *     description: |
+ *       Si no existía relación `empresa_modulo`, se crea con un `token` generado.
+ *       Si ya existía, solo actualiza `activo`.
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -152,9 +252,27 @@ router.delete('/:id', controller.delete);
  *             properties:
  *               empresaId: { type: number, example: 1 }
  *               moduloId: { type: number, example: 3 }
- *               active: { type: boolean }
+ *               active: { type: boolean, example: true }
+ *           example:
+ *             empresaId: 1
+ *             moduloId: 3
+ *             active: true
  *     responses:
- *       200: { description: Estado del módulo actualizado }
+ *       200:
+ *         description: Registro empresa–módulo actualizado o creado
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Módulo activado exitosamente"
+ *               data:
+ *                 id: 79
+ *                 empresaId: 1
+ *                 moduloId: 3
+ *                 activo: true
+ *                 token: "token-1-3"
+ *       400:
+ *         $ref: '#/components/responses/BadRequestError'
  */
 router.post(
   '/toggle-module',
@@ -167,7 +285,10 @@ router.post(
  * /api/companies/toggle-submodule:
  *   post:
  *     tags: [Companies]
- *     summary: Activar/Desactivar submódulo para empresa
+ *     summary: Activar o desactivar un submódulo para una empresa
+ *     description: |
+ *       Requiere modelo `EmpresaSubmodulo` en base de datos. Si el despliegue no aplicó migraciones,
+ *       puede responder error indicando que la funcionalidad no está disponible.
  *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -179,9 +300,26 @@ router.post(
  *             properties:
  *               empresaId: { type: number, example: 1 }
  *               submoduloId: { type: number, example: 99 }
- *               active: { type: boolean }
+ *               active: { type: boolean, example: false }
+ *           example:
+ *             empresaId: 1
+ *             submoduloId: 99
+ *             active: false
  *     responses:
- *       200: { description: Estado del submódulo actualizado }
+ *       200:
+ *         description: Relación empresa–submódulo actualizada o creada
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Submódulo desactivado exitosamente"
+ *               data:
+ *                 id: 12
+ *                 empresaId: 1
+ *                 submoduloId: 99
+ *                 activo: false
+ *       400:
+ *         $ref: '#/components/responses/BadRequestError'
  */
 router.post(
   '/toggle-submodule',

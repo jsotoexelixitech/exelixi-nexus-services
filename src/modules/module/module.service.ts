@@ -62,12 +62,15 @@ export class ModuleService {
   /**
    * Crea un nuevo submódulo vinculado a un módulo.
    */
-  async createSubmodule(moduloId: number, nombre: string) {
+  async createSubmodule(moduloId: number, nombre: string, url?: string | null) {
+    const urlValue =
+      url !== undefined && url !== null && url !== '' ? url : undefined;
     return await prisma.submodulo.create({
       data: {
         nombre,
         moduloId,
         activo: true,
+        ...(urlValue !== undefined ? { url: urlValue } : {}),
       },
     });
   }
@@ -77,11 +80,18 @@ export class ModuleService {
    */
   async updateSubmodule(
     id: number,
-    data: { nombre?: string; activo?: boolean },
+    data: { nombre?: string; activo?: boolean; url?: string | null },
   ) {
+    const patch: { nombre?: string; activo?: boolean; url?: string | null } =
+      {};
+    if (data.nombre !== undefined) patch.nombre = data.nombre;
+    if (data.activo !== undefined) patch.activo = data.activo;
+    if (data.url !== undefined) {
+      patch.url = data.url === '' || data.url === null ? null : data.url;
+    }
     return await prisma.submodulo.update({
       where: { id },
-      data,
+      data: patch,
     });
   }
 

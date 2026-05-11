@@ -4,6 +4,33 @@ import { env } from './env';
 const options: swaggerJsdoc.Options = {
   definition: {
     openapi: '3.0.0',
+    tags: [
+      {
+        name: 'Auth',
+        description:
+          'Autenticación: login con email y contraseña, y perfil del usuario actual (`/me`). Requiere cabecera **x-api-key** en todas las rutas bajo `/api`.',
+      },
+      {
+        name: 'Users',
+        description:
+          'Gestión de usuarios de la empresa del token JWT. Listado paginado, alta, edición, cambio de estado y cambio de contraseña del propio usuario.',
+      },
+      {
+        name: 'Companies',
+        description:
+          'Empresas (tenant): listado, alta, detalle con módulos/submódulos y flags por empresa, y activación de módulos o submódulos.',
+      },
+      {
+        name: 'Roles',
+        description:
+          'Roles por empresa, matriz de permisos para el front y asignación granular (módulo y submódulo).',
+      },
+      {
+        name: 'Modules',
+        description:
+          'Catálogo global de módulos y submódulos (administración). Distinto del listado de módulos activos de la empresa en el menú.',
+      },
+    ],
     info: {
       title: 'Exelixi Nexus API',
       version: '1.1.0',
@@ -60,12 +87,13 @@ La mayoría de los endpoints requieren:
       },
       responses: {
         UnauthorizedError: {
-          description: 'Token no válido o expirado',
+          description: 'Token JWT ausente, inválido o expirado',
           content: {
             'application/json': {
               schema: {
                 $ref: '#/components/schemas/ErrorResponse',
               },
+              example: { success: false, message: 'No autenticado' },
             },
           },
         },
@@ -74,8 +102,26 @@ La mayoría de los endpoints requieren:
           content: {
             'application/json': {
               schema: {
-                $ref: '#/components/schemas/ErrorResponse',
+                oneOf: [
+                  { $ref: '#/components/schemas/ErrorResponse' },
+                  { $ref: '#/components/schemas/MessageError' },
+                ],
               },
+              example: { success: false, message: 'No tiene permiso' },
+            },
+          },
+        },
+        BadRequestError: {
+          description: 'Datos inválidos o regla de negocio no cumplida',
+          content: {
+            'application/json': {
+              schema: {
+                oneOf: [
+                  { $ref: '#/components/schemas/ErrorResponse' },
+                  { $ref: '#/components/schemas/MessageError' },
+                ],
+              },
+              example: { success: false, message: 'Solicitud inválida' },
             },
           },
         },
@@ -83,12 +129,48 @@ La mayoría de los endpoints requieren:
       schemas: {
         ErrorResponse: {
           type: 'object',
+          description: 'Error con bandera success (módulos, empresas, roles)',
           properties: {
             success: { type: 'boolean', example: false },
             message: {
               type: 'string',
-              example: 'Error detallado del servidor',
+              example: 'Descripción del error',
             },
+          },
+        },
+        MessageError: {
+          type: 'object',
+          description: 'Error simple (algunos endpoints de usuarios)',
+          properties: {
+            message: {
+              type: 'string',
+              example: 'Empresa no identificada',
+            },
+          },
+        },
+        ApiSuccessWithData: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: { description: 'Carga útil de la respuesta' },
+          },
+        },
+        ApiSuccessWithMessage: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            message: {
+              type: 'string',
+              example: 'Operación completada',
+            },
+          },
+        },
+        ApiSuccessWithMessageAndData: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            message: { type: 'string' },
+            data: { description: 'Datos adicionales' },
           },
         },
       },
@@ -112,7 +194,9 @@ La mayoría de los endpoints requieren:
 
 export const specs = swaggerJsdoc(options);
 
-// Log para verificar que se están encontrando los endpoints
-console.log(
-  `[Swagger] Documentación generada: ${Object.keys((specs as any).paths || {}).length} endpoints encontrados.`,
+const swaggerPathCount = Object.keys(
+  (specs as { paths?: Record<string, unknown> }).paths ?? {},
+).length;
+console.info(
+  `[Swagger] Documentación generada: ${swaggerPathCount} endpoints encontrados.`,
 );
