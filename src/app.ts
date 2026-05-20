@@ -19,6 +19,7 @@ import roleRoutes from './modules/role/role.routes';
 import authRoutes from './modules/auth/auth.routes';
 import userRoutes from './modules/user/user.routes';
 import moduleRoutes from './modules/module/module.routes';
+import accessRoutes from './modules/access/access.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -84,6 +85,10 @@ const limiter = rateLimit({
 app.use('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date(), env: env.NODE_ENV });
 });
+
+// --- Public API: verificación de acceso para submódulos externos ---
+// No requiere x-api-key. Protegido por firma JWT (TENANT_TOKEN_SECRET) + rate limit propio.
+app.use('/api/access', accessRoutes);
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);

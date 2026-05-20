@@ -1,6 +1,11 @@
 import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
+import {
+  generateTenantToken,
+  buildAccessUrl,
+} from '../../utils/tenant-token';
+
 type TxClient = Omit<
   typeof prisma,
   '$extends' | '$transaction' | '$disconnect' | '$connect' | '$on' | '$use'
@@ -11,6 +16,7 @@ type EmpresaSubmoduloRow = {
   empresaId: number;
   submoduloId: number;
   activo: boolean;
+  tenantToken: string | null;
   createdAt: Date | null;
 };
 
@@ -22,7 +28,12 @@ type EmpresaSubmoduloDelegate = {
     where: { empresaId: number; submoduloId: number };
   }): Promise<EmpresaSubmoduloRow | null>;
   create(args: {
-    data: { empresaId: number; submoduloId: number; activo: boolean };
+    data: {
+      empresaId: number;
+      submoduloId: number;
+      activo: boolean;
+      tenantToken: string;
+    };
   }): Promise<EmpresaSubmoduloRow>;
   update(args: {
     where: { id: number };
@@ -40,7 +51,9 @@ function getEmpresaSubmoduloDelegate(
 
 export class CompanyService {
   /**
-   * Crea una nueva empresa (Tenant).
+   * Crea una nueva empresa y genera tokens de acceso para TODOS los
+   * submódulos activos existentes. Los tokens se crean con activo:false —
+   * el admin los activa manualmente desde el panel.
    */
   async createCompany(nombre: string, rif?: string, tipo: string = 'cliente') {
     try {
@@ -55,8 +68,32 @@ export class CompanyService {
           },
         });
 
-        // No provisionamos módulos/submódulos automáticamente.
-        // El admin los activará explícitamente vía toggle-module / toggle-submodule.
+        // Generar registros EmpresaSubmodulo para todos los submódulos activos.
+        // activo:false por defecto — el admin los activa explícitamente.
+        const esCm = getEmpresaSubmoduloDelegate(tx);
+        if (esCm) {
+          const allSubmodulos = await tx.submodulo.findMany({
+            where: { activo: true },
+          });
+
+          await Promise.all(
+            allSubmodulos.map((sub) => {
+              const tenantToken = generateTenantToken(empresa.id, sub.id);
+              return esCm.create({
+                data: {
+                  empresaId: empresa.id,
+                  submoduloId: sub.id,
+                  activo: false,
+                  tenantToken,
+                },
+              });
+            }),
+          );
+
+          logger.info(
+            `Tokens de acceso generados para ${allSubmodulos.length} submódulos → empresa ${empresa.id}`,
+          );
+        }
 
         return empresa;
       });
@@ -69,7 +106,7 @@ export class CompanyService {
   }
 
   /**
-   * Obtiene una empresa por su ID.
+   * Obtiene una empresa por su ID incluyendo URLs de acceso por submódulo.
    */
   async getCompanyById(id: number) {
     const company = await prisma.empresa.findUnique({
@@ -80,8 +117,6 @@ export class CompanyService {
       throw new AppError('Empresa no encontrada.', 404);
     }
 
-    // Para el dashboard admin: retornar siempre el catálogo global de módulos,
-    // mezclado con la configuración específica de la empresa.
     const empresaSubmodulo = getEmpresaSubmoduloDelegate(prisma);
     const [catalogo, empresaModulos, empresaSubmodulos] = await Promise.all([
       prisma.modulo.findMany({
@@ -91,16 +126,14 @@ export class CompanyService {
         where: { empresaId: id },
       }),
       empresaSubmodulo
-        ? empresaSubmodulo.findMany({
-            where: { empresaId: id },
-          })
+        ? empresaSubmodulo.findMany({ where: { empresaId: id } })
         : Promise.resolve([]),
     ]);
 
     const byModuloId = new Map<number, (typeof empresaModulos)[number]>();
     for (const em of empresaModulos) byModuloId.set(em.moduloId, em);
 
-    const bySubmoduloId = new Map<number, (typeof empresaSubmodulos)[number]>();
+    const bySubmoduloId = new Map<number, EmpresaSubmoduloRow>();
     for (const esm of empresaSubmodulos) {
       bySubmoduloId.set(esm.submoduloId, esm);
     }
@@ -113,15 +146,23 @@ export class CompanyService {
               m.submodulos as Array<{
                 id: number;
                 nombre: string;
+                url: string | null;
                 activo: boolean;
                 moduloId: number;
                 [key: string]: unknown;
               }>
             ).map((sm) => {
               const esm = bySubmoduloId.get(sm.id);
+              const tenantToken = esm?.tenantToken ?? null;
+              const accessUrl =
+                tenantToken && sm.url
+                  ? buildAccessUrl(sm.url, tenantToken)
+                  : null;
               return {
                 ...sm,
                 activoEmpresa: esm?.activo ?? false,
+                tenantToken,
+                accessUrl,
               };
             })
           : m.submodulos;
@@ -147,9 +188,6 @@ export class CompanyService {
     };
   }
 
-  /**
-   * Actualiza los datos de una empresa.
-   */
   async updateCompany(
     id: number,
     data: { nombre?: string; rif?: string; tipo?: string; activo?: boolean },
@@ -168,9 +206,6 @@ export class CompanyService {
     }
   }
 
-  /**
-   * Eliminación lógica (desactivación) de una empresa.
-   */
   async deleteCompany(id: number) {
     try {
       logger.info(`Desactivando empresa ${id}`);
@@ -186,9 +221,6 @@ export class CompanyService {
     }
   }
 
-  /**
-   * Activa o desactiva un módulo para una empresa específica.
-   */
   async toggleModule(empresaId: number, moduloId: number, active: boolean) {
     try {
       logger.info(
@@ -223,7 +255,9 @@ export class CompanyService {
   }
 
   /**
-   * Activa o desactiva un submódulo para una empresa específica.
+   * Activa o desactiva un submódulo para una empresa.
+   * Si no existe el registro, lo crea con un token firmado permanente.
+   * El token no cambia al desactivar/reactivar — la URL siempre es la misma.
    */
   async toggleSubmodule(
     empresaId: number,
@@ -238,7 +272,7 @@ export class CompanyService {
       const empresaSubmodulo = getEmpresaSubmoduloDelegate(prisma);
       if (!empresaSubmodulo) {
         throw new AppError(
-          'La funcionalidad de submódulos por empresa no está disponible en este ambiente (falta aplicar migración/deploy).',
+          'La funcionalidad de submódulos por empresa no está disponible en este ambiente.',
           400,
         );
       }
@@ -248,17 +282,25 @@ export class CompanyService {
       });
 
       if (existing) {
+        // Solo actualiza el estado activo — el token no cambia nunca
         return await empresaSubmodulo.update({
           where: { id: existing.id },
           data: { activo: active },
         });
       }
 
+      // Primer toggle: crear con token firmado
+      const tenantToken = generateTenantToken(empresaId, submoduloId);
+      logger.info(
+        `Nuevo token de acceso generado para empresa=${empresaId} submodulo=${submoduloId}`,
+      );
+
       return await empresaSubmodulo.create({
         data: {
           empresaId,
           submoduloId,
           activo: active,
+          tenantToken,
         },
       });
     } catch (error: unknown) {
@@ -271,8 +313,6 @@ export class CompanyService {
 
   async getAllCompanies() {
     try {
-      // Mantener el retorno existente (con modulos reales) para listados,
-      // y dejar el merge completo para getCompanyById.
       return await prisma.empresa.findMany({
         include: {
           modulos: {
