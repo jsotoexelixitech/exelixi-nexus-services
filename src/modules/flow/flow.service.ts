@@ -93,7 +93,7 @@ async function getActiveSlots(empresaId: number, moduloGroupId: number): Promise
  */
 async function buildAccessUrl(empresaId: number, submoduloId: number, baseUrl: string): Promise<string> {
   const { generateTenantToken } = await import('../../utils/tenant-token');
-  const token = generateTenantToken({ empresaId, submoduloId });
+  const token = generateTenantToken(empresaId, submoduloId);
   return `${baseUrl}?nexus_token=${token}`;
 }
 
