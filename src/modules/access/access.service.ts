@@ -42,7 +42,26 @@ export class AccessService {
       return { active: false, reason: 'Servicio no disponible.' };
     }
 
-    // 4. Verificar que la empresa tenga este submódulo activo
+    // 4. Verificar que la empresa tenga el módulo padre activo
+    const moduloId = (
+      await prisma.submodulo.findUnique({
+        where: { id: submoduloId },
+        select: { moduloId: true },
+      })
+    )?.moduloId;
+
+    if (moduloId) {
+      const empresaModulo = await prisma.empresaModulo.findFirst({
+        where: { empresaId, moduloId },
+        select: { activo: true },
+      });
+      if (!empresaModulo || !empresaModulo.activo) {
+        logger.info(`verify: modulo ${moduloId} no activado para empresa ${empresaId}`);
+        return { active: false, reason: 'Servicio no activado para esta empresa.' };
+      }
+    }
+
+    // 5. Verificar que la empresa tenga este submódulo activo
     const empresaSubmodulo = await (
       prisma as unknown as {
         empresaSubmodulo: {

@@ -20,6 +20,7 @@ import authRoutes from './modules/auth/auth.routes';
 import userRoutes from './modules/user/user.routes';
 import moduleRoutes from './modules/module/module.routes';
 import accessRoutes from './modules/access/access.routes';
+import flowRoutes from './modules/flow/flow.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -89,6 +90,9 @@ app.use('/health', (req, res) => {
 // --- Public API: verificación de acceso para submódulos externos ---
 // No requiere x-api-key. Protegido por firma JWT (TENANT_TOKEN_SECRET) + rate limit propio.
 app.use('/api/access', accessRoutes);
+
+// --- Public API: bridge inter-módulo (session/save/done sin API key; start requiere API key) ---
+app.use('/api/flow', flowRoutes);
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);
