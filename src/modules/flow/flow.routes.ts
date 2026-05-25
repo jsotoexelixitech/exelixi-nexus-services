@@ -9,8 +9,9 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { startFlow, getSession, saveSession, advanceSession } from './flow.service';
+import { startFlow, startFlowFromToken, getSession, saveSession, advanceSession } from './flow.service';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
+import { verifyTenantToken } from '../../utils/tenant-token';
 
 const router = Router();
 
@@ -33,6 +34,42 @@ router.post('/start', apiKeyGuard, async (req: Request, res: Response) => {
 
   if ('error' in result) {
     res.status(400).json({ success: false, message: result.error });
+    return;
+  }
+
+  res.json({ success: true, data: result });
+});
+
+/**
+ * POST /api/flow/start-from-token
+ * Auto-arranque del flujo desde un nexus_token existente.
+ * Público — el frontend del primer módulo lo llama cuando recibe
+ * ?nexus_token pero sin ?sid.
+ *
+ * Body: { nexus_token: string }
+ * Respuesta: { sid, firstUrl, totalActive } o error 400/409
+ */
+router.post('/start-from-token', async (req: Request, res: Response) => {
+  const { nexus_token } = req.body as { nexus_token?: string };
+
+  if (!nexus_token) {
+    res.status(400).json({ success: false, message: 'Se requiere nexus_token.' });
+    return;
+  }
+
+  let payload: { empresaId: number; submoduloId: number };
+  try {
+    payload = verifyTenantToken(nexus_token) as { empresaId: number; submoduloId: number };
+  } catch {
+    res.status(401).json({ success: false, message: 'Token inválido o expirado.' });
+    return;
+  }
+
+  const result = await startFlowFromToken(payload.empresaId, payload.submoduloId);
+
+  if ('error' in result) {
+    // 409 = no es punto de entrada o flujo de 1 solo módulo; el módulo continúa standalone
+    res.status(409).json({ success: false, message: result.error });
     return;
   }
 
