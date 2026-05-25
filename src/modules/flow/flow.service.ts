@@ -99,6 +99,77 @@ async function buildAccessUrl(empresaId: number, submoduloId: number, baseUrl: s
 
 // ─── Operaciones de sesión ────────────────────────────────────────────────────
 
+/**
+ * Inicia el flujo automáticamente a partir de un nexus_token existente.
+ *
+ * Decodifica el token (sin re-verificar firma, ya fue verificada por nexusAuth),
+ * busca a qué grupo de módulos pertenece el submódulo, y arranca el flujo
+ * solo si ese submódulo es el PRIMERO activo del grupo (el punto de entrada).
+ *
+ * Si el submódulo no es el primero → devuelve error (no es punto de entrada).
+ * Si la empresa solo tiene ese submódulo activo → también devuelve error
+ * (flujo de 1 solo módulo no tiene sentido encadenar).
+ */
+export async function startFlowFromToken(
+  empresaId: number,
+  submoduloId: number,
+): Promise<{ error: string } | { sid: string; firstUrl: string; totalActive: number; alreadyChained: boolean }> {
+  // Buscar el grupo al que pertenece este submódulo
+  const submodulo = await prisma.submodulo.findUnique({
+    where: { id: submoduloId },
+    select: { id: true, moduloId: true },
+  });
+
+  if (!submodulo) {
+    return { error: 'Submódulo no encontrado.' };
+  }
+
+  const moduloGroupId = submodulo.moduloId;
+  const rawSlots = await getActiveSlots(empresaId, moduloGroupId);
+
+  // Si solo hay 1 submódulo activo, no hay cadena que armar
+  if (rawSlots.length <= 1) {
+    return { error: 'Solo hay un submódulo activo en este grupo; no se requiere encadenamiento.' };
+  }
+
+  // Solo el primer slot puede iniciar el flujo automático
+  if (rawSlots[0].submoduloId !== submoduloId) {
+    return { error: `Este submódulo no es el punto de entrada del flujo. El primero es ${rawSlots[0].nombre}.` };
+  }
+
+  // Resolver tokens en todos los slots
+  const slots: SubmoduloSlot[] = await Promise.all(
+    rawSlots.map(async (s) => ({
+      ...s,
+      accessUrl: await buildAccessUrl(empresaId, s.submoduloId, s.accessUrl),
+    })),
+  );
+
+  const sid = newSid();
+  const session: FlowSession = {
+    sid,
+    empresaId,
+    moduloGroupId,
+    slots,
+    current: slots[0].order,
+    history: [],
+    data: {},
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  SESSIONS.set(sid, session);
+
+  logger.info(`[flow] auto-start sid=${sid} empresa=${empresaId} desde token submodulo=${submoduloId} slots=${slots.length}`);
+
+  const first = slots[0];
+  return {
+    sid,
+    firstUrl: `${first.accessUrl}&sid=${sid}`,
+    totalActive: slots.length,
+    alreadyChained: true,
+  };
+}
+
 export async function startFlow(empresaId: number, moduloGroupId: number) {
   const rawSlots = await getActiveSlots(empresaId, moduloGroupId);
 
