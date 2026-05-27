@@ -134,10 +134,17 @@ export class AuthService {
       // Extraemos empresa y rol con sus relaciones tipadas
       const { empresa, role } = user;
 
-      // 1. Obtener detalles granulares de la nueva tabla
-      const granularDetails = (await prisma.rolePermissionDetail.findMany({
-        where: { roleId: user.roleId },
-      })) as RolePermissionDetail[];
+      // 1. Detalles granulares (tabla nueva; en BD legacy puede no existir aún)
+      let granularDetails: RolePermissionDetail[] = [];
+      try {
+        granularDetails = (await prisma.rolePermissionDetail.findMany({
+          where: { roleId: user.roleId },
+        })) as RolePermissionDetail[];
+      } catch (granularErr: unknown) {
+        logger.warn(
+          `rol_permiso_detalle omitido en perfil: ${getErrorMessage(granularErr)}`,
+        );
+      }
 
       // 2. Mapear módulos y submódulos con sus flags CRUD
       const modulesAccess = empresa.modulos.map((em) => {

@@ -66,7 +66,7 @@ model EmpresaModulo {
   id        Int          @id @default(autoincrement()) @map("emmo_id")
   empresaId Int          @map("emmo_empresa_id")
   moduloId  Int          @map("emmo_modulo_id")
-  token     String       @map("emmo_token") @db.VarChar
+  token     String?      @map("emmo_token") @db.VarChar
   activo    Boolean      @map("emmo_estatus")
   createdAt DateTime?    @map("emmo_created_at") @db.Timestamp(6)
   empresa   Empresa      @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_empresa_modulo_empresa")
