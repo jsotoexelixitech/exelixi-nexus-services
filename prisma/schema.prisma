@@ -8,18 +8,25 @@ datasource db {
 }
 
 model Empresa {
-  id        Int             @id @default(autoincrement()) @map("empresa_id")
-  rif       String          @map("empresa_rif") @db.VarChar
-  nombre    String          @map("empresa_nombre") @db.VarChar
-  activo    Boolean         @map("empresa_estatus")
-  tipo      String          @map("empresa_tipo") @db.VarChar
-  createdAt DateTime?       @map("created_at") @db.Timestamp(6)
-  modulos   EmpresaModulo[]
-  submodulos EmpresaSubmodulo[]
-  recibos   Recibo[]
-  roles     Role[]
-  siniestro Siniestro[]
-  usuarios  Usuario[]
+  id           Int                @id @default(autoincrement()) @map("empresa_id")
+  rif          String             @map("empresa_rif") @db.VarChar
+  nombre       String             @map("empresa_nombre") @db.VarChar
+  activo       Boolean            @map("empresa_estatus")
+  tipo         String             @map("empresa_tipo") @db.VarChar
+  createdAt    DateTime?          @map("created_at") @db.Timestamp(6)
+  modulos      EmpresaModulo[]
+  submodulos   EmpresaSubmodulo[]
+  recibos      Recibo[]
+  roles        Role[]
+  siniestro    Siniestro[]
+  usuarios     Usuario[]
+  productos    Producto[]
+  planes       Plan[]
+  cotizaciones Cotizacion[]
+  ocrs         Ocr[]
+  pagos        Pago[]
+  pagoMetodos  PagoMetodo[]
+  emisiones    Emision[]
 
   @@map("empresa")
 }
@@ -36,12 +43,12 @@ model Modulo {
 }
 
 model Submodulo {
-  id       Int     @id @default(autoincrement()) @map("submodulo_id")
-  nombre   String  @map("submodulo_nombre") @db.VarChar
-  url      String? @map("submodulo_url") @db.VarChar(2048)
-  activo   Boolean @map("submodulo_estatus")
-  moduloId Int     @map("submodulo_modulo_id")
-  modulo   Modulo  @relation(fields: [moduloId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_submodulo_modulo")
+  id       Int                @id @default(autoincrement()) @map("submodulo_id")
+  nombre   String             @map("submodulo_nombre") @db.VarChar
+  url      String?            @map("submodulo_url") @db.VarChar(2048)
+  activo   Boolean            @map("submodulo_estatus")
+  moduloId Int                @map("submodulo_modulo_id")
+  modulo   Modulo             @relation(fields: [moduloId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_submodulo_modulo")
   empresas EmpresaSubmodulo[]
 
   @@map("submodulo")
@@ -102,15 +109,15 @@ model Permission {
 
 // Nueva tabla para granularidad (CRUD) que intentaremos crear
 model RolePermissionDetail {
-  id              Int      @id @default(autoincrement())
-  roleId          Int
-  moduloId        Int      // ID del módulo global
-  submoduloId     Int?     // Opcional para submódulos
-  canCreate       Boolean  @default(false)
-  canRead         Boolean  @default(true)
-  canUpdate       Boolean  @default(false)
-  canDelete       Boolean  @default(false)
-  
+  id          Int     @id @default(autoincrement())
+  roleId      Int
+  moduloId    Int // ID del módulo global
+  submoduloId Int? // Opcional para submódulos
+  canCreate   Boolean @default(false)
+  canRead     Boolean @default(true)
+  canUpdate   Boolean @default(false)
+  canDelete   Boolean @default(false)
+
   @@map("rol_permiso_detalle")
 }
 
@@ -152,8 +159,8 @@ model Usuario {
   activo    Boolean  @default(true) @map("usuario_estatus")
   createdAt DateTime @default(now()) @map("created_at")
 
-  empresa   Empresa @relation(fields: [empresaId], references: [id])
-  role      Role    @relation(fields: [roleId], references: [id])
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+  role    Role    @relation(fields: [roleId], references: [id])
 
   @@map("usuario")
 }
@@ -162,4 +169,115 @@ model migrations {
   id        Int    @id(map: "PK_8c82d7f526340ab734260ea46be") @default(autoincrement())
   timestamp BigInt
   name      String @db.VarChar
+}
+
+// ─── Módulos del flujo de suscripción (OCR · Formulario · Planes · Pago · Emisión) ───
+// Multi-tenant: todo cuelga de `empresa`. Los FK a `cotizacion` son opcionales
+// para que cada módulo pueda operar por separado o encadenado.
+
+model Producto {
+  id           Int          @id @default(autoincrement()) @map("producto_id")
+  nombre       String       @map("producto_nombre") @db.VarChar
+  empresaId    Int          @map("producto_empresa_id")
+  createdAt    DateTime     @default(now()) @map("producto_created_at") @db.Timestamp(6)
+  empresa      Empresa      @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_producto_empresa")
+  planes       Plan[]
+  cotizaciones Cotizacion[]
+
+  @@map("producto")
+}
+
+model Plan {
+  id           Int          @id @default(autoincrement()) @map("plan_id")
+  nombre       String       @map("plan_nombre") @db.VarChar
+  productoId   Int          @map("plan_producto_id")
+  empresaId    Int          @map("plan_empresa_id")
+  createdAt    DateTime     @default(now()) @map("plan_created_at") @db.Timestamp(6)
+  producto     Producto     @relation(fields: [productoId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_plan_producto")
+  empresa      Empresa      @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_plan_empresa")
+  cotizaciones Cotizacion[]
+
+  @@map("plan")
+}
+
+model Cotizacion {
+  id         Int       @id @default(autoincrement()) @map("cotizacion_id")
+  empresaId  Int       @map("cotizacion_empresa_id")
+  productoId Int?      @map("cotizacion_producto_id")
+  planId     Int?      @map("cotizacion_plan_id")
+  estado     String    @default("borrador") @map("cotizacion_estado") @db.VarChar
+  jsonData   Json      @map("cotizacion_json_data") @db.JsonB
+  createdAt  DateTime  @default(now()) @map("cotizacion_created_at") @db.Timestamp(6)
+  updatedAt  DateTime? @updatedAt @map("cotizacion_updated_at") @db.Timestamp(6)
+  empresa    Empresa   @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_cotizacion_empresa")
+  producto   Producto? @relation(fields: [productoId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_cotizacion_producto")
+  plan       Plan?     @relation(fields: [planId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_cotizacion_plan")
+  ocrs       Ocr[]
+  pagos      Pago[]
+  emisiones  Emision[]
+
+  @@map("cotizacion")
+}
+
+model Ocr {
+  id            Int         @id @default(autoincrement()) @map("ocr_id")
+  empresaId     Int         @map("ocr_empresa_id")
+  cotizacionId  Int?        @map("ocr_cotizacion_id")
+  tipoDocumento String      @map("ocr_tipo_documento") @db.VarChar
+  rutaDocumento String      @map("ocr_ruta_documento") @db.VarChar
+  jsonData      Json?       @map("ocr_json_data") @db.JsonB
+  createdAt     DateTime    @default(now()) @map("ocr_created_at") @db.Timestamp(6)
+  empresa       Empresa     @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_ocr_empresa")
+  cotizacion    Cotizacion? @relation(fields: [cotizacionId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_ocr_cotizacion")
+
+  @@map("ocr")
+}
+
+model PagoMetodo {
+  id        Int      @id @default(autoincrement()) @map("pago_metodo_id")
+  nombre    String   @map("pago_metodo_nombre") @db.VarChar
+  empresaId Int?     @map("pago_metodo_empresa_id")
+  empresa   Empresa? @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_pago_metodo_empresa")
+  pagos     Pago[]
+
+  @@map("pago_metodo")
+}
+
+model Pago {
+  id              Int         @id @default(autoincrement()) @map("pago_id")
+  empresaId       Int         @map("pago_empresa_id")
+  cotizacionId    Int?        @map("pago_cotizacion_id")
+  metodoId        Int         @map("pago_metodo_id")
+  referenciaBanco String      @map("pago_referencia_banco") @db.VarChar
+  monto           Decimal     @map("pago_monto") @db.Decimal(18, 2)
+  moneda          String      @default("VES") @map("pago_moneda") @db.Char(3)
+  estado          String      @default("pendiente") @map("pago_estado") @db.VarChar
+  bancoOrigen     String?     @map("pago_banco_origen") @db.VarChar
+  telefonoOrigen  String?     @map("pago_telefono_origen") @db.VarChar
+  fechaPago       DateTime    @map("pago_fecha_pago") @db.Timestamp(6)
+  respuestaJson   Json?       @map("pago_respuesta_json") @db.JsonB
+  createdAt       DateTime    @default(now()) @map("pago_created_at") @db.Timestamp(6)
+  empresa         Empresa     @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_pago_empresa")
+  cotizacion      Cotizacion? @relation(fields: [cotizacionId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_pago_cotizacion")
+  metodo          PagoMetodo  @relation(fields: [metodoId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_pago_metodo")
+  emisiones       Emision[]
+
+  @@unique([empresaId, referenciaBanco], map: "uq_pago_empresa_referencia")
+  @@map("pago")
+}
+
+model Emision {
+  id           Int        @id @default(autoincrement()) @map("emision_id")
+  empresaId    Int        @map("emision_empresa_id")
+  cotizacionId Int        @map("emision_cotizacion_id")
+  pagoId       Int?       @map("emision_pago_id")
+  polizaNumero String     @map("emision_poliza_numero") @db.VarChar
+  estado       String     @default("emitida") @map("emision_estado") @db.VarChar
+  jsonData     Json?      @map("emision_json_data") @db.JsonB
+  createdAt    DateTime   @default(now()) @map("emision_created_at") @db.Timestamp(6)
+  empresa      Empresa    @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_emision_empresa")
+  cotizacion   Cotizacion @relation(fields: [cotizacionId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_emision_cotizacion")
+  pago         Pago?      @relation(fields: [pagoId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_emision_pago")
+
+  @@map("emision")
 }
