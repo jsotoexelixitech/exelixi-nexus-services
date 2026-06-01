@@ -12,19 +12,19 @@ import logger from '../../utils/logger';
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
 interface SubmoduloSlot {
-  order: number;           // posición en el flujo (1, 2, 3, 4 …)
+  order: number; // posición en el flujo (1, 2, 3, 4 …)
   submoduloId: number;
   nombre: string;
-  accessUrl: string;       // URL con nexus_token ya incluido
+  accessUrl: string; // URL con nexus_token ya incluido
 }
 
 interface FlowSession {
   sid: string;
   empresaId: number;
-  moduloGroupId: number;   // módulo padre (ej. 7 = RCV Modular)
-  slots: SubmoduloSlot[];  // submódulos activos ordenados
-  current: number;         // order del módulo en curso
-  history: number[];       // orders ya completados
+  moduloGroupId: number; // módulo padre (ej. 7 = RCV Modular)
+  slots: SubmoduloSlot[]; // submódulos activos ordenados
+  current: number; // order del módulo en curso
+  history: number[]; // orders ya completados
   data: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
@@ -33,15 +33,18 @@ interface FlowSession {
 // ─── Almacén en memoria ───────────────────────────────────────────────────────
 
 const SESSIONS = new Map<string, FlowSession>();
-const TTL_MS   = 2 * 60 * 60 * 1000; // 2 horas
+const TTL_MS = 2 * 60 * 60 * 1000; // 2 horas
 
 // Limpieza periódica
-setInterval(() => {
-  const cutoff = Date.now() - TTL_MS;
-  for (const [sid, s] of SESSIONS) {
-    if (s.updatedAt < cutoff) SESSIONS.delete(sid);
-  }
-}, 5 * 60 * 1000);
+setInterval(
+  () => {
+    const cutoff = Date.now() - TTL_MS;
+    for (const [sid, s] of SESSIONS) {
+      if (s.updatedAt < cutoff) SESSIONS.delete(sid);
+    }
+  },
+  5 * 60 * 1000,
+);
 
 function newSid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -53,7 +56,10 @@ function newSid(): string {
  * Obtiene los submódulos ACTIVOS para una empresa en un grupo (moduloId),
  * ordenados por submoduloId ascendente (que coincide con el orden de creación).
  */
-async function getActiveSlots(empresaId: number, moduloGroupId: number): Promise<SubmoduloSlot[]> {
+async function getActiveSlots(
+  empresaId: number,
+  moduloGroupId: number,
+): Promise<SubmoduloSlot[]> {
   const empresaSubmodulos = await prisma.empresaSubmodulo.findMany({
     where: {
       empresaId,
@@ -72,7 +78,7 @@ async function getActiveSlots(empresaId: number, moduloGroupId: number): Promise
   });
 
   return empresaSubmodulos
-    .filter(es => es.submodulo?.url)       // solo los que tienen URL configurada
+    .filter((es) => es.submodulo?.url) // solo los que tienen URL configurada
     .map((es, idx) => {
       const sub = es.submodulo!;
       // Construye accessUrl con el token ya firmado (re-usa la lógica del access module)
@@ -83,7 +89,7 @@ async function getActiveSlots(empresaId: number, moduloGroupId: number): Promise
         order: idx + 1,
         submoduloId: sub.id,
         nombre: sub.nombre,
-        accessUrl: baseUrl,   // placeholder; se resuelve con buildAccessUrl
+        accessUrl: baseUrl, // placeholder; se resuelve con buildAccessUrl
       };
     });
 }
@@ -91,10 +97,16 @@ async function getActiveSlots(empresaId: number, moduloGroupId: number): Promise
 /**
  * Genera la URL de acceso con el nexus_token firmado.
  */
-async function buildAccessUrl(empresaId: number, submoduloId: number, baseUrl: string): Promise<string> {
+async function buildAccessUrl(
+  empresaId: number,
+  submoduloId: number,
+  baseUrl: string,
+): Promise<string> {
   const { generateTenantToken } = await import('../../utils/tenant-token');
   const token = generateTenantToken(empresaId, submoduloId);
-  return `${baseUrl}?nexus_token=${token}`;
+  // Query-aware: respeta un ?product=... ya presente en la URL del submódulo.
+  const sep = baseUrl.includes('?') ? '&' : '?';
+  return `${baseUrl}${sep}nexus_token=${token}`;
 }
 
 // ─── Operaciones de sesión ────────────────────────────────────────────────────
@@ -113,7 +125,15 @@ async function buildAccessUrl(empresaId: number, submoduloId: number, baseUrl: s
 export async function startFlowFromToken(
   empresaId: number,
   submoduloId: number,
-): Promise<{ error: string } | { sid: string; firstUrl: string; totalActive: number; alreadyChained: boolean }> {
+): Promise<
+  | { error: string }
+  | {
+      sid: string;
+      firstUrl: string;
+      totalActive: number;
+      alreadyChained: boolean;
+    }
+> {
   // Buscar el grupo al que pertenece este submódulo
   const submodulo = await prisma.submodulo.findUnique({
     where: { id: submoduloId },
@@ -129,12 +149,17 @@ export async function startFlowFromToken(
 
   // Si solo hay 1 submódulo activo, no hay cadena que armar
   if (rawSlots.length <= 1) {
-    return { error: 'Solo hay un submódulo activo en este grupo; no se requiere encadenamiento.' };
+    return {
+      error:
+        'Solo hay un submódulo activo en este grupo; no se requiere encadenamiento.',
+    };
   }
 
   // Solo el primer slot puede iniciar el flujo automático
   if (rawSlots[0].submoduloId !== submoduloId) {
-    return { error: `Este submódulo no es el punto de entrada del flujo. El primero es ${rawSlots[0].nombre}.` };
+    return {
+      error: `Este submódulo no es el punto de entrada del flujo. El primero es ${rawSlots[0].nombre}.`,
+    };
   }
 
   // Resolver tokens en todos los slots
@@ -159,7 +184,9 @@ export async function startFlowFromToken(
   };
   SESSIONS.set(sid, session);
 
-  logger.info(`[flow] auto-start sid=${sid} empresa=${empresaId} desde token submodulo=${submoduloId} slots=${slots.length}`);
+  logger.info(
+    `[flow] auto-start sid=${sid} empresa=${empresaId} desde token submodulo=${submoduloId} slots=${slots.length}`,
+  );
 
   const first = slots[0];
   return {
@@ -199,13 +226,19 @@ export async function startFlow(empresaId: number, moduloGroupId: number) {
   };
   SESSIONS.set(sid, session);
 
-  logger.info(`[flow] start sid=${sid} empresa=${empresaId} modulo=${moduloGroupId} slots=${slots.length}`);
+  logger.info(
+    `[flow] start sid=${sid} empresa=${empresaId} modulo=${moduloGroupId} slots=${slots.length}`,
+  );
 
   const first = slots[0];
   return {
     sid,
     firstUrl: `${first.accessUrl}&sid=${sid}`,
-    firstModule: { order: first.order, submoduloId: first.submoduloId, nombre: first.nombre },
+    firstModule: {
+      order: first.order,
+      submoduloId: first.submoduloId,
+      nombre: first.nombre,
+    },
     totalActive: slots.length,
   };
 }
@@ -214,12 +247,14 @@ export function getSession(sid: string) {
   const s = SESSIONS.get(sid);
   if (!s) return null;
   s.updatedAt = Date.now();
-  const cur = s.slots.find(sl => sl.order === s.current) ?? null;
+  const cur = s.slots.find((sl) => sl.order === s.current) ?? null;
   return {
     sid: s.sid,
     empresaId: s.empresaId,
     current: s.current,
-    currentModule: cur ? { order: cur.order, submoduloId: cur.submoduloId, nombre: cur.nombre } : null,
+    currentModule: cur
+      ? { order: cur.order, submoduloId: cur.submoduloId, nombre: cur.nombre }
+      : null,
     history: s.history,
     data: s.data,
     totalActive: s.slots.length,
@@ -234,7 +269,11 @@ export function saveSession(sid: string, patch: Record<string, unknown>) {
   return { sid, savedKeys: Object.keys(patch) };
 }
 
-export function advanceSession(sid: string, fromOrder: number, patch: Record<string, unknown>) {
+export function advanceSession(
+  sid: string,
+  fromOrder: number,
+  patch: Record<string, unknown>,
+) {
   const s = SESSIONS.get(sid);
   if (!s) return null;
 
@@ -247,16 +286,22 @@ export function advanceSession(sid: string, fromOrder: number, patch: Record<str
   if (!s.history.includes(fromOrder)) s.history.push(fromOrder);
 
   // Encontrar el siguiente slot activo después del orden actual
-  const nextSlot = s.slots.find(sl => sl.order > fromOrder) ?? null;
+  const nextSlot = s.slots.find((sl) => sl.order > fromOrder) ?? null;
 
   if (nextSlot) {
     s.current = nextSlot.order;
     s.updatedAt = Date.now();
-    logger.info(`[flow] advance sid=${sid} from=${fromOrder} → next=${nextSlot.order} (${nextSlot.nombre})`);
+    logger.info(
+      `[flow] advance sid=${sid} from=${fromOrder} → next=${nextSlot.order} (${nextSlot.nombre})`,
+    );
     return {
       finished: false,
       nextUrl: `${nextSlot.accessUrl}&sid=${sid}`,
-      nextModule: { order: nextSlot.order, submoduloId: nextSlot.submoduloId, nombre: nextSlot.nombre },
+      nextModule: {
+        order: nextSlot.order,
+        submoduloId: nextSlot.submoduloId,
+        nombre: nextSlot.nombre,
+      },
     };
   }
 
