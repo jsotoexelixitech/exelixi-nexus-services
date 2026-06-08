@@ -46,11 +46,17 @@ export function verifyTenantToken(token: string): TenantTokenPayload {
 /**
  * Construye la URL de acceso completa para un submódulo:
  *   {baseUrl}?nexus_token={tenantToken}
+ *
+ * Query-aware: si la URL configurada ya trae query string (ej.
+ * `https://ocr.app/?product=funerario`), agrega el token con `&` en vez de `?`
+ * para no romper la URL. Así el admin puede definir el identificador de producto
+ * (rcv | funerario) directamente en la URL del submódulo.
  */
 export function buildAccessUrl(
   submoduloUrl: string,
   tenantToken: string,
 ): string {
   const base = submoduloUrl.replace(/\/$/, '');
-  return `${base}?nexus_token=${tenantToken}`;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}nexus_token=${tenantToken}`;
 }

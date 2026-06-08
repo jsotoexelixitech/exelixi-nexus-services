@@ -105,4 +105,32 @@ export class ModuleController {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
+
+  async getFlowStatus(req: AuthRequest, res: Response) {
+    try {
+      const queryEmpresa = req.query.empresaId;
+      const empresaId = queryEmpresa
+        ? Number(queryEmpresa)
+        : req.user?.empresaId;
+      if (!empresaId || Number.isNaN(empresaId)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'empresaId requerido.' });
+      }
+
+      const data = await moduleService.getFlowStatus(empresaId);
+      res.json({ success: true, data });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async getNetworkInfo(_req: AuthRequest, res: Response) {
+    try {
+      const data = moduleService.getNetworkInfo();
+      res.json({ success: true, data });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
 }
