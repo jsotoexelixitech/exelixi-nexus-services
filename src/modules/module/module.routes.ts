@@ -70,6 +70,8 @@ const controller = new ModuleController();
  *         $ref: '#/components/responses/BadRequestError'
  */
 router.get('/', authenticate, controller.getActive);
+router.get('/flow-status', authenticate, controller.getFlowStatus);
+router.get('/network-info', authenticate, controller.getNetworkInfo);
 
 /**
  * @openapi

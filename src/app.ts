@@ -95,6 +95,10 @@ app.use('/api/access', accessRoutes);
 // --- Public API: bridge inter-módulo (session/save/done sin API key; start requiere API key) ---
 app.use('/api/flow', flowRoutes);
 
+// GET /api/config/:empresaId/:producto/:modulo es público para que los módulos lo lean sin API key.
+// PUT/POST tienen apiKeyGuard dentro del router.
+app.use('/api/config', productConfigRoutes);
+
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);
 app.use('/api', (_req, res, next) => {
@@ -116,9 +120,6 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/modules', moduleRoutes);
-// GET /api/config/:empresaId/:producto/:modulo es público para que los módulos lo lean sin API key.
-// PUT/POST tienen apiKeyGuard dentro del router.
-app.use('/api/config', productConfigRoutes);
 
 // --- 404 Handler ---
 app.use((req, res) => {
