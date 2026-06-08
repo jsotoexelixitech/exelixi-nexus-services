@@ -46,8 +46,16 @@ setInterval(
   5 * 60 * 1000,
 );
 
-function newSid(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+// ─── Helpers Prisma ───────────────────────────────────────────────────────────
+
+async function createCotizacion(empresaId: number): Promise<string> {
+  const cot = await prisma.cotizacion.create({
+    data: {
+      empresaId,
+      jsonData: {},
+    },
+  });
+  return String(cot.id);
 }
 
 // ─── Helpers Prisma ───────────────────────────────────────────────────────────
@@ -170,7 +178,7 @@ export async function startFlowFromToken(
     })),
   );
 
-  const sid = newSid();
+  const sid = await createCotizacion(empresaId);
   const session: FlowSession = {
     sid,
     empresaId,
@@ -212,7 +220,7 @@ export async function startFlow(empresaId: number, moduloGroupId: number) {
     })),
   );
 
-  const sid = newSid();
+  const sid = await createCotizacion(empresaId);
   const session: FlowSession = {
     sid,
     empresaId,
@@ -266,6 +274,12 @@ export function saveSession(sid: string, patch: Record<string, unknown>) {
   if (!s) return null;
   s.data = { ...s.data, ...patch };
   s.updatedAt = Date.now();
+
+  // Sincronizar en background (no esperamos)
+  syncSessionToDb(sid).catch((e) =>
+    logger.error(`Error sync DB: ${e.message}`),
+  );
+
   return { sid, savedKeys: Object.keys(patch) };
 }
 
@@ -308,5 +322,107 @@ export function advanceSession(
   // Flujo completado
   s.updatedAt = Date.now();
   logger.info(`[flow] finished sid=${sid} after order=${fromOrder}`);
+  syncSessionToDb(sid).catch((e) =>
+    logger.error(`Error sync DB: ${e.message}`),
+  );
   return { finished: true, sid };
+}
+
+// ─── Sincronización a Base de Datos (Persistencia Real) ───────────────────────
+
+async function syncSessionToDb(sid: string) {
+  const s = SESSIONS.get(sid);
+  if (!s) return;
+
+  const cotizacionId = Number(sid);
+  if (isNaN(cotizacionId)) return; // Prevención si alguien inyectó string inválido
+
+  const empresaId = s.empresaId;
+  const data = s.data as Record<string, any>;
+
+  let estado = 'borrador';
+  if (data.policy?.number) estado = 'emitida';
+  else if (data.paymentVerified) estado = 'pagada';
+  else if (data.ocrDone) estado = 'documentos_validados';
+
+  // 1. Guardar estado del flujo en Cotizacion
+  await prisma.cotizacion.update({
+    where: { id: cotizacionId },
+    data: { jsonData: data, estado },
+  });
+
+  // 2. Extraer y guardar documentos (OCR)
+  if (data.documents) {
+    for (const [docType, docData] of Object.entries(data.documents) as [
+      string,
+      any,
+    ][]) {
+      if (docData?.file?.url) {
+        const existing = await prisma.ocr.findFirst({
+          where: { cotizacionId, tipoDocumento: docType },
+        });
+        if (!existing) {
+          await prisma.ocr.create({
+            data: {
+              empresaId,
+              cotizacionId,
+              tipoDocumento: docType,
+              rutaDocumento: docData.file.url,
+              jsonData: docData.extractedData || {},
+            },
+          });
+        }
+      }
+    }
+  }
+
+  // 3. Extraer y guardar Pagos
+  if (data.paymentVerified && data.paymentMethod) {
+    const existPago = await prisma.pago.findFirst({
+      where: { cotizacionId },
+    });
+    if (!existPago) {
+      let metodo = await prisma.pagoMetodo.findFirst();
+      if (!metodo) {
+        metodo = await prisma.pagoMetodo.create({ data: { nombre: 'SyPago' } });
+      }
+      const monto = Number(data.quote?.mprima || data.otpAmount || 0);
+      const ref =
+        data.paymentReference ||
+        data.otpResult?.transaction_id ||
+        `REF-${cotizacionId}`;
+
+      await prisma.pago.create({
+        data: {
+          empresaId,
+          cotizacionId,
+          metodoId: metodo.id,
+          referenciaBanco: String(ref),
+          monto,
+          moneda: 'VES',
+          estado: 'aprobado',
+        },
+      });
+    }
+  }
+
+  // 4. Extraer y guardar Emisión
+  if (data.policy?.number) {
+    const existEmision = await prisma.emision.findFirst({
+      where: { cotizacionId },
+    });
+    if (!existEmision) {
+      const pago = await prisma.pago.findFirst({ where: { cotizacionId } });
+      await prisma.emision.create({
+        data: {
+          empresaId,
+          cotizacionId,
+          pagoId: pago?.id,
+          polizaNumero: data.policy.number,
+          estado: 'emitida',
+          jsonData: data.policy,
+        },
+      });
+    }
+  }
 }
