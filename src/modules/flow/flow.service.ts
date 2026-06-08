@@ -401,6 +401,7 @@ async function syncSessionToDb(sid: string) {
           monto,
           moneda: 'VES',
           estado: 'aprobado',
+          fechaPago: new Date(),
         },
       });
     }
