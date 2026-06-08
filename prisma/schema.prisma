@@ -27,6 +27,7 @@ model Empresa {
   pagos        Pago[]
   pagoMetodos  PagoMetodo[]
   emisiones    Emision[]
+  productConfigs ProductConfig[]
 
   @@map("empresa")
 }
@@ -280,4 +281,23 @@ model Emision {
   pago         Pago?      @relation(fields: [pagoId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_emision_pago")
 
   @@map("emision")
+}
+
+// ─── Configuración paramétrica de flujo por producto ────────────────────────
+// Permite activar/desactivar campos y documentos sin tocar código.
+// Si no existe config para una empresa/producto/modulo, los módulos
+// usan su configuración hardcoded por defecto (fallback seguro).
+
+model ProductConfig {
+  id         Int      @id @default(autoincrement()) @map("product_config_id")
+  empresaId  Int      @map("product_config_empresa_id")
+  producto   String   @map("product_config_producto") @db.VarChar  // "rcv" | "funerario"
+  modulo     String   @map("product_config_modulo") @db.VarChar    // "ocr" | "formulario" | "pagos"
+  configJson Json     @map("product_config_json") @db.JsonB
+  createdAt  DateTime @default(now()) @map("product_config_created_at") @db.Timestamp(6)
+  updatedAt  DateTime @updatedAt @map("product_config_updated_at") @db.Timestamp(6)
+  empresa    Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade, map: "fk_product_config_empresa")
+
+  @@unique([empresaId, producto, modulo], map: "uq_product_config")
+  @@map("product_config")
 }
