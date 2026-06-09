@@ -18,7 +18,7 @@ import { env } from '../../config/env';
 const router = Router();
 
 const VALID_PRODUCTOS: Producto[] = ['rcv', 'funerario'];
-const VALID_MODULOS: Modulo[] = ['ocr', 'formulario', 'pagos'];
+const VALID_MODULOS: Modulo[] = ['ocr', 'formulario', 'pagos', 'emision'];
 
 function validateParams(
   res: Response,
@@ -35,7 +35,7 @@ function validateParams(
   if (!VALID_MODULOS.includes(modulo as Modulo)) {
     res.status(400).json({
       success: false,
-      message: `Módulo inválido: ${modulo}. Válidos: ocr, formulario, pagos`,
+      message: `Módulo inválido: ${modulo}. Válidos: ocr, formulario, pagos, emision`,
     });
     return false;
   }

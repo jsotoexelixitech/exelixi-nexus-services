@@ -7,7 +7,7 @@
  */
 
 export type Producto = 'rcv' | 'funerario';
-export type Modulo = 'ocr' | 'formulario' | 'pagos';
+export type Modulo = 'ocr' | 'formulario' | 'pagos' | 'emision';
 
 // ─── OCR Defaults ─────────────────────────────────────────────────────────────
 
@@ -122,6 +122,26 @@ const PAGOS_DEFAULT_FUNERARIO = {
   },
 };
 
+// ─── Emisión Defaults ───────────────────────────────────────────────────────────
+
+const EMISION_DEFAULT_RCV = {
+  permitirEstimado: true,
+  inspeccionObligatoria: false,
+  apiMap: [
+    { internalKey: 'plan_code', externalKey: 'plan', transform: 'none' },
+    { internalKey: 'frecuencia', externalKey: 'frecuencia', transform: 'none' },
+  ]
+};
+
+const EMISION_DEFAULT_FUNERARIO = {
+  diasCarencia: 30,
+  edadMaxima: 70,
+  apiMap: [
+    { internalKey: 'plan_code', externalKey: 'plan', transform: 'none' },
+    { internalKey: 'frecuencia', externalKey: 'frecuencia', transform: 'none' },
+  ]
+};
+
 // ─── Mapa de defaults ─────────────────────────────────────────────────────────
 
 export const DEFAULT_CONFIGS: Record<Producto, Record<Modulo, object>> = {
@@ -129,10 +149,12 @@ export const DEFAULT_CONFIGS: Record<Producto, Record<Modulo, object>> = {
     ocr: OCR_DEFAULT_RCV,
     formulario: FORMULARIO_DEFAULT_RCV,
     pagos: PAGOS_DEFAULT_RCV,
+    emision: EMISION_DEFAULT_RCV,
   },
   funerario: {
     ocr: OCR_DEFAULT_FUNERARIO,
     formulario: FORMULARIO_DEFAULT_FUNERARIO,
     pagos: PAGOS_DEFAULT_FUNERARIO,
+    emision: EMISION_DEFAULT_FUNERARIO,
   },
 };
