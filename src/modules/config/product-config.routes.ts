@@ -9,9 +9,11 @@
  */
 
 import { Router, Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import { getConfig, saveConfig, resetConfig } from './product-config.service';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import type { Producto, Modulo } from './product-config.defaults';
+import { env } from '../../config/env';
 
 const router = Router();
 
@@ -110,6 +112,27 @@ router.post(
       message: 'Configuración reseteada a valores por defecto.',
       data: defaults,
     });
+  },
+);
+
+/**
+ * GET /api/config/token/:empresaId/:producto/:modulo
+ * Protegido con API key del admin.
+ * Genera un JWT de 1h para acceder al parametrizador de ese módulo/empresa.
+ */
+router.get(
+  '/token/:empresaId/:producto/:modulo',
+  apiKeyGuard,
+  (req: Request, res: Response) => {
+    const { empresaId, producto, modulo } = req.params;
+    if (!validateParams(res, producto, modulo)) return;
+
+    const token = jwt.sign(
+      { empresaId: Number(empresaId), producto, modulo, scope: 'config-panel' },
+      env.JWT_SECRET,
+      { expiresIn: '1h' },
+    );
+    res.json({ success: true, token, expiresIn: 3600 });
   },
 );
 
