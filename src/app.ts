@@ -22,6 +22,7 @@ import moduleRoutes from './modules/module/module.routes';
 import accessRoutes from './modules/access/access.routes';
 import flowRoutes from './modules/flow/flow.routes';
 import productConfigRoutes from './modules/config/product-config.routes';
+import emisionRoutes from './modules/emision/emision.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -120,6 +121,7 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/modules', moduleRoutes);
+app.use('/api/emisiones', emisionRoutes);
 
 // --- 404 Handler ---
 app.use((req, res) => {
