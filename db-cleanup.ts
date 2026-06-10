@@ -43,6 +43,17 @@ async function main() {
         `🗑️ Eliminando módulo: "${mod.nombre}" y sus dependencias...`,
       );
 
+      // Obtener los IDs de los sub-módulos para este módulo
+      const submodulos = await prisma.submodulo.findMany({
+        where: { moduloId: mod.id },
+      });
+      const submoduloIds = submodulos.map((sm) => sm.id);
+
+      // Eliminar registros asociados en empresa_submodulo
+      await prisma.empresaSubmodulo.deleteMany({
+        where: { submoduloId: { in: submoduloIds } },
+      });
+
       // Eliminar submódulos
       await prisma.submodulo.deleteMany({ where: { moduloId: mod.id } });
 
