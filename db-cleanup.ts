@@ -1,4 +1,11 @@
 import { PrismaClient } from '@prisma/client';
+import * as dotenv from 'dotenv';
+dotenv.config();
+
+console.log(
+  'DATABASE_URL configurado:',
+  process.env.DATABASE_URL?.replace(/:([^:@]+)@/, ':****@'),
+);
 
 const prisma = new PrismaClient();
 
