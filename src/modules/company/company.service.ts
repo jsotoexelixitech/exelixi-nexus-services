@@ -190,7 +190,7 @@ export class CompanyService {
 
   async updateCompany(
     id: number,
-    data: { nombre?: string; rif?: string; tipo?: string; activo?: boolean },
+    data: { nombre?: string; rif?: string; tipo?: string; activo?: boolean; feeTransaccion?: number },
   ) {
     try {
       logger.info(`Actualizando empresa ${id}`);

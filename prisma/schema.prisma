@@ -28,6 +28,7 @@ model Empresa {
   pagoMetodos  PagoMetodo[]
   emisiones    Emision[]
   productConfigs ProductConfig[]
+  feeTransaccion Decimal?         @default(0) @map("empresa_fee_transaccion") @db.Decimal(10, 2)
 
   @@map("empresa")
 }

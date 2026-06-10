@@ -84,7 +84,7 @@ export class EmisionService {
       where,
       orderBy: { createdAt: 'desc' },
       include: {
-        empresa: { select: { id: true, nombre: true, rif: true } },
+        empresa: { select: { id: true, nombre: true, rif: true, feeTransaccion: true } },
       },
     });
 
@@ -95,6 +95,7 @@ export class EmisionService {
         empresaId: number;
         empresaNombre: string;
         empresaRif: string;
+        feeTransaccion: number;
         total: number;
         porProducto: Record<string, number>;
         polizas: typeof emisiones;
@@ -108,6 +109,7 @@ export class EmisionService {
           empresaId: eId,
           empresaNombre: e.empresa.nombre,
           empresaRif: e.empresa.rif,
+          feeTransaccion: e.empresa.feeTransaccion ? Number(e.empresa.feeTransaccion) : 0,
           total: 0,
           porProducto: {},
           polizas: [],
