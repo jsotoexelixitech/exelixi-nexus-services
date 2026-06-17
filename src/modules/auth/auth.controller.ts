@@ -75,13 +75,22 @@ export class AuthController {
         { expiresIn: '15m' },
       );
 
-      // URL del frontend a donde vamos a redirigir (obtenido de env, o fallback)
-      const frontendUrl =
-        process.env.SSO_FRONTEND_URL || 'http://192.168.8.120:5182';
+      // Manejo de redirección según el target solicitado
+      const target = req.body.target || 'formulario';
+      let frontendUrl =
+        process.env.SSO_FRONTEND_URL || 'http://192.168.8.120:5182'; // Por defecto Formulario
 
-      // Construir url
+      if (target === 'ocr') {
+        frontendUrl = 'http://192.168.8.120:5181';
+      } else if (target === 'emision') {
+        frontendUrl = 'http://192.168.8.120:5183';
+      } else if (target === 'pagos') {
+        frontendUrl = 'http://192.168.8.120:5184';
+      }
+
+      // Construir url (usando nexus_token en lugar de session_token)
       const redirectUrl = new URL(frontendUrl);
-      redirectUrl.searchParams.set('session_token', token);
+      redirectUrl.searchParams.set('nexus_token', token);
 
       res.json({ success: true, redirect_url: redirectUrl.toString() });
     } catch (error: unknown) {
