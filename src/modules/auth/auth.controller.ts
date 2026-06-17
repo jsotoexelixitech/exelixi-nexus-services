@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import * as jwt from 'jsonwebtoken';
 import { AuthService } from './auth.service';
 import { AuthRequest } from '../../middlewares/auth.middleware';
 import { AppError } from '../../utils/app-error';
@@ -27,6 +28,39 @@ export class AuthController {
         success: true,
         data: profile,
       });
+    } catch (error: unknown) {
+      res.status(500).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async ssoDelegate(req: Request, res: Response) {
+    try {
+      const { tenant_id, user, metadata } = req.body;
+
+      // Basic validation
+      if (!tenant_id || !user || !metadata) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Faltan campos obligatorios en el payload SSO (tenant_id, user, metadata).',
+        });
+      }
+
+      // Generar JWT de corta duración (ej. 15 minutos) con el payload completo
+      const jwtSecret = process.env.JWT_SECRET || 'fallback-secret';
+      const token = jwt.sign({ tenant_id, user, metadata }, jwtSecret, {
+        expiresIn: '15m',
+      });
+
+      // URL del frontend a donde vamos a redirigir (obtenido de env, o fallback)
+      const frontendUrl =
+        process.env.SSO_FRONTEND_URL || 'http://192.168.8.120:5182';
+
+      // Construir url
+      const redirectUrl = new URL(frontendUrl);
+      redirectUrl.searchParams.set('session_token', token);
+
+      res.json({ success: true, redirect_url: redirectUrl.toString() });
     } catch (error: unknown) {
       res.status(500).json({ success: false, message: getErrorMessage(error) });
     }

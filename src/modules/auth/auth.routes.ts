@@ -90,6 +90,41 @@ router.post('/login', validate(loginSchema), controller.login);
 
 /**
  * @openapi
+ * /api/auth/sso-delegate:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Delegar sesión (SSO)
+ *     description: |
+ *       Genera un JWT temporal con metadata dinámica de un tercero para delegar el flujo.
+ *     security:
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [tenant_id, user, metadata]
+ *             properties:
+ *               tenant_id: { type: string }
+ *               user: { type: object }
+ *               metadata: { type: object }
+ *     responses:
+ *       200:
+ *         description: JWT generado
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 redirect_url: { type: string }
+ */
+router.post('/sso-delegate', controller.ssoDelegate);
+
+/**
+ * @openapi
  * /api/auth/me:
  *   get:
  *     tags:
