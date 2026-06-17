@@ -97,6 +97,7 @@ router.post('/login', validate(loginSchema), controller.login);
  *     summary: Delegar sesión (SSO)
  *     description: |
  *       Genera un JWT temporal con metadata dinámica de un tercero para delegar el flujo.
+ *       Valida el x-api-key contra la empresa y busca al usuario por correo.
  *     security:
  *       - apiKeyAuth: []
  *     requestBody:
@@ -105,10 +106,9 @@ router.post('/login', validate(loginSchema), controller.login);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [tenant_id, user, metadata]
+ *             required: [correo, metadata]
  *             properties:
- *               tenant_id: { type: string }
- *               user: { type: object }
+ *               correo: { type: string, format: email }
  *               metadata: { type: object }
  *     responses:
  *       200:

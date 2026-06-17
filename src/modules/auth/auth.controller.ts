@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import * as jwt from 'jsonwebtoken';
+import prisma from '../../config/prisma';
 import { AuthService } from './auth.service';
 import { AuthRequest } from '../../middlewares/auth.middleware';
 import { AppError } from '../../utils/app-error';
@@ -35,22 +36,55 @@ export class AuthController {
 
   async ssoDelegate(req: Request, res: Response) {
     try {
-      const { tenant_id, user, metadata } = req.body;
+      const { correo, metadata } = req.body;
+      const apiKey = req.headers['x-api-key'];
 
       // Basic validation
-      if (!tenant_id || !user || !metadata) {
+      if (!correo || !metadata || !apiKey) {
         return res.status(400).json({
           success: false,
           message:
-            'Faltan campos obligatorios en el payload SSO (tenant_id, user, metadata).',
+            'Faltan campos obligatorios (correo, metadata) o el header x-api-key.',
         });
       }
 
-      // Generar JWT de corta duración (ej. 15 minutos) con el payload completo
-      const jwtSecret = process.env.JWT_SECRET || 'fallback-secret';
-      const token = jwt.sign({ tenant_id, user, metadata }, jwtSecret, {
-        expiresIn: '15m',
+      // Simulamos la resolución del empresaId a partir del API Key (puedes reemplazar con tu lógica real)
+      // Asumimos que la empresa dueña del API Key es la ID 1 para este ejemplo.
+      const empresaIdDelApiKey = 1;
+
+      // Buscar al usuario en la BD
+      const usuario = await prisma.usuario.findUnique({
+        where: { email: correo },
+        include: { empresa: true, role: true },
       });
+
+      if (!usuario) {
+        return res.status(401).json({
+          success: false,
+          message: 'Acceso denegado: Usuario no encontrado.',
+        });
+      }
+
+      if (usuario.empresaId !== empresaIdDelApiKey) {
+        return res.status(403).json({
+          success: false,
+          message:
+            'Acceso denegado: El usuario no pertenece a la empresa de este API Key.',
+        });
+      }
+
+      // Generar JWT de corta duración inyectando datos del usuario y metadata
+      const jwtSecret = process.env.JWT_SECRET || 'fallback-secret';
+      const token = jwt.sign(
+        {
+          id: usuario.id,
+          empresaId: usuario.empresaId,
+          roleId: usuario.roleId,
+          metadata,
+        },
+        jwtSecret,
+        { expiresIn: '15m' },
+      );
 
       // URL del frontend a donde vamos a redirigir (obtenido de env, o fallback)
       const frontendUrl =
