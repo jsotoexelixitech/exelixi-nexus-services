@@ -29,6 +29,7 @@ model Empresa {
   emisiones    Emision[]
   productConfigs ProductConfig[]
   feeTransaccion Decimal?         @default(0) @map("empresa_fee_transaccion") @db.Decimal(10, 2)
+  apiKey         String?          @unique @map("empresa_api_key") @db.VarChar(128)
 
   @@map("empresa")
 }

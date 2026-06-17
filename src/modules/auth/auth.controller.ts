@@ -48,9 +48,17 @@ export class AuthController {
         });
       }
 
-      // Simulamos la resolución del empresaId a partir del API Key (puedes reemplazar con tu lógica real)
-      // Asumimos que la empresa dueña del API Key es la ID 1 para este ejemplo.
-      const empresaIdDelApiKey = 1;
+      // Buscar la empresa por apiKey
+      const empresa = await prisma.empresa.findUnique({
+        where: { apiKey: apiKey as string },
+      });
+
+      if (!empresa) {
+        return res.status(401).json({
+          success: false,
+          message: 'Acceso denegado: API Key inválida o no registrada.',
+        });
+      }
 
       // Buscar al usuario en la BD
       const usuario = await prisma.usuario.findUnique({
@@ -65,11 +73,11 @@ export class AuthController {
         });
       }
 
-      if (usuario.empresaId !== empresaIdDelApiKey) {
+      if (usuario.empresaId !== empresa.id) {
         return res.status(403).json({
           success: false,
           message:
-            'Acceso denegado: El usuario no pertenece a la empresa de este API Key.',
+            'Acceso denegado: El usuario no pertenece a la empresa de esta API Key.',
         });
       }
 

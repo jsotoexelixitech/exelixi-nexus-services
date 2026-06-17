@@ -12,7 +12,12 @@ export const apiKeyGuard = (
   next: NextFunction,
 ) => {
   // Excluir rutas públicas de la validación de API Key
-  const publicPaths = ['/health', '/api-docs', '/api/api-docs'];
+  const publicPaths = [
+    '/health',
+    '/api-docs',
+    '/api/api-docs',
+    '/api/auth/sso-delegate',
+  ];
   if (publicPaths.some((path) => req.originalUrl.startsWith(path))) {
     return next();
   }
