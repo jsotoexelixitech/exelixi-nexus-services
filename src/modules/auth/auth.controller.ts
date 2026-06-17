@@ -36,15 +36,15 @@ export class AuthController {
 
   async ssoDelegate(req: Request, res: Response) {
     try {
-      const { correo, metadata } = req.body;
+      const { metadata } = req.body;
       const apiKey = req.headers['x-api-key'];
 
       // Basic validation
-      if (!correo || !metadata || !apiKey) {
+      if (!metadata || !apiKey) {
         return res.status(400).json({
           success: false,
           message:
-            'Faltan campos obligatorios (correo, metadata) o el header x-api-key.',
+            'Faltan campos obligatorios (metadata) o el header x-api-key.',
         });
       }
 
@@ -60,34 +60,15 @@ export class AuthController {
         });
       }
 
-      // Buscar al usuario en la BD
-      const usuario = await prisma.usuario.findUnique({
-        where: { email: correo },
-        include: { empresa: true, role: true },
-      });
-
-      if (!usuario) {
-        return res.status(401).json({
-          success: false,
-          message: 'Acceso denegado: Usuario no encontrado.',
-        });
-      }
-
-      if (usuario.empresaId !== empresa.id) {
-        return res.status(403).json({
-          success: false,
-          message:
-            'Acceso denegado: El usuario no pertenece a la empresa de esta API Key.',
-        });
-      }
-
-      // Generar JWT de corta duración inyectando datos del usuario y metadata
+      // Generar JWT de corta duración inyectando datos de la empresa y metadata
+      // Al ser integración server-to-server usamos datos ficticios para el usuario
       const jwtSecret = process.env.JWT_SECRET || 'fallback-secret';
       const token = jwt.sign(
         {
-          id: usuario.id,
-          empresaId: usuario.empresaId,
-          roleId: usuario.roleId,
+          id: -1, // ID Ficticio de sistema
+          email: `integracion@empresa-${empresa.id}.local`,
+          empresaId: empresa.id,
+          roleId: 3, // Asignamos rol genérico (ej: Operador/Integrador)
           metadata,
         },
         jwtSecret,
