@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import * as jwt from 'jsonwebtoken';
 import prisma from '../../config/prisma';
 import { AuthService } from './auth.service';
 import { AuthRequest } from '../../middlewares/auth.middleware';
@@ -36,10 +35,10 @@ export class AuthController {
 
   async ssoDelegate(req: Request, res: Response) {
     try {
-      const { metadata } = req.body;
+      const { metadata, target = 'ocr' } = req.body;
       const apiKey = req.headers['x-api-key'];
 
-      // Basic validation
+      // Validación básica
       if (!metadata || !apiKey) {
         return res.status(400).json({
           success: false,
@@ -48,9 +47,10 @@ export class AuthController {
         });
       }
 
-      // Buscar la empresa por apiKey
+      // 1. Buscar la empresa por apiKey
       const empresa = await prisma.empresa.findUnique({
         where: { apiKey: apiKey as string },
+        select: { id: true, nombre: true, activo: true },
       });
 
       if (!empresa) {
@@ -60,39 +60,83 @@ export class AuthController {
         });
       }
 
-      // Generar JWT de corta duración inyectando datos de la empresa y metadata
-      // Al ser integración server-to-server usamos datos ficticios para el usuario
-      const jwtSecret = process.env.JWT_SECRET || 'fallback-secret';
-      const token = jwt.sign(
-        {
-          id: -1, // ID Ficticio de sistema
-          email: `integracion@empresa-${empresa.id}.local`,
-          empresaId: empresa.id,
-          roleId: 3, // Asignamos rol genérico (ej: Operador/Integrador)
-          metadata,
-        },
-        jwtSecret,
-        { expiresIn: '15m' },
-      );
-
-      // Manejo de redirección según el target solicitado
-      const target = req.body.target || 'formulario';
-      let frontendUrl =
-        process.env.SSO_FRONTEND_URL || 'http://192.168.8.120:5182'; // Por defecto Formulario
-
-      if (target === 'ocr') {
-        frontendUrl = 'http://192.168.8.120:5181';
-      } else if (target === 'emision') {
-        frontendUrl = 'http://192.168.8.120:5183';
-      } else if (target === 'pagos') {
-        frontendUrl = 'http://192.168.8.120:5184';
+      if (!empresa.activo) {
+        return res.status(403).json({
+          success: false,
+          message: 'Acceso denegado: La empresa está inactiva.',
+        });
       }
 
-      // Construir url (usando nexus_token en lugar de session_token)
-      const redirectUrl = new URL(frontendUrl);
-      redirectUrl.searchParams.set('nexus_token', token);
+      // 2. Mapear el target al puerto del submódulo
+      const targetPortMap: Record<string, string> = {
+        ocr: '5181',
+        formulario: '5182',
+        emision: '5183',
+        pagos: '5184',
+      };
 
-      res.json({ success: true, redirect_url: redirectUrl.toString() });
+      const puerto = targetPortMap[target] ?? targetPortMap['ocr'];
+
+      // 3. Buscar el submódulo cuya URL contenga el puerto correspondiente
+      const submodulo = await prisma.submodulo.findFirst({
+        where: {
+          url: { contains: puerto },
+          activo: true,
+        },
+        select: { id: true, url: true, nombre: true },
+      });
+
+      if (!submodulo) {
+        return res.status(404).json({
+          success: false,
+          message: `No se encontró un submódulo activo para el target "${target}".`,
+        });
+      }
+
+      // 4. Buscar el tenantToken ya generado para empresa + submódulo
+      const empresaSubmodulo = await (
+        prisma as unknown as {
+          empresaSubmodulo: {
+            findFirst: (args: {
+              where: { empresaId: number; submoduloId: number };
+              select: { tenantToken: boolean; activo: boolean };
+            }) => Promise<{
+              tenantToken: string | null;
+              activo: boolean;
+            } | null>;
+          };
+        }
+      ).empresaSubmodulo.findFirst({
+        where: { empresaId: empresa.id, submoduloId: submodulo.id },
+        select: { tenantToken: true, activo: true },
+      });
+
+      if (!empresaSubmodulo || !empresaSubmodulo.activo) {
+        return res.status(403).json({
+          success: false,
+          message: `El servicio "${target}" no está activado para esta empresa.`,
+        });
+      }
+
+      if (!empresaSubmodulo.tenantToken) {
+        return res.status(500).json({
+          success: false,
+          message:
+            'El token de acceso no ha sido generado. Contacte al administrador.',
+        });
+      }
+
+      // 5. Construir la URL de redirección con el tenantToken real
+      const baseUrl = submodulo.url!.replace(/\/$/, '');
+      const sep = baseUrl.includes('?') ? '&' : '?';
+      const redirectUrl = `${baseUrl}${sep}nexus_token=${empresaSubmodulo.tenantToken}`;
+
+      return res.json({
+        success: true,
+        redirect_url: redirectUrl,
+        empresa: empresa.nombre,
+        modulo: submodulo.nombre,
+      });
     } catch (error: unknown) {
       res.status(500).json({ success: false, message: getErrorMessage(error) });
     }
