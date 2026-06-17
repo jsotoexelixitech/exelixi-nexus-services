@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import { CompanyService } from './company.service';
 import { getErrorMessage } from '../../utils/error-handler';
 import { AppError } from '../../utils/app-error';
@@ -107,6 +108,33 @@ export class CompanyController {
         success: true,
         message: `Submódulo ${active ? 'activado' : 'desactivado'} exitosamente`,
         data: result,
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async generateApiKey(req: Request, res: Response) {
+    try {
+      const empresaId = Number(req.params.id);
+      if (isNaN(empresaId)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'ID de empresa inválido' });
+      }
+
+      // Generar llave de 64 caracteres (32 bytes hex)
+      const newApiKey = crypto.randomBytes(32).toString('hex');
+
+      const company = await companyService.updateCompany(empresaId, {
+        apiKey: newApiKey,
+      } as any);
+
+      res.json({
+        success: true,
+        message: 'API Key generada exitosamente',
+        apiKey: newApiKey,
+        data: company,
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });

@@ -327,4 +327,32 @@ router.post(
   controller.toggleSubmodule,
 );
 
+/**
+ * @openapi
+ * /api/companies/{id}/generate-api-key:
+ *   post:
+ *     tags: [Companies]
+ *     summary: Regenerar o crear API Key para una empresa
+ *     description: Solo accesible por administradores. Devuelve una llave segura de 64 caracteres hex.
+ *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, example: 1 }
+ *     responses:
+ *       200:
+ *         description: API Key generada
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "API Key generada exitosamente"
+ *               apiKey: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+ *               data: { id: 1, apiKey: "..." }
+ *       400:
+ *         $ref: '#/components/responses/BadRequestError'
+ */
+router.post('/:id/generate-api-key', controller.generateApiKey);
+
 export default router;
