@@ -1,6 +1,7 @@
 import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
+import { corsOriginValidator } from './config/cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import compression from 'compression';
@@ -63,7 +64,7 @@ app.use(
 );
 app.use(
   cors({
-    origin: env.ALLOWED_ORIGINS?.split(',') || '*',
+    origin: corsOriginValidator,
     credentials: true,
   }),
 );
