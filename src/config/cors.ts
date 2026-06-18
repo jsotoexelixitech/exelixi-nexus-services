@@ -32,6 +32,7 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
   'http://localhost:5177',
   'http://localhost:3000',
   'http://localhost:4000',
+  'http://localhost:4200', // Angular default port
 
   // --- Clientes externos / canales de integración ---
   'http://192.168.10.213', // La Mundial — red local del cliente

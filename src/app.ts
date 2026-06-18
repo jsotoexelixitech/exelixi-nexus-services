@@ -66,6 +66,7 @@ app.use(
   cors({
     origin: corsOriginValidator,
     credentials: true,
+    optionsSuccessStatus: 200, // Compatibilidad para navegadores legacy y algunos clientes HTTP (ej. Angular)
   }),
 );
 app.use(compression());
