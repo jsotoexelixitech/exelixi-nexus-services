@@ -37,6 +37,7 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
   'http://192.168.10.213', // La Mundial — red local del cliente
   'http://192.168.10.213:3000', // La Mundial — posible puerto de frontend
   'http://192.168.10.213:8080', // La Mundial — posible puerto alternativo
+  'http://192.168.10.213:4200', // La Mundial — posible puerto alternativo
 ];
 
 /**
