@@ -35,6 +35,11 @@ export class AuthController {
 
   async ssoDelegate(req: Request, res: Response) {
     try {
+      console.log('=== PETICIÓN RECIBIDA DESDE ANGULAR ===');
+      console.log('Headers (API Key):', req.headers['x-api-key']);
+      console.log('Cuerpo (Payload):', JSON.stringify(req.body, null, 2));
+      console.log('=======================================');
+
       const { metadata, target = 'ocr' } = req.body;
       const apiKey = req.headers['x-api-key'];
 
