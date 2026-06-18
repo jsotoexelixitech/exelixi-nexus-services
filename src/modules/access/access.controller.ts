@@ -57,4 +57,38 @@ export class AccessController {
 
     return res.json({ success: true, ...result });
   }
+
+  /**
+   * POST /api/access/token
+   * Endpoint OAuth 2.0 (Client Credentials) para clientes de terceros.
+   * Recibe el API Key y retorna un Access Token de 1 hora.
+   */
+  async exchange(req: Request, res: Response) {
+    // Acepta el API Key por el body { api_key: "..." } o por el header Authorization: Bearer
+    const apiKey =
+      req.body.api_key ||
+      (req.headers.authorization &&
+        req.headers.authorization.replace(/^Bearer\s+/i, '').trim());
+
+    if (!apiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_request',
+        error_description: 'El parámetro api_key es requerido.',
+      });
+    }
+
+    try {
+      const result = await service.exchangeToken(apiKey);
+      return res.json(result);
+    } catch (error: unknown) {
+      const err = error as { statusCode?: number; message?: string };
+      const statusCode = err.statusCode || 401;
+      return res.status(statusCode).json({
+        success: false,
+        error: statusCode === 401 ? 'invalid_client' : 'access_denied',
+        error_description: err.message || 'Error desconocido',
+      });
+    }
+  }
 }

@@ -1,5 +1,9 @@
 import prisma from '../../config/prisma';
-import { verifyTenantToken, buildAccessUrl } from '../../utils/tenant-token';
+import {
+  verifyTenantToken,
+  buildAccessUrl,
+  generateAccessToken,
+} from '../../utils/tenant-token';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
 
@@ -113,6 +117,73 @@ export class AccessService {
         url: submodulo.url,
         accessUrl: submodulo.url ? buildAccessUrl(submodulo.url, token) : null,
       },
+    };
+  }
+
+  /**
+   * POST /api/auth/token
+   * Intercambia un API Key permanente (tenantToken original) por un Access Token temporal (1h).
+   * Implementa el protocolo OAuth 2.0 (Client Credentials Grant).
+   */
+  async exchangeToken(apiKey: string) {
+    // 1. Validar la firma del API Key (que es un tenantToken permanente válido)
+    let payload;
+    try {
+      payload = verifyTenantToken(apiKey);
+    } catch {
+      throw new AppError('API Key inválido o manipulado.', 401);
+    }
+
+    const { empresaId, submoduloId } = payload;
+
+    // 2. Verificar que la empresa y el submódulo estén activos en BD
+    const esm = await (
+      prisma as unknown as {
+        empresaSubmodulo: {
+          findFirst: (args: {
+            where: { empresaId: number; submoduloId: number };
+            select: {
+              id: boolean;
+              activo: boolean;
+              empresa: { select: { activo: boolean } };
+            };
+          }) => Promise<{
+            id: number;
+            activo: boolean;
+            empresa: { activo: boolean };
+          } | null>;
+        };
+      }
+    ).empresaSubmodulo.findFirst({
+      where: { empresaId, submoduloId },
+      select: {
+        id: true,
+        activo: true,
+        empresa: { select: { activo: true } },
+      },
+    });
+
+    if (!esm) {
+      throw new AppError('Registro de acceso no encontrado.', 403);
+    }
+    if (!esm.empresa.activo) {
+      throw new AppError('Empresa inactiva. Contacte a su administrador.', 403);
+    }
+    if (!esm.activo) {
+      throw new AppError('Módulo inactivo para esta empresa.', 403);
+    }
+
+    // 3. Generar el nuevo Access Token temporal usando la misma combinación
+    const accessToken = generateAccessToken(empresaId, submoduloId);
+
+    logger.info(
+      `exchangeToken: emitido access_token para empresa=${empresaId} sub=${submoduloId}`,
+    );
+
+    return {
+      access_token: accessToken,
+      token_type: 'Bearer',
+      expires_in: 3600, // 1 hora en segundos
     };
   }
 

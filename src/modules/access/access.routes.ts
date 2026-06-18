@@ -100,4 +100,48 @@ router.post('/heartbeat', accessLimiter, (req, res) =>
   controller.heartbeat(req, res),
 );
 
+/**
+ * @swagger
+ * /api/access/token:
+ *   post:
+ *     summary: Intercambiar API Key por Access Token temporal (OAuth 2.0)
+ *     tags: [Access]
+ *     description: >
+ *       Endpoint para integraciones de terceros. Recibe el API Key permanente
+ *       y retorna un JWT de corta duración (1 hora) que se utiliza para consumir
+ *       las APIs de los módulos.
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               api_key:
+ *                 type: string
+ *                 description: API Key permanente otorgado en el panel administrativo.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Token generado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 access_token: { type: string }
+ *                 token_type:   { type: string, example: "Bearer" }
+ *                 expires_in:   { type: integer, example: 3600 }
+ *       400:
+ *         description: Parámetros inválidos
+ *       401:
+ *         description: API Key inválido (invalid_client)
+ *       403:
+ *         description: Empresa o módulo inactivo (access_denied)
+ */
+router.post('/token', accessLimiter, (req, res) =>
+  controller.exchange(req, res),
+);
+
 export default router;

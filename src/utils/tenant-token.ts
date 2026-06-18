@@ -27,6 +27,22 @@ export function generateTenantToken(
 }
 
 /**
+ * Genera un JWT de corta duración (Access Token) para el protocolo OAuth.
+ * Este token se usa para las llamadas a los módulos y expira en 1 hora.
+ */
+export function generateAccessToken(
+  empresaId: number,
+  submoduloId: number,
+): string {
+  const payload: TenantTokenPayload = {
+    type: 'tenant_access',
+    empresaId,
+    submoduloId,
+  };
+  return jwt.sign(payload, env.TENANT_TOKEN_SECRET, { expiresIn: '1h' });
+}
+
+/**
  * Verifica la firma del tenant token y retorna el payload.
  * Lanza un error si la firma es inválida o el tipo no coincide.
  */
