@@ -43,8 +43,14 @@ Esta API proporciona una base sólida para aplicaciones multi-tenant con un sist
 - 👥 **Gestión de Usuarios**: Control total sobre perfiles y estados.
 - 🛠️ **Módulos**: Configuración flexible de funcionalidades por empresa.
 
-### Seguridad
-La mayoría de los endpoints requieren:
+### Integración para Terceros (OAuth 2.0)
+Los sistemas externos que deseen integrarse con los módulos de Exelixi deben utilizar el flujo **Client Credentials Grant**.
+1. Solicite su **API Key** (Token Permanente) al administrador de Exelixi.
+2. Intercambie su API Key por un **Access Token** de corta duración llamando a \`POST /api/access/token\`.
+3. Utilice el **Access Token** en la cabecera \`Authorization: Bearer <token>\` de todas sus peticiones hacia los módulos (OCR, Formulario, Emisión, Pagos).
+
+### Seguridad General
+La mayoría de los endpoints administrativos requieren:
 1. **x-api-key**: Validada para acceso a la infraestructura.
 2. **Bearer Token**: Token JWT obtenido en el login para identificar al usuario.
 
