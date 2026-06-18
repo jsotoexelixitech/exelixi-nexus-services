@@ -58,12 +58,13 @@ model Submodulo {
 }
 
 model EmpresaSubmodulo {
-  id          Int       @id @default(autoincrement()) @map("emsm_id")
-  empresaId   Int       @map("emsm_empresa_id")
-  submoduloId Int       @map("emsm_submodulo_id")
-  activo      Boolean   @map("emsm_estatus")
-  tenantToken String?   @map("emsm_tenant_token") @db.Text
-  createdAt   DateTime? @map("emsm_created_at") @db.Timestamp(6)
+  id             Int       @id @default(autoincrement()) @map("emsm_id")
+  empresaId      Int       @map("emsm_empresa_id")
+  submoduloId    Int       @map("emsm_submodulo_id")
+  activo         Boolean   @map("emsm_estatus")
+  tenantToken    String?   @map("emsm_tenant_token") @db.Text
+  tokenExpiresAt DateTime? @map("emsm_token_expires_at") @db.Timestamp(6)
+  createdAt      DateTime? @map("emsm_created_at") @db.Timestamp(6)
 
   empresa   Empresa   @relation(fields: [empresaId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_empresa_submodulo_empresa")
   submodulo Submodulo @relation(fields: [submoduloId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_empresa_submodulo_submodulo")

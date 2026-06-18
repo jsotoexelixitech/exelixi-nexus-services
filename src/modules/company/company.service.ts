@@ -1,10 +1,7 @@
 import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
-import {
-  generateTenantToken,
-  buildAccessUrl,
-} from '../../utils/tenant-token';
+import { generateTenantToken, buildAccessUrl } from '../../utils/tenant-token';
 
 type TxClient = Omit<
   typeof prisma,
@@ -190,7 +187,13 @@ export class CompanyService {
 
   async updateCompany(
     id: number,
-    data: { nombre?: string; rif?: string; tipo?: string; activo?: boolean; feeTransaccion?: number },
+    data: {
+      nombre?: string;
+      rif?: string;
+      tipo?: string;
+      activo?: boolean;
+      feeTransaccion?: number;
+    },
   ) {
     try {
       logger.info(`Actualizando empresa ${id}`);
@@ -209,6 +212,16 @@ export class CompanyService {
   async deleteCompany(id: number) {
     try {
       logger.info(`Desactivando empresa ${id}`);
+
+      // Expirar TODOS los tokens de los submódulos de esta empresa de inmediato.
+      // Esto garantiza que el próximo heartbeat de cualquier módulo activo retorne 403,
+      // sin esperar a que el tokenExpiresAt natural llegue a su fin.
+      await prisma.$executeRaw`
+        UPDATE empresa_submodulo
+        SET emsm_token_expires_at = NOW()
+        WHERE emsm_empresa_id = ${id}
+      `;
+
       return await prisma.empresa.update({
         where: { id },
         data: { activo: false },

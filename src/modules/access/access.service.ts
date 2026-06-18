@@ -3,9 +3,16 @@ import { verifyTenantToken, buildAccessUrl } from '../../utils/tenant-token';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
 
+/** 8 horas — ventana de renovación por cada petición activa */
+const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
+
 export class AccessService {
+  /**
+   * GET /api/access/verify
+   * Verifica token, empresa y submódulo activos.
+   * Llamado por el frontend de cada módulo al cargar la app.
+   */
   async verify(token: string) {
-    // 1. Verificar la firma — si alguien modificó el token, esto lanza
     let payload: ReturnType<typeof verifyTenantToken>;
     try {
       payload = verifyTenantToken(token);
@@ -15,7 +22,6 @@ export class AccessService {
 
     const { empresaId, submoduloId } = payload;
 
-    // 2. Verificar empresa activa
     const empresa = await prisma.empresa.findUnique({
       where: { id: empresaId },
       select: { id: true, nombre: true, rif: true, activo: true },
@@ -31,7 +37,6 @@ export class AccessService {
       return { active: false, reason: 'Empresa inactiva.' };
     }
 
-    // 3. Verificar submódulo global activo
     const submodulo = await prisma.submodulo.findUnique({
       where: { id: submoduloId },
       select: { id: true, nombre: true, url: true, activo: true },
@@ -42,7 +47,6 @@ export class AccessService {
       return { active: false, reason: 'Servicio no disponible.' };
     }
 
-    // 4. Verificar que la empresa tenga el módulo padre activo
     const moduloId = (
       await prisma.submodulo.findUnique({
         where: { id: submoduloId },
@@ -56,12 +60,16 @@ export class AccessService {
         select: { activo: true },
       });
       if (!empresaModulo || !empresaModulo.activo) {
-        logger.info(`verify: modulo ${moduloId} no activado para empresa ${empresaId}`);
-        return { active: false, reason: 'Servicio no activado para esta empresa.' };
+        logger.info(
+          `verify: modulo ${moduloId} no activado para empresa ${empresaId}`,
+        );
+        return {
+          active: false,
+          reason: 'Servicio no activado para esta empresa.',
+        };
       }
     }
 
-    // 5. Verificar que la empresa tenga este submódulo activo
     const empresaSubmodulo = await (
       prisma as unknown as {
         empresaSubmodulo: {
@@ -82,10 +90,15 @@ export class AccessService {
       logger.info(
         `verify: submodulo ${submoduloId} no activado para empresa ${empresaId}`,
       );
-      return { active: false, reason: 'Servicio no activado para esta empresa.' };
+      return {
+        active: false,
+        reason: 'Servicio no activado para esta empresa.',
+      };
     }
 
-    logger.info(`verify: acceso concedido empresa=${empresaId} submodulo=${submoduloId}`);
+    logger.info(
+      `verify: acceso concedido empresa=${empresaId} submodulo=${submoduloId}`,
+    );
 
     return {
       active: true,
@@ -98,10 +111,113 @@ export class AccessService {
         id: submodulo.id,
         nombre: submodulo.nombre,
         url: submodulo.url,
-        accessUrl: submodulo.url
-          ? buildAccessUrl(submodulo.url, token)
-          : null,
+        accessUrl: submodulo.url ? buildAccessUrl(submodulo.url, token) : null,
       },
     };
+  }
+
+  /**
+   * POST /api/access/heartbeat
+   *
+   * Llamado por el backend de cada módulo en CADA petición del usuario.
+   * Verifica que la empresa y el submódulo sigan activos y desliza
+   * la ventana de tokenExpiresAt +8h en BD.
+   *
+   * Regla de oro:
+   *   empresa.activo = TRUE  → token SIEMPRE se renueva → acceso garantizado
+   *   empresa.activo = FALSE → 403 inmediato sin importar nada más
+   *
+   * Esto garantiza que ningún flujo activo sea interrumpido por expiración
+   * de token. La única razón de bloqueo es la desactivación explícita por admin.
+   */
+  async heartbeat(
+    token: string,
+  ): Promise<{ active: boolean; reason?: string }> {
+    // 1. Verificar firma JWT (local, sin red)
+    let payload: ReturnType<typeof verifyTenantToken>;
+    try {
+      payload = verifyTenantToken(token);
+    } catch {
+      throw new AppError('Token inválido o manipulado.', 401);
+    }
+
+    const { empresaId, submoduloId } = payload;
+
+    // 2. Una sola query: empresa_submodulo + empresa activa
+    const esm = await (
+      prisma as unknown as {
+        empresaSubmodulo: {
+          findFirst: (args: {
+            where: { empresaId: number; submoduloId: number };
+            select: {
+              id: boolean;
+              activo: boolean;
+              tokenExpiresAt: boolean;
+              empresa: { select: { activo: boolean; nombre: boolean } };
+            };
+          }) => Promise<{
+            id: number;
+            activo: boolean;
+            tokenExpiresAt: Date | null;
+            empresa: { activo: boolean; nombre: string };
+          } | null>;
+        };
+      }
+    ).empresaSubmodulo.findFirst({
+      where: { empresaId, submoduloId },
+      select: {
+        id: true,
+        activo: true,
+        tokenExpiresAt: true,
+        empresa: { select: { activo: true, nombre: true } },
+      },
+    });
+
+    // 3. Validaciones de estado
+    if (!esm) {
+      logger.warn(
+        `heartbeat: empresa_submodulo no encontrado empresa=${empresaId} sub=${submoduloId}`,
+      );
+      return { active: false, reason: 'Registro de acceso no encontrado.' };
+    }
+
+    if (!esm.empresa.activo) {
+      logger.info(`heartbeat: empresa ${empresaId} inactiva — acceso denegado`);
+      return {
+        active: false,
+        reason: 'Empresa inactiva. Contacte a su administrador.',
+      };
+    }
+
+    if (!esm.activo) {
+      logger.info(
+        `heartbeat: submodulo ${submoduloId} inactivo para empresa ${empresaId}`,
+      );
+      return { active: false, reason: 'Módulo inactivo para esta empresa.' };
+    }
+
+    // 4. Renovar la ventana en BD (siempre que empresa esté activa)
+    //    No importa si tokenExpiresAt ya venció — empresa activa = renovación garantizada
+    const newExpiry = new Date(Date.now() + TOKEN_TTL_MS);
+
+    await (
+      prisma as unknown as {
+        empresaSubmodulo: {
+          update: (args: {
+            where: { id: number };
+            data: { tokenExpiresAt: Date };
+          }) => Promise<unknown>;
+        };
+      }
+    ).empresaSubmodulo.update({
+      where: { id: esm.id },
+      data: { tokenExpiresAt: newExpiry },
+    });
+
+    logger.info(
+      `heartbeat: renovado empresa=${empresaId} sub=${submoduloId} expires=${newExpiry.toISOString()}`,
+    );
+
+    return { active: true };
   }
 }

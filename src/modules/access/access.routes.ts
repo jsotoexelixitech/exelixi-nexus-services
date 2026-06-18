@@ -68,4 +68,36 @@ const accessLimiter = rateLimit({
  */
 router.get('/verify', accessLimiter, (req, res) => controller.verify(req, res));
 
+/**
+ * @swagger
+ * /api/access/heartbeat:
+ *   post:
+ *     summary: Renovar ventana de acceso activo (heartbeat)
+ *     tags: [Access]
+ *     description: >
+ *       Llamado por el backend de cada módulo en cada petición del usuario.
+ *       Verifica que empresa y módulo sigan activos y renueva tokenExpiresAt +8h en BD.
+ *       Si empresa.activo=true el token SIEMPRE se renueva — ningún flujo activo se corta.
+ *       Si empresa.activo=false responde 403 inmediatamente.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Token renovado, acceso activo
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 active:  { type: boolean, example: true }
+ *       401:
+ *         description: Token inválido o manipulado
+ *       403:
+ *         description: Empresa o módulo inactivo
+ */
+router.post('/heartbeat', accessLimiter, (req, res) =>
+  controller.heartbeat(req, res),
+);
+
 export default router;
