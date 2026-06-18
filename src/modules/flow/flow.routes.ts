@@ -9,7 +9,13 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { startFlow, startFlowFromToken, getSession, saveSession, advanceSession } from './flow.service';
+import {
+  startFlow,
+  startFlowFromToken,
+  getSession,
+  saveSession,
+  advanceSession,
+} from './flow.service';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import { verifyTenantToken } from '../../utils/tenant-token';
 
@@ -23,10 +29,16 @@ const router = Router();
  * Body: { empresaId: number, moduloGroupId: number }
  */
 router.post('/start', apiKeyGuard, async (req: Request, res: Response) => {
-  const { empresaId, moduloGroupId } = req.body as { empresaId?: number; moduloGroupId?: number };
+  const { empresaId, moduloGroupId } = req.body as {
+    empresaId?: number;
+    moduloGroupId?: number;
+  };
 
   if (!empresaId || !moduloGroupId) {
-    res.status(400).json({ success: false, message: 'Se requiere empresaId y moduloGroupId.' });
+    res.status(400).json({
+      success: false,
+      message: 'Se requiere empresaId y moduloGroupId.',
+    });
     return;
   }
 
@@ -53,19 +65,31 @@ router.post('/start-from-token', async (req: Request, res: Response) => {
   const { nexus_token } = req.body as { nexus_token?: string };
 
   if (!nexus_token) {
-    res.status(400).json({ success: false, message: 'Se requiere nexus_token.' });
+    res
+      .status(400)
+      .json({ success: false, message: 'Se requiere nexus_token.' });
     return;
   }
 
-  let payload: { empresaId: number; submoduloId: number };
+  let payload: { empresaId: number; submoduloId: number; metadata?: any };
   try {
-    payload = verifyTenantToken(nexus_token) as { empresaId: number; submoduloId: number };
+    payload = verifyTenantToken(nexus_token) as {
+      empresaId: number;
+      submoduloId: number;
+      metadata?: any;
+    };
   } catch {
-    res.status(401).json({ success: false, message: 'Token inválido o expirado.' });
+    res
+      .status(401)
+      .json({ success: false, message: 'Token inválido o expirado.' });
     return;
   }
 
-  const result = await startFlowFromToken(payload.empresaId, payload.submoduloId);
+  const result = await startFlowFromToken(
+    payload.empresaId,
+    payload.submoduloId,
+    payload.metadata,
+  );
 
   if ('error' in result) {
     // 409 = no es punto de entrada o flujo de 1 solo módulo; el módulo continúa standalone
@@ -84,7 +108,9 @@ router.post('/start-from-token', async (req: Request, res: Response) => {
 router.get('/session/:sid', async (req: Request, res: Response) => {
   const session = getSession(req.params.sid);
   if (!session) {
-    res.status(404).json({ success: false, message: 'Sesión no encontrada o expirada.' });
+    res
+      .status(404)
+      .json({ success: false, message: 'Sesión no encontrada o expirada.' });
     return;
   }
   res.json({ success: true, data: session });
@@ -96,7 +122,10 @@ router.get('/session/:sid', async (req: Request, res: Response) => {
  * Público (llamado desde los frontends de módulos).
  */
 router.post('/save/:sid', async (req: Request, res: Response) => {
-  const patch = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
+  const patch =
+    req.body && typeof req.body === 'object'
+      ? (req.body as Record<string, unknown>)
+      : {};
   const result = saveSession(req.params.sid, patch);
   if (!result) {
     res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
@@ -112,7 +141,10 @@ router.post('/save/:sid', async (req: Request, res: Response) => {
  */
 router.post('/done/:sid', async (req: Request, res: Response) => {
   const fromOrder = Number(req.query.from ?? 0);
-  const patch = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
+  const patch =
+    req.body && typeof req.body === 'object'
+      ? (req.body as Record<string, unknown>)
+      : {};
   const result = advanceSession(req.params.sid, fromOrder, patch);
   if (!result) {
     res.status(404).json({ success: false, message: 'Sesión no encontrada.' });

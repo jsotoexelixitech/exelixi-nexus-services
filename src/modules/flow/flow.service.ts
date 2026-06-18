@@ -133,6 +133,7 @@ async function buildAccessUrl(
 export async function startFlowFromToken(
   empresaId: number,
   submoduloId: number,
+  metadata?: any,
 ): Promise<
   | { error: string }
   | {
@@ -186,7 +187,7 @@ export async function startFlowFromToken(
     slots,
     current: slots[0].order,
     history: [],
-    data: {},
+    data: metadata ? { metadata } : {},
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };

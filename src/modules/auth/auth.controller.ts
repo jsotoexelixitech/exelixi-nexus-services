@@ -123,18 +123,14 @@ export class AuthController {
         });
       }
 
-      if (!empresaSubmodulo.tenantToken) {
-        return res.status(500).json({
-          success: false,
-          message:
-            'El token de acceso no ha sido generado. Contacte al administrador.',
-        });
-      }
+      // 5. Generar token dinámico con metadata
+      const { generateSsoToken } = await import('../../utils/tenant-token');
+      const dynamicToken = generateSsoToken(empresa.id, submodulo.id, metadata);
 
-      // 5. Construir la URL de redirección con el tenantToken real
+      // 6. Construir la URL de redirección con el token dinámico
       const baseUrl = submodulo.url!.replace(/\/$/, '');
       const sep = baseUrl.includes('?') ? '&' : '?';
-      const redirectUrl = `${baseUrl}${sep}nexus_token=${empresaSubmodulo.tenantToken}`;
+      const redirectUrl = `${baseUrl}${sep}nexus_token=${dynamicToken}`;
 
       return res.json({
         success: true,

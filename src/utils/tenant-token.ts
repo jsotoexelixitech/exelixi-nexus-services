@@ -5,6 +5,7 @@ export interface TenantTokenPayload {
   type: 'tenant_access';
   empresaId: number;
   submoduloId: number;
+  metadata?: any;
 }
 
 /**
@@ -38,6 +39,25 @@ export function generateAccessToken(
     type: 'tenant_access',
     empresaId,
     submoduloId,
+  };
+  return jwt.sign(payload, env.TENANT_TOKEN_SECRET, { expiresIn: '1h' });
+}
+
+/**
+ * Genera un JWT de corta duración dinámico para SSO Delegate,
+ * inyectando la metadata (ej. cproductor, etc.) para que viaje en la URL.
+ * Expira en 1 hora.
+ */
+export function generateSsoToken(
+  empresaId: number,
+  submoduloId: number,
+  metadata?: any,
+): string {
+  const payload: TenantTokenPayload = {
+    type: 'tenant_access',
+    empresaId,
+    submoduloId,
+    ...(metadata && { metadata }),
   };
   return jwt.sign(payload, env.TENANT_TOKEN_SECRET, { expiresIn: '1h' });
 }
