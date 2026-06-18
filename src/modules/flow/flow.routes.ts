@@ -18,6 +18,7 @@ import {
 } from './flow.service';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import { verifyTenantToken } from '../../utils/tenant-token';
+import logger from '../../utils/logger';
 
 const router = Router();
 
@@ -78,7 +79,10 @@ router.post('/start-from-token', async (req: Request, res: Response) => {
       submoduloId: number;
       metadata?: any;
     };
-  } catch {
+  } catch (err) {
+    logger.warn(
+      `[start-from-token] Token inválido o expirado — IP: ${req.ip} — ${String(err)}`,
+    );
     res
       .status(401)
       .json({ success: false, message: 'Token inválido o expirado.' });

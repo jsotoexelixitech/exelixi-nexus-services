@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import { AccessService } from './access.service';
+import { AppError } from '../../utils/app-error';
+import { getErrorMessage } from '../../utils/error-handler';
 
 const service = new AccessService();
 
@@ -49,13 +51,23 @@ export class AccessController {
     }
 
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    const result = await service.heartbeat(token);
 
-    if (!result.active) {
-      return res.status(403).json({ success: false, ...result });
+    try {
+      const result = await service.heartbeat(token);
+
+      if (!result.active) {
+        return res.status(403).json({ success: false, ...result });
+      }
+
+      return res.json({ success: true, ...result });
+    } catch (error: unknown) {
+      const statusCode = error instanceof AppError ? error.statusCode : 500;
+      return res.status(statusCode).json({
+        success: false,
+        active: false,
+        message: getErrorMessage(error),
+      });
     }
-
-    return res.json({ success: true, ...result });
   }
 
   /**

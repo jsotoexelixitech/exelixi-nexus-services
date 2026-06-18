@@ -3,6 +3,25 @@ import { AuthController } from './auth.controller';
 import { authenticate } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import { loginSchema } from './auth.schema';
+import rateLimit from 'express-rate-limit';
+import logger from '../../utils/logger';
+
+/** Rate limiter para el endpoint SSO: 30 peticiones por minuto por IP */
+const ssoDelegateLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minuto
+  max: 30, // máximo 30 peticiones por ventana
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message:
+      'Demasiadas peticiones. Por favor espere un momento antes de reintentar.',
+  },
+  handler: (req, res, _next, options) => {
+    logger.warn(`[sso-delegate] rate limit excedido — IP: ${req.ip}`);
+    res.status(429).json(options.message);
+  },
+});
 
 const router = Router();
 const controller = new AuthController();
@@ -121,7 +140,7 @@ router.post('/login', validate(loginSchema), controller.login);
  *                 success: { type: boolean }
  *                 redirect_url: { type: string }
  */
-router.post('/sso-delegate', controller.ssoDelegate);
+router.post('/sso-delegate', ssoDelegateLimiter, controller.ssoDelegate);
 
 /**
  * @openapi
