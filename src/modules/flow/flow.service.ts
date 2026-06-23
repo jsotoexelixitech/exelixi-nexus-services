@@ -109,9 +109,13 @@ async function buildAccessUrl(
   empresaId: number,
   submoduloId: number,
   baseUrl: string,
+  metadata?: any,
 ): Promise<string> {
-  const { generateTenantToken } = await import('../../utils/tenant-token');
-  const token = generateTenantToken(empresaId, submoduloId);
+  const { generateSsoToken, generateTenantToken } =
+    await import('../../utils/tenant-token');
+  const token = metadata
+    ? generateSsoToken(empresaId, submoduloId, metadata)
+    : generateTenantToken(empresaId, submoduloId);
   // Query-aware: respeta un ?product=... ya presente en la URL del submódulo.
   const sep = baseUrl.includes('?') ? '&' : '?';
   return `${baseUrl}${sep}nexus_token=${token}`;
@@ -171,11 +175,15 @@ export async function startFlowFromToken(
     };
   }
 
-  // Resolver tokens en todos los slots
   const slots: SubmoduloSlot[] = await Promise.all(
     rawSlots.map(async (s) => ({
       ...s,
-      accessUrl: await buildAccessUrl(empresaId, s.submoduloId, s.accessUrl),
+      accessUrl: await buildAccessUrl(
+        empresaId,
+        s.submoduloId,
+        s.accessUrl,
+        metadata,
+      ),
     })),
   );
 
