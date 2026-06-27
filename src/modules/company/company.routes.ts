@@ -355,4 +355,25 @@ router.post(
  */
 router.post('/:id/generate-api-key', controller.generateApiKey);
 
+/**
+ * @openapi
+ * /api/companies/{id}/connection-tokens:
+ *   get:
+ *     tags: [Companies]
+ *     summary: Tokens de conexión de todos los submódulos de una empresa
+ *     description: |
+ *       Retorna el `tenantToken` (API Key) de cada submódulo habilitado.
+ *       El estado puede ser: `activo`, `expirado`, `sin_conexion` o `inactivo`.
+ *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, example: 1 }
+ *     responses:
+ *       200:
+ *         description: Lista de tokens de conexión
+ */
+router.get('/:id/connection-tokens', controller.getConnectionTokens);
+
 export default router;

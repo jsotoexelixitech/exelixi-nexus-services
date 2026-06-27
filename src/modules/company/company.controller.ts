@@ -140,4 +140,22 @@ export class CompanyController {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
     }
   }
+
+  /**
+   * GET /api/companies/:id/connection-tokens
+   * Devuelve los tokens de conexión de todos los submódulos de una empresa.
+   * Solo accesible desde el admin (requiere authenticate via router).
+   */
+  async getConnectionTokens(req: Request, res: Response) {
+    try {
+      const empresaId = Number(req.params.id);
+      const data = await companyService.getConnectionTokens(empresaId);
+      res.json({ success: true, data });
+    } catch (error: unknown) {
+      const statusCode = error instanceof AppError ? error.statusCode : 500;
+      res
+        .status(statusCode)
+        .json({ success: false, message: getErrorMessage(error) });
+    }
+  }
 }

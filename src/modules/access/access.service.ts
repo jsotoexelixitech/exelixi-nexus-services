@@ -83,6 +83,7 @@ export class AccessService {
             id: number;
             activo: boolean;
             tenantToken: string | null;
+            tokenExpiresAt: Date | null;
           } | null>;
         };
       }
@@ -97,6 +98,20 @@ export class AccessService {
       return {
         active: false,
         reason: 'Servicio no activado para esta empresa.',
+      };
+    }
+
+    // Corte por inactividad: si tokenExpiresAt venció, la sesión expiró
+    if (
+      empresaSubmodulo.tokenExpiresAt &&
+      empresaSubmodulo.tokenExpiresAt < new Date()
+    ) {
+      logger.info(
+        `verify: sesión expirada por inactividad empresa=${empresaId} sub=${submoduloId}`,
+      );
+      return {
+        active: false,
+        reason: 'Sesión expirada por inactividad. Reconecte la aplicación.',
       };
     }
 

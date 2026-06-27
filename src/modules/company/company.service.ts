@@ -340,4 +340,74 @@ export class CompanyService {
       throw new AppError('Error al recuperar el listado de empresas.', 500);
     }
   }
+
+  /**
+   * Retorna los tokens de conexión (tenantToken) de todos los submódulos
+   * habilitados para una empresa. Usado por el admin para distribuir el
+   * API Key a las aplicaciones cliente.
+   */
+  async getConnectionTokens(empresaId: number) {
+    try {
+      const empresa = await prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: { id: true, nombre: true },
+      });
+      if (!empresa) throw new AppError('Empresa no encontrada.', 404);
+
+      const esCm = getEmpresaSubmoduloDelegate(prisma);
+      if (!esCm)
+        throw new AppError('Función no disponible en este entorno.', 503);
+
+      type TokenRow = EmpresaSubmoduloRow & { tokenExpiresAt?: Date | null };
+      const rows = await (
+        esCm as unknown as {
+          findMany(args: {
+            where: { empresaId: number };
+            include: {
+              submodulo: {
+                select: { nombre: boolean; url: boolean; activo: boolean };
+              };
+            };
+          }): Promise<
+            (TokenRow & {
+              submodulo: {
+                nombre: string;
+                url: string | null;
+                activo: boolean;
+              };
+            })[]
+          >;
+        }
+      ).findMany({
+        where: { empresaId },
+        include: {
+          submodulo: { select: { nombre: true, url: true, activo: true } },
+        },
+      });
+
+      const now = new Date();
+      return rows.map((r) => ({
+        submoduloId: r.submoduloId,
+        nombre: r.submodulo.nombre,
+        url: r.submodulo.url,
+        submoduloActivo: r.submodulo.activo,
+        conexionActiva: r.activo,
+        tenantToken: r.activo ? (r.tenantToken ?? null) : null,
+        tokenExpiresAt: (r as TokenRow).tokenExpiresAt ?? null,
+        estado: !r.activo
+          ? 'inactivo'
+          : !(r as TokenRow).tokenExpiresAt
+            ? 'sin_conexion'
+            : (r as TokenRow).tokenExpiresAt! < now
+              ? 'expirado'
+              : 'activo',
+      }));
+    } catch (error: unknown) {
+      if (error instanceof AppError) throw error;
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
+      logger.error(`Error al obtener tokens de conexión: ${message}`);
+      throw new AppError('Error al recuperar los tokens de conexión.', 500);
+    }
+  }
 }
