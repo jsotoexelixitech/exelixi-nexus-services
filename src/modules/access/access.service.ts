@@ -161,11 +161,13 @@ export class AccessService {
             select: {
               id: boolean;
               activo: boolean;
+              tokenExpiresAt: boolean;
               empresa: { select: { activo: boolean } };
             };
           }) => Promise<{
             id: number;
             activo: boolean;
+            tokenExpiresAt: Date | null;
             empresa: { activo: boolean };
           } | null>;
         };
@@ -175,6 +177,7 @@ export class AccessService {
       select: {
         id: true,
         activo: true,
+        tokenExpiresAt: true,
         empresa: { select: { activo: true } },
       },
     });
@@ -187,6 +190,15 @@ export class AccessService {
     }
     if (!esm.activo) {
       throw new AppError('Módulo inactivo para esta empresa.', 403);
+    }
+
+    // Corte por inactividad: solo aplica si tokenExpiresAt ya fue asignado
+    // (primer exchangeToken sin heartbeat previo siempre pasa)
+    if (esm.tokenExpiresAt && esm.tokenExpiresAt < new Date()) {
+      throw new AppError(
+        'Sesión expirada por inactividad. El cliente debe reconectarse.',
+        403,
+      );
     }
 
     // 3. Generar el nuevo Access Token temporal usando la misma combinación

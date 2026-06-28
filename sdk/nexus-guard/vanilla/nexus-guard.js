@@ -67,36 +67,103 @@
     </div>
     <style>@keyframes __nexus_spin__ { to { transform: rotate(360deg); } }</style>`;
 
+  var SESSION_KEY = '__nexus_token__';
+  var HEARTBEAT_INTERVAL = 5 * 60 * 1000; // 5 minutos
+
+  function getStoredToken() {
+    try {
+      return sessionStorage.getItem(SESSION_KEY);
+    } catch {
+      return null;
+    }
+  }
+  function storeToken(t) {
+    try {
+      sessionStorage.setItem(SESSION_KEY, t);
+    } catch {
+      /* sin sessionStorage */
+    }
+  }
+
   async function init(options) {
     var nexusApiUrl = options.nexusApiUrl;
     var serviceName = options.serviceName || 'Servicio';
-    var onActive    = options.onActive;    // callback(empresa, submodulo)
-    var onBlocked   = options.onBlocked;   // callback(reason) — opcional
+    var onActive = options.onActive; // callback(empresa, submodulo, metadata)
+    var onBlocked = options.onBlocked; // callback(reason) — opcional
+    var heartbeatMs = options.heartbeatMs || HEARTBEAT_INTERVAL;
 
     // Mostrar loading
     var overlay = document.createElement('div');
     overlay.innerHTML = LOADING_HTML;
     document.body.appendChild(overlay);
 
-    // Leer token de URL
-    var token = new URLSearchParams(window.location.search).get('nexus_token');
+    // Token: URL primero, luego sessionStorage
+    var urlToken = new URLSearchParams(window.location.search).get(
+      'nexus_token',
+    );
+    var storedToken = getStoredToken();
+    var token = urlToken || storedToken;
 
     if (!token) {
-      overlay.innerHTML = BLOCKED_HTML('No se proporcionó token de acceso.', serviceName);
+      overlay.innerHTML = BLOCKED_HTML(
+        'No se proporcionó token de acceso.',
+        serviceName,
+      );
       if (onBlocked) onBlocked('No se proporcionó token de acceso.');
       return;
     }
 
     try {
-      var res = await fetch(nexusApiUrl.replace(/\/$/, '') + '/api/access/verify', {
-        headers: { 'Authorization': 'Bearer ' + token }
-      });
+      var res = await fetch(
+        nexusApiUrl.replace(/\/$/, '') + '/api/access/verify',
+        {
+          headers: { Authorization: 'Bearer ' + token },
+        },
+      );
+
+      // Capturar token renovado si el servidor lo devuelve
+      var refreshed = res.headers.get('X-Nexus-Token-Refreshed');
+      if (refreshed) storeToken(refreshed);
+      else if (urlToken) storeToken(urlToken);
+
       var data = await res.json();
 
       if (data.active) {
-        // Remover overlay — app visible
         document.body.removeChild(overlay);
-        if (onActive) onActive(data.empresa, data.submodulo);
+        if (onActive)
+          onActive(data.empresa, data.submodulo, data.metadata || {});
+
+        // Heartbeat automático mientras la pestaña esté abierta
+        var hbTimer = setInterval(async function () {
+          var currentToken = getStoredToken();
+          if (!currentToken) {
+            clearInterval(hbTimer);
+            return;
+          }
+          try {
+            var hbRes = await fetch(
+              nexusApiUrl.replace(/\/$/, '') + '/api/access/heartbeat',
+              {
+                method: 'POST',
+                headers: { Authorization: 'Bearer ' + currentToken },
+              },
+            );
+            if (!hbRes.ok) {
+              clearInterval(hbTimer);
+              return;
+            }
+            var hb = await hbRes.json();
+            if (hb.access_token) storeToken(hb.access_token);
+            if (hb.active === false) {
+              clearInterval(hbTimer);
+              var msg = hb.reason || 'Sesión expirada. Acceso suspendido.';
+              document.body.innerHTML = BLOCKED_HTML(msg, serviceName);
+              if (onBlocked) onBlocked(msg);
+            }
+          } catch {
+            /* fail-open */
+          }
+        }, heartbeatMs);
       } else {
         var reason = data.reason || 'Servicio no disponible para esta empresa.';
         overlay.innerHTML = BLOCKED_HTML(reason, serviceName);
@@ -109,9 +176,29 @@
     }
   }
 
-  // Exponer como global y como ESM
-  var NexusGuard = { init: init };
-  if (typeof module !== 'undefined' && module.exports) module.exports = NexusGuard;
-  if (typeof global !== 'undefined') global.NexusGuard = NexusGuard;
+  /** Devuelve el token activo guardado (para incluirlo en fetch de la app). */
+  function getToken() {
+    return getStoredToken();
+  }
 
+  /**
+   * Wrapper de fetch con token automático y captura de renovación.
+   * Úsalo en lugar de fetch() en tu aplicación.
+   */
+  async function apiFetch(input, init) {
+    init = init || {};
+    var headers = Object.assign({}, init.headers || {});
+    var t = getStoredToken();
+    if (t) headers['Authorization'] = 'Bearer ' + t;
+    var res = await fetch(input, Object.assign({}, init, { headers: headers }));
+    var refreshed = res.headers.get('X-Nexus-Token-Refreshed');
+    if (refreshed) storeToken(refreshed);
+    return res;
+  }
+
+  // Exponer como global y como ESM
+  var NexusGuard = { init: init, getToken: getToken, fetch: apiFetch };
+  if (typeof module !== 'undefined' && module.exports)
+    module.exports = NexusGuard;
+  if (typeof global !== 'undefined') global.NexusGuard = NexusGuard;
 })(typeof window !== 'undefined' ? window : this);

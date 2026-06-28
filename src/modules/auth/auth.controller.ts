@@ -1,9 +1,23 @@
 import { Request, Response } from 'express';
+import { z } from 'zod';
 import prisma from '../../config/prisma';
 import { AuthService } from './auth.service';
 import { AuthRequest } from '../../middlewares/auth.middleware';
 import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
+import logger from '../../utils/logger';
+
+/** Schema de metadata permitida en el token SSO.
+ *  Campos desconocidos se eliminan con strip(). */
+const ssoMetadataSchema = z
+  .object({
+    cproductor: z.string().max(20).optional(),
+    canal: z.string().max(50).optional(),
+    cramo: z.number().int().positive().optional(),
+    cusuario: z.string().max(60).optional(),
+    ctipo: z.number().int().nonnegative().optional(),
+  })
+  .strip();
 
 const authService = new AuthService();
 
@@ -35,22 +49,29 @@ export class AuthController {
 
   async ssoDelegate(req: Request, res: Response) {
     try {
-      console.log('=== PETICIÓN RECIBIDA DESDE ANGULAR ===');
-      console.log('Headers (API Key):', req.headers['x-api-key']);
-      console.log('Cuerpo (Payload):', JSON.stringify(req.body, null, 2));
-      console.log('=======================================');
-
-      const { metadata, target = 'ocr' } = req.body;
+      const { metadata: rawMetadata, target = 'ocr' } = req.body;
       const apiKey = req.headers['x-api-key'];
 
-      // Validación básica
-      if (!metadata || !apiKey) {
+      if (!rawMetadata || !apiKey) {
         return res.status(400).json({
           success: false,
+          error: 'invalid_request',
           message:
             'Faltan campos obligatorios (metadata) o el header x-api-key.',
         });
       }
+
+      // Validar y sanitizar metadata con Zod (campos desconocidos descartados)
+      const metaParsed = ssoMetadataSchema.safeParse(rawMetadata);
+      if (!metaParsed.success) {
+        return res.status(400).json({
+          success: false,
+          error: 'invalid_metadata',
+          message: 'Metadata con formato inválido.',
+          details: metaParsed.error.issues,
+        });
+      }
+      const metadata = metaParsed.data;
 
       // 1. Buscar la empresa por apiKey
       const empresa = await prisma.empresa.findUnique({
@@ -131,6 +152,10 @@ export class AuthController {
       const baseUrl = submodulo.url!.replace(/\/$/, '');
       const sep = baseUrl.includes('?') ? '&' : '?';
       const redirectUrl = `${baseUrl}${sep}nexus_token=${dynamicToken}`;
+
+      logger.info(
+        `ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id}`,
+      );
 
       return res.json({
         success: true,
