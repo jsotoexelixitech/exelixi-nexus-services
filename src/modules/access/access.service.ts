@@ -3,6 +3,7 @@ import {
   verifyTenantToken,
   buildAccessUrl,
   generateAccessToken,
+  generateSsoToken,
 } from '../../utils/tenant-token';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
@@ -216,9 +217,12 @@ export class AccessService {
    * Esto garantiza que ningún flujo activo sea interrumpido por expiración
    * de token. La única razón de bloqueo es la desactivación explícita por admin.
    */
-  async heartbeat(
-    token: string,
-  ): Promise<{ active: boolean; reason?: string }> {
+  async heartbeat(token: string): Promise<{
+    active: boolean;
+    reason?: string;
+    access_token?: string;
+    expires_in?: number;
+  }> {
     // 1. Verificar firma JWT (local, sin red)
     let payload: ReturnType<typeof verifyTenantToken>;
     try {
@@ -300,10 +304,16 @@ export class AccessService {
       data: { tokenExpiresAt: newExpiry },
     });
 
+    // Emitir nuevo access_token con la misma metadata que trajo el original
+    // (preserva cproductor/canal si venía en el payload SSO)
+    const newToken = payload.metadata
+      ? generateSsoToken(empresaId, submoduloId, payload.metadata)
+      : generateAccessToken(empresaId, submoduloId);
+
     logger.info(
       `heartbeat: renovado empresa=${empresaId} sub=${submoduloId} expires=${newExpiry.toISOString()}`,
     );
 
-    return { active: true };
+    return { active: true, access_token: newToken, expires_in: 3600 };
   }
 }

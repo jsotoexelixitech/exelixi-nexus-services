@@ -56,10 +56,17 @@ export class AccessController {
       const result = await service.heartbeat(token);
 
       if (!result.active) {
-        return res.status(403).json({ success: false, ...result });
+        return res
+          .status(403)
+          .json({ success: false, active: false, reason: result.reason });
       }
 
-      return res.json({ success: true, ...result });
+      return res.json({
+        success: true,
+        active: true,
+        access_token: result.access_token,
+        expires_in: result.expires_in,
+      });
     } catch (error: unknown) {
       const statusCode = error instanceof AppError ? error.statusCode : 500;
       return res.status(statusCode).json({
