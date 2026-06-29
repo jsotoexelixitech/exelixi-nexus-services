@@ -5,12 +5,9 @@
  *   - Módulos propios del servidor (192.168.8.120)
  *   - Admin Nexus
  *   - Localhost para desarrollo
+ *   - QASys2000 / dominios La Mundial
  *
- * Orígenes externos (clientes / canales de integración):
- *   - 192.168.10.213 — La Mundial (red local del cliente)
- *
- * Para agregar un nuevo origen permitido, añade la IP o dominio
- * en la sección "Clientes externos" y comenta a quién pertenece.
+ * Orígenes adicionales vía ALLOWED_ORIGINS en .env (separados por coma).
  */
 
 /** Orígenes siempre permitidos independientemente del entorno */
@@ -36,16 +33,42 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
 
   // --- Clientes externos / canales de integración ---
   'http://192.168.10.213', // La Mundial — red local del cliente
-  'http://192.168.10.213:3000', // La Mundial — posible puerto de frontend
-  'http://192.168.10.213:8080', // La Mundial — posible puerto alternativo
-  'http://192.168.10.213:4200', // La Mundial — posible puerto alternativo
+  'http://192.168.10.213:3000',
+  'http://192.168.10.213:8080',
+  'http://192.168.10.213:4200',
+
+  // --- QASys2000 / SysIP (La Mundial) ---
+  'https://qasys2000.lamundialdeseguros.com',
+  'http://qasys2000.lamundialdeseguros.com',
 ];
 
 /**
- * Construye la lista final de orígenes permitidos combinando:
- * 1. La whitelist estática de arriba
- * 2. Los orígenes declarados en la variable de entorno ALLOWED_ORIGINS
- *    (separados por coma), útil para agregar sin re-deployar.
+ * Sufijos de hostname confiables (subdominios de La Mundial).
+ * Ej.: qasys2000.lamundialdeseguros.com, sys2000.lamundialdeseguros.com
+ */
+const TRUSTED_HOST_SUFFIXES: string[] = ['lamundialdeseguros.com'];
+
+/** Cabeceras permitidas en preflight (Angular envía x-api-key) */
+export const CORS_ALLOWED_HEADERS: string[] = [
+  'Content-Type',
+  'Authorization',
+  'x-api-key',
+  'X-Requested-With',
+  'Accept',
+  'Origin',
+];
+
+export const CORS_ALLOWED_METHODS: string[] = [
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+  'OPTIONS',
+];
+
+/**
+ * Construye la lista final de orígenes permitidos combinando whitelist estática + ALLOWED_ORIGINS.
  */
 export function getAllowedOrigins(): string[] {
   const fromEnv = process.env.ALLOWED_ORIGINS
@@ -54,28 +77,55 @@ export function getAllowedOrigins(): string[] {
         .filter(Boolean)
     : [];
 
-  // Unión sin duplicados
   return [...new Set([...STATIC_ALLOWED_ORIGINS, ...fromEnv])];
 }
 
 /**
- * Función de validación de origen para usar directamente en la opción `origin` de cors().
- * Permite además peticiones sin Origin (cURL, Postman, server-to-server).
+ * Verifica si un hostname coincide con un sufijo confiable (sin falsos positivos).
+ */
+function hostnameMatchesSuffix(hostname: string, suffix: string): boolean {
+  const base = suffix.startsWith('.') ? suffix.slice(1) : suffix;
+  return hostname === base || hostname.endsWith(`.${base}`);
+}
+
+/**
+ * Determina si un origen está permitido (lista exacta o dominio La Mundial).
+ */
+export function isOriginAllowed(origin: string): boolean {
+  if (getAllowedOrigins().includes(origin)) {
+    return true;
+  }
+
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== 'https:' && protocol !== 'http:') {
+      return false;
+    }
+    return TRUSTED_HOST_SUFFIXES.some((suffix) =>
+      hostnameMatchesSuffix(hostname, suffix),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validador de origen para express cors().
+ * Permite peticiones sin Origin (cURL, Postman, server-to-server).
  */
 export function corsOriginValidator(
   origin: string | undefined,
   callback: (err: Error | null, allow?: boolean) => void,
 ): void {
-  // Sin Origin = petición server-to-server (cURL, Postman, etc.) — siempre permitida
   if (!origin) {
     callback(null, true);
     return;
   }
 
-  const allowed = getAllowedOrigins();
-  if (allowed.includes(origin)) {
+  if (isOriginAllowed(origin)) {
     callback(null, true);
   } else {
-    callback(new Error(`CORS: Origen no permitido → ${origin}`));
+    // null + false → preflight responde sin CORS (no dispara error 500)
+    callback(null, false);
   }
 }
