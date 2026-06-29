@@ -249,4 +249,25 @@ VITE_NEXUS_API_URL=http://192.168.8.120:3092
 
 ---
 
+## 13. AVISO DE SEGURIDAD (eliminar en otro chat)
+
+Los siguientes archivos se subieron **temporalmente** para clonar contexto en otra PC.
+**Pedir en Cursor que los elimine del repo** cuando ya no los necesites:
+
+```
+docs/HANDOFF-CONTEXTO-SESION.md
+docs/CLONAR-EN-OTRA-PC.md
+docs/portable/
+```
+
+Comando sugerido para limpieza futura:
+
+```bash
+git rm -r docs/HANDOFF-CONTEXTO-SESION.md docs/CLONAR-EN-OTRA-PC.md docs/portable/
+git commit -m "chore(docs): eliminar handoff temporal por seguridad"
+git push origin main
+```
+
+---
+
 _Generado automáticamente al cierre de la sesión de implementación del sistema de tokens + SDK._
