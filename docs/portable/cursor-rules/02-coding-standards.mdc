@@ -1,0 +1,29 @@
+---
+description: Estándares de código, commits y entorno para todo el workspace
+alwaysApply: true
+---
+
+# Estándares Generales
+
+## Código limpio
+- DRY: lógica repetida ≥2 veces → extrae a helper.
+- SRP: una función = una responsabilidad.
+- Sin hardcoding: usa constantes o `.env`.
+- Documenta con JSDoc toda función nueva/modificada.
+
+## Commits (Conventional Commits en español)
+```
+feat(ámbito): descripción en imperativo
+fix(ámbito): corrección
+refactor|docs|chore|test|style(ámbito): descripción
+```
+Máx. 72 chars · sin punto final · commits atómicos.
+
+## Variables de entorno
+- `.env` nunca va a Git.
+- Variables nuevas → agregar a `.env.example` con comentario.
+- Acceso solo desde módulo de configuración centralizado.
+
+## Dependencias
+- Verifica si ya existe alternativa antes de instalar.
+- Prod → `dependencies` · Dev/Build → `devDependencies`.

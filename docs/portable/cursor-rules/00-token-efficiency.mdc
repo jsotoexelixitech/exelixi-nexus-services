@@ -1,0 +1,36 @@
+---
+description: Protocolo obligatorio de navegación de código — mínimo consumo de tokens
+alwaysApply: true
+---
+
+# Protocolo de Navegación (ejecutar EN ORDEN en cada solicitud)
+
+## PASO 1 — ctags (0 tokens extra)
+Busca el símbolo exacto en el archivo `tags` de la raíz del workspace:
+```
+grep -m5 "nombreSimbolo" tags
+```
+→ Obtienes: nombre · archivo · línea exacta. Lee **solo esa sección** del archivo.
+
+## PASO 2 — code-rag (tokens mínimos)
+Si el símbolo no es exacto o necesitas contexto semántico:
+```
+code_search("descripción de lo que buscas")
+```
+→ Devuelve fragmentos relevantes con ruta + líneas. Lee solo esos fragmentos.
+
+## PASO 3 — Lectura directa (último recurso)
+Solo si los pasos anteriores no dieron resultado: lee el archivo identificado.
+- Máximo 2 archivos por tarea.
+- Nunca leas `node_modules/` · `dist/` · `build/` · `.git/` · `dev-dist/`.
+
+---
+
+## Código
+- Sin `console.log` ni debug en entrega.
+- Sin imports/variables sin usar. Early returns sobre anidación.
+
+## Comunicación
+- Responde siempre en español.
+- Reporte final: commit → notas técnicas → informe ejecutivo.
+- Notifica y espera aprobación antes de tocar módulos fuera del requerimiento.

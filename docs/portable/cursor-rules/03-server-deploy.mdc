@@ -1,0 +1,21 @@
+---
+description: Mapa del servidor srv001 y protocolo de deploy — todo cambio debe pushearse
+alwaysApply: true
+---
+
+# Servidor Desarrollo — srv001 · 192.168.8.120
+
+**Regla:** Todo cambio aprobado → `git commit` + `git push` antes del deploy.
+
+## Mapa repo local → servicio PM2
+
+| Repo local | Servicio | Deploy en servidor |
+|-----------|---------|-------------------|
+| `exelixi-nexus-services` | `nexus-api` :3092 | `cd ~/nexus-api && git pull && npm run build && pm2 restart nexus-api` |
+| `exelixi-nexus` | `nexus-admin` :5200 | `cd ~/nexus-admin && git pull && npm run build && pm2 restart nexus-admin` |
+| `exelixi-modulos/modulo-ocr` | `ocr-api/web` :4001/:5181 | `cd ~/exelixi/ocr-documentos-modulo && git pull && cd frontend && npm run build && pm2 restart ocr-web` |
+| `exelixi-modulos/modulo-formulario` | `form-api/web` :4002/:5182 | `cd ~/exelixi/Formulario-modulo && git pull && cd frontend && npm run build && pm2 restart form-web` |
+| `exelixi-modulos/modulo-emision` | `emision-api/web` :4004/:5183 | `cd ~/exelixi/Emision-Plan-modulo && git pull && cd frontend && npm run build && pm2 restart emision-web` |
+| `exelixi-modulos/modulo-pagos` | `pagos-api/web` :4003/:5184 | `cd ~/exelixi/Pagos-Poliza-modulo && git pull && cd frontend && npm run build && pm2 restart pagos-web` |
+| `auto-casa-inspeccion` | `rcv-api/web` :3001/:5180 | `cd ~/auto-casa && git pull && npm run build && pm2 restart rcv-web` |
+| `SysIP-backend` | `sysip-nest-api` :3002 | `cd ~/server-api-sys && git pull && pm2 restart sysip-nest-api` |
