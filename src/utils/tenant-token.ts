@@ -80,6 +80,36 @@ export function verifyTenantToken(token: string): TenantTokenPayload {
 }
 
 /**
+ * Normaliza la URL base del submódulo para redirects con prefijo Apache (/ocr/, etc.).
+ * Paths con segmento reciben barra final; host:puerto sin path (/) no cambia.
+ */
+export function normalizeSubmoduloAccessBase(submoduloUrl: string): string {
+  const trimmed = submoduloUrl.trim();
+  try {
+    const url = new URL(trimmed);
+    const search = url.search;
+    url.search = '';
+    url.hash = '';
+
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path.length > 0) {
+      url.pathname = `${path}/`;
+    }
+
+    return `${url.origin}${url.pathname}${search}`;
+  } catch {
+    const q = trimmed.indexOf('?');
+    const pathPart = q >= 0 ? trimmed.slice(0, q) : trimmed;
+    const queryPart = q >= 0 ? trimmed.slice(q) : '';
+    const normalized =
+      pathPart.length > 0 && !pathPart.endsWith('/')
+        ? `${pathPart}/`
+        : pathPart;
+    return `${normalized}${queryPart}`;
+  }
+}
+
+/**
  * Construye la URL de acceso completa para un submódulo:
  *   {baseUrl}?nexus_token={tenantToken}
  *
@@ -92,7 +122,7 @@ export function buildAccessUrl(
   submoduloUrl: string,
   tenantToken: string,
 ): string {
-  const base = submoduloUrl.replace(/\/$/, '');
+  const base = normalizeSubmoduloAccessBase(submoduloUrl);
   const sep = base.includes('?') ? '&' : '?';
   return `${base}${sep}nexus_token=${tenantToken}`;
 }

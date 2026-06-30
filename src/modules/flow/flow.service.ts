@@ -90,7 +90,7 @@ async function getActiveSlots(
     .map((es, idx) => {
       const sub = es.submodulo!;
       // Construye accessUrl con el token ya firmado (re-usa la lógica del access module)
-      const baseUrl = sub.url!.replace(/\/$/, '');
+      const baseUrl = sub.url!;
       // El token lo tenemos que generar; reutilizamos el import dinámico para evitar
       // dependencia circular. Lo generamos aquí mismo.
       return {
@@ -111,14 +111,15 @@ async function buildAccessUrl(
   baseUrl: string,
   metadata?: any,
 ): Promise<string> {
-  const { generateSsoToken, generateTenantToken } =
-    await import('../../utils/tenant-token');
+  const {
+    generateSsoToken,
+    generateTenantToken,
+    buildAccessUrl: buildUrl,
+  } = await import('../../utils/tenant-token');
   const token = metadata
     ? generateSsoToken(empresaId, submoduloId, metadata)
     : generateTenantToken(empresaId, submoduloId);
-  // Query-aware: respeta un ?product=... ya presente en la URL del submódulo.
-  const sep = baseUrl.includes('?') ? '&' : '?';
-  return `${baseUrl}${sep}nexus_token=${token}`;
+  return buildUrl(baseUrl, token);
 }
 
 // ─── Operaciones de sesión ────────────────────────────────────────────────────

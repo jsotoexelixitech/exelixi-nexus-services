@@ -197,13 +197,11 @@ export class AuthController {
       });
 
       // 5. Generar token dinámico con metadata
-      const { generateSsoToken } = await import('../../utils/tenant-token');
+      const { generateSsoToken, buildAccessUrl } =
+        await import('../../utils/tenant-token');
       const dynamicToken = generateSsoToken(empresa.id, submodulo.id, metadata);
 
-      // 6. Construir la URL de redirección con el token dinámico
-      const baseUrl = submodulo.url!.replace(/\/$/, '');
-      const sep = baseUrl.includes('?') ? '&' : '?';
-      const redirectUrl = `${baseUrl}${sep}nexus_token=${dynamicToken}`;
+      const redirectUrl = buildAccessUrl(submodulo.url!, dynamicToken);
 
       logger.info(
         `ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id}`,
