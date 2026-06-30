@@ -21,6 +21,13 @@ build_module() {
   pm2 restart "${pm2_name}"
 }
 
+echo "=== Build nexus-admin base=/admin/ ==="
+cd "$HOME/nexus-admin"
+git pull origin main
+export VITE_APP_BASE="/admin/"
+export VITE_API_URL="${VITE_NEXUS_API_URL}"
+npm run build && pm2 restart nexus-admin
+
 build_module "$HOME/exelixi/ocr-documentos-modulo"     "/ocr/"         "ocr-web"
 build_module "$HOME/exelixi/Formulario-modulo"         "/formulario/"  "form-web"
 build_module "$HOME/exelixi/Emision-Plan-modulo"       "/emision/"     "emision-web"
@@ -44,4 +51,6 @@ SQL
 echo "=== Verificación ==="
 curl -skI -H "Host: cierrelmds.exelixitech.com" "https://127.0.0.1/nexus-api/health" | head -3
 curl -skI -H "Host: cierrelmds.exelixitech.com" "https://127.0.0.1/ocr/" | head -3
-echo "Listo. QASys2000 SSO: ${VITE_NEXUS_API_URL}/api/auth/sso-delegate"
+curl -skI -H "Host: cierrelmds.exelixitech.com" "https://127.0.0.1/admin/" | head -3
+echo "Listo. Admin: https://cierrelmds.exelixitech.com/admin/"
+echo "QASys2000 SSO: ${VITE_NEXUS_API_URL}/api/auth/sso-delegate"
