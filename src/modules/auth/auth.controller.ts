@@ -21,6 +21,48 @@ const ssoMetadataSchema = z
 
 const authService = new AuthService();
 
+/** Puertos dev local en submodulo.url (fallback si la URL es solo dominio HTTPS). */
+const SSO_TARGET_PORT: Record<string, string> = {
+  ocr: '5181',
+  formulario: '5182',
+  emision: '5183',
+  pagos: '5184',
+};
+
+/** Nombre en BD cuando la URL ya no incluye el puerto (ej. cierrelmds.exelixitech.com). */
+const SSO_TARGET_NAME: Record<string, string> = {
+  ocr: 'OCR Documentos',
+  formulario: 'Formulario',
+  emision: 'Emisión',
+  pagos: 'Pagos',
+};
+
+/**
+ * Resuelve el submódulo destino del SSO: primero por puerto en URL, luego por nombre.
+ */
+async function findSubmoduloForSsoTarget(target: string) {
+  const key = target in SSO_TARGET_PORT ? target : 'ocr';
+  const puerto = SSO_TARGET_PORT[key];
+  const nameHint = SSO_TARGET_NAME[key] ?? SSO_TARGET_NAME.ocr;
+  const select = { id: true, url: true, nombre: true } as const;
+
+  const byPort = await prisma.submodulo.findFirst({
+    where: { url: { contains: puerto }, activo: true },
+    select,
+  });
+  if (byPort) return byPort;
+
+  return prisma.submodulo.findFirst({
+    where: {
+      activo: true,
+      url: { not: null },
+      nombre: { contains: nameHint, mode: 'insensitive' },
+    },
+    orderBy: { id: 'asc' },
+    select,
+  });
+}
+
 export class AuthController {
   async login(req: Request, res: Response) {
     try {
@@ -93,24 +135,8 @@ export class AuthController {
         });
       }
 
-      // 2. Mapear el target al puerto del submódulo
-      const targetPortMap: Record<string, string> = {
-        ocr: '5181',
-        formulario: '5182',
-        emision: '5183',
-        pagos: '5184',
-      };
-
-      const puerto = targetPortMap[target] ?? targetPortMap['ocr'];
-
-      // 3. Buscar el submódulo cuya URL contenga el puerto correspondiente
-      const submodulo = await prisma.submodulo.findFirst({
-        where: {
-          url: { contains: puerto },
-          activo: true,
-        },
-        select: { id: true, url: true, nombre: true },
-      });
+      // 2. Resolver submódulo por target (puerto en URL o nombre — soporta dominios sin :5181)
+      const submodulo = await findSubmoduloForSsoTarget(target);
 
       if (!submodulo) {
         return res.status(404).json({
@@ -119,7 +145,7 @@ export class AuthController {
         });
       }
 
-      // 4. Buscar el tenantToken ya generado para empresa + submódulo
+      // 3. Buscar el tenantToken ya generado para empresa + submódulo
       const empresaSubmodulo = await (
         prisma as unknown as {
           empresaSubmodulo: {
@@ -143,6 +169,32 @@ export class AuthController {
           message: `El servicio "${target}" no está activado para esta empresa.`,
         });
       }
+
+      // Renovar ventana de sesión al entrar desde app externa (evita "expirada por inactividad")
+      const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
+      await (
+        prisma as unknown as {
+          empresaSubmodulo: {
+            update: (args: {
+              where: {
+                empresaId_submoduloId: {
+                  empresaId: number;
+                  submoduloId: number;
+                };
+              };
+              data: { tokenExpiresAt: Date };
+            }) => Promise<unknown>;
+          };
+        }
+      ).empresaSubmodulo.update({
+        where: {
+          empresaId_submoduloId: {
+            empresaId: empresa.id,
+            submoduloId: submodulo.id,
+          },
+        },
+        data: { tokenExpiresAt: new Date(Date.now() + TOKEN_TTL_MS) },
+      });
 
       // 5. Generar token dinámico con metadata
       const { generateSsoToken } = await import('../../utils/tenant-token');

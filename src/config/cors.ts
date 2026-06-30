@@ -38,15 +38,28 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
   'http://192.168.10.213:4200',
 
   // --- QASys2000 / SysIP (La Mundial) ---
+  'http://192.168.8.120:91', // QASys2000 — ambiente interno srv001 (Apache)
   'https://qasys2000.lamundialdeseguros.com',
   'http://qasys2000.lamundialdeseguros.com',
+
+  // --- srv001 HTTPS sslip.io (frontends) ---
+  'https://nexus-admin.200-75-131-138.sslip.io',
+  'https://ocr.200-75-131-138.sslip.io',
+  'https://form.200-75-131-138.sslip.io',
+  'https://emision.200-75-131-138.sslip.io',
+  'https://pagos.200-75-131-138.sslip.io',
+  'https://rcv.200-75-131-138.sslip.io',
 ];
 
 /**
  * Sufijos de hostname confiables (subdominios de La Mundial).
  * Ej.: qasys2000.lamundialdeseguros.com, sys2000.lamundialdeseguros.com
  */
-const TRUSTED_HOST_SUFFIXES: string[] = ['lamundialdeseguros.com'];
+const TRUSTED_HOST_SUFFIXES: string[] = [
+  'lamundialdeseguros.com',
+  // srv001 dev HTTPS vía sslip.io (Caddy + Let's Encrypt)
+  '200-75-131-138.sslip.io',
+];
 
 /** Cabeceras permitidas en preflight (Angular envía x-api-key) */
 export const CORS_ALLOWED_HEADERS: string[] = [
