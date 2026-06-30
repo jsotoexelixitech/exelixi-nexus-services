@@ -1,63 +1,83 @@
 # QASys2000 → Nexus API (HTTPS / Mixed Content)
 
+> **Producción La Mundial:** usar prefijos en  
+> **`https://cierrelmds.exelixitech.com`** — ver [CIERRELMDS-HTTPS-PREFIJOS.md](./CIERRELMDS-HTTPS-PREFIJOS.md).
+
 ## Problema
 
 QASys2000 corre en **HTTPS** (`https://qasys2000.lamundialdeseguros.com`) pero el Angular llama a nexus-api en **HTTP** (`http://192.168.8.120:3092`).
 
-El navegador **bloquea** esa petición (Mixed Content) antes de CORS. Por eso ves:
+El navegador **bloquea** esa petición (Mixed Content) antes de CORS.
 
-- `Mixed Content: ... requested an insecure XMLHttpRequest endpoint`
-- `No 'Access-Control-Allow-Origin' header` (efecto secundario)
+## Solución activa — Caddy + sslip.io (srv001)
 
-**CORS solo no basta:** aunque nexus-api permita el origen, el browser no deja HTTPS → HTTP.
+Sin DNS La Mundial: dominios wildcard públicos que apuntan a la IP del servidor.
 
-## Solución — Nginx HTTPS hacia nexus-api
+| Servicio      | URL HTTPS                                                    |
+| ------------- | ------------------------------------------------------------ |
+| Nexus API     | `https://nexus-api.200-75-131-138.sslip.io`                  |
+| Nexus Admin   | `https://nexus-admin.200-75-131-138.sslip.io`                |
+| OCR web / api | `https://ocr.200-75-131-138.sslip.io` / `ocr-api...`         |
+| Formulario    | `https://form.200-75-131-138.sslip.io` / `form-api...`       |
+| Pagos         | `https://pagos.200-75-131-138.sslip.io` / `pagos-api...`     |
+| Emisión       | `https://emision.200-75-131-138.sslip.io` / `emision-api...` |
+| RCV           | `https://rcv.200-75-131-138.sslip.io` / `rcv-api...`         |
 
-Exponer nexus-api por **HTTPS** (mismo certificado La Mundial o subdominio):
+IP pública srv001: **200.75.131.138**
 
-```nginx
-server {
-  listen 443 ssl;
-  server_name nexus-api.lamundialdeseguros.com;
+### Aplicar en srv001
 
-  ssl_certificate     /ruta/fullchain.pem;
-  ssl_certificate_key /ruta/privkey.pem;
+```bash
+# Copiar Caddyfile (desde repo o pegar contenido de docs/srv001-caddy-sslip.Caddyfile)
+sudo cp ~/nexus-api/docs/srv001-caddy-sslip.Caddyfile /etc/caddy/Caddyfile
+# o si no está en el servidor, scp desde PC local
 
-  location / {
-    proxy_pass http://192.168.8.120:3092;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
-}
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl restart caddy
+sleep 20
+
+# Verificar DNS + HTTPS
+dig +short nexus-api.200-75-131-138.sslip.io @8.8.8.8
+curl -sI https://nexus-api.200-75-131-138.sslip.io/api/health | head -8
 ```
 
-Angular usaría:
+### Angular QASys2000
 
 ```typescript
 // ❌ Bloqueado (mixed content)
 'http://192.168.8.120:3092/api/auth/sso-delegate';
 
-// ✅ HTTPS
-'https://nexus-api.lamundialdeseguros.com/api/auth/sso-delegate';
+// ✅ HTTPS (sslip.io)
+'https://nexus-api.200-75-131-138.sslip.io/api/auth/sso-delegate';
 ```
 
-CORS en nexus-api ya permite `*.lamundialdeseguros.com` (ver `src/config/cors.ts`).
+CORS: origen `qasys2000.lamundialdeseguros.com` ya permitido; frontends en `*.200-75-131-138.sslip.io` vía `TRUSTED_HOST_SUFFIXES` en `src/config/cors.ts`.
 
-## Deploy nexus-api (CORS)
+### Nexus Admin build
 
 ```bash
-cd ~/nexus-api && git pull origin main && npm run build && pm2 restart nexus-api
+export VITE_NEXUS_API_URL=https://nexus-api.200-75-131-138.sslip.io
+cd ~/nexus-admin && npm run build && pm2 restart nexus-admin
 ```
 
-## Alternativa — Proxy en backend propio de QASys2000
+### Deploy nexus-api (CORS sslip.io)
 
-Si QASys2000 tiene **otro** backend (no SysIP-backend), puede reenviar `sso-delegate` server-to-server. El browser llama HTTPS mismo origen; el backend llama HTTP a `192.168.8.120:3092`.
+```bash
+cd ~/nexus-api && git pull && npm run build && pm2 restart nexus-api
+```
+
+## Futuro — DNS La Mundial
+
+Cuando infra cree registros A, migrar a:
+
+- `https://nexus-api.lamundialdeseguros.com`
+- `https://nexus-admin.lamundialdeseguros.com`
 
 ## Checklist
 
-1. DNS + SSL para URL HTTPS de nexus-api
-2. Deploy nexus-api con fix CORS
-3. Cambiar URL en Angular de HTTP IP → HTTPS
-4. Verificar que usuarios lleguen a `192.168.8.120` (VPN/red La Mundial) o que el proxy HTTPS sea público
+1. Apache detenido (puerto 80 libre para Caddy)
+2. Caddyfile sslip.io aplicado y `systemctl status caddy` active
+3. `dig` resuelve `200.75.131.138`
+4. Deploy nexus-api con CORS sslip.io
+5. Angular: URL HTTPS sslip.io
+6. Puertos 80/443 abiertos en firewall hacia srv001
