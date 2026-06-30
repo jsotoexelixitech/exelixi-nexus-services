@@ -68,12 +68,16 @@ La mayoría de los endpoints administrativos requieren:
     },
     servers: [
       {
-        url: `http://localhost:${env.PORT}`,
-        description: 'Servidor de desarrollo (Local)',
+        url: 'https://cierrelmds.exelixitech.com/nexus-api',
+        description: 'Producción — cierrelmds (prefijo /nexus-api/)',
       },
       {
-        url: 'http://192.168.8.120:3091',
-        description: 'Servidor de Staging',
+        url: `http://localhost:${env.PORT}`,
+        description: 'Desarrollo local',
+      },
+      {
+        url: 'http://192.168.8.120:3092',
+        description: 'Servidor interno srv001',
       },
     ],
     components: {
