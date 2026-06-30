@@ -102,18 +102,57 @@ export class AccessService {
       };
     }
 
-    // Corte por inactividad: si tokenExpiresAt venció, la sesión expiró
+    // Corte por inactividad: si tokenExpiresAt venció Y la empresa NO está activa → bloquear.
+    // Si la empresa está activa, el verify renueva la ventana automáticamente
+    // (el NexusGuard llama verify cada 30 s — eso es suficiente para mantener la sesión viva).
     if (
       empresaSubmodulo.tokenExpiresAt &&
       empresaSubmodulo.tokenExpiresAt < new Date()
     ) {
-      logger.info(
-        `verify: sesión expirada por inactividad empresa=${empresaId} sub=${submoduloId}`,
-      );
-      return {
-        active: false,
-        reason: 'Sesión expirada por inactividad. Reconecte la aplicación.',
-      };
+      // Empresa activa → renovar sesión en lugar de bloquear
+      if (empresa.activo) {
+        const newExpiry = new Date(Date.now() + TOKEN_TTL_MS);
+        await (
+          prisma as unknown as {
+            empresaSubmodulo: {
+              update: (args: {
+                where: { id: number };
+                data: { tokenExpiresAt: Date };
+              }) => Promise<unknown>;
+            };
+          }
+        ).empresaSubmodulo.update({
+          where: { id: empresaSubmodulo.id },
+          data: { tokenExpiresAt: newExpiry },
+        });
+        logger.info(
+          `verify: sesión renovada (empresa activa) empresa=${empresaId} sub=${submoduloId} expires=${newExpiry.toISOString()}`,
+        );
+      } else {
+        logger.info(
+          `verify: sesión expirada por inactividad empresa=${empresaId} sub=${submoduloId}`,
+        );
+        return {
+          active: false,
+          reason: 'Sesión expirada por inactividad. Reconecte la aplicación.',
+        };
+      }
+    } else if (empresa.activo && empresaSubmodulo.tokenExpiresAt) {
+      // Sesión aún vigente → deslizar ventana +8h en cada verify (mantiene activo el flujo de 4 pasos)
+      const newExpiry = new Date(Date.now() + TOKEN_TTL_MS);
+      await (
+        prisma as unknown as {
+          empresaSubmodulo: {
+            update: (args: {
+              where: { id: number };
+              data: { tokenExpiresAt: Date };
+            }) => Promise<unknown>;
+          };
+        }
+      ).empresaSubmodulo.update({
+        where: { id: empresaSubmodulo.id },
+        data: { tokenExpiresAt: newExpiry },
+      });
     }
 
     logger.info(
