@@ -202,8 +202,9 @@ export class AuthController {
       const dynamicToken = generateSsoToken(empresa.id, submodulo.id, metadata);
       const redirectUrl = buildAccessUrl(submodulo.url!, dynamicToken);
 
-      // prettier-ignore
-      logger.info(`ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id} body=${JSON.stringify(rawMetadata)}`);
+      const ssoMsg = 'sse ' + empresa.id + '/' + target + '/' + submodulo.id;
+      logger.info('ssoDelegate ' + ssoMsg);
+      logger.info('sso-body ' + JSON.stringify(rawMetadata));
 
       return res.json({
         success: true,
