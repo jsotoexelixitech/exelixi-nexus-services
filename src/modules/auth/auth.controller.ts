@@ -200,12 +200,13 @@ export class AuthController {
       const { generateSsoToken, buildAccessUrl } =
         await import('../../utils/tenant-token');
       const dynamicToken = generateSsoToken(empresa.id, submodulo.id, metadata);
-
       const redirectUrl = buildAccessUrl(submodulo.url!, dynamicToken);
 
-      // Construir mensaje en variable para que el formatter no lo parta en dos líneas
-      const logMsg = `ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id} metadata=${JSON.stringify(metadata)}`;
-      logger.info(logMsg);
+      // Log estructurado: message en una línea, metadata como campo JSON separado
+      logger.info(
+        `ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id}`,
+        { metadata },
+      );
 
       return res.json({
         success: true,
