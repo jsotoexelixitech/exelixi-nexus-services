@@ -203,9 +203,9 @@ export class AuthController {
 
       const redirectUrl = buildAccessUrl(submodulo.url!, dynamicToken);
 
-      logger.info(
-        `ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id} metadata=${JSON.stringify(metadata)}`,
-      );
+      // Construir mensaje en variable para que el formatter no lo parta en dos líneas
+      const logMsg = `ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id} metadata=${JSON.stringify(metadata)}`;
+      logger.info(logMsg);
 
       return res.json({
         success: true,
