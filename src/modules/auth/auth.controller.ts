@@ -33,12 +33,12 @@ const SSO_TARGET_PORT: Record<string, string> = {
 const SSO_TARGET_NAME: Record<string, string> = {
   ocr: 'OCR Documentos',
   formulario: 'Formulario',
-  emision: 'Emisión',
+  emision: 'Emisi?n',
   pagos: 'Pagos',
 };
 
 /**
- * Resuelve el submódulo destino del SSO: primero por puerto en URL, luego por nombre.
+ * Resuelve el subm?dulo destino del SSO: primero por puerto en URL, luego por nombre.
  */
 async function findSubmoduloForSsoTarget(target: string) {
   const key = target in SSO_TARGET_PORT ? target : 'ocr';
@@ -109,7 +109,7 @@ export class AuthController {
         return res.status(400).json({
           success: false,
           error: 'invalid_metadata',
-          message: 'Metadata con formato inválido.',
+          message: 'Metadata con formato inv?lido.',
           details: metaParsed.error.issues,
         });
       }
@@ -124,28 +124,28 @@ export class AuthController {
       if (!empresa) {
         return res.status(401).json({
           success: false,
-          message: 'Acceso denegado: API Key inválida o no registrada.',
+          message: 'Acceso denegado: API Key inv?lida o no registrada.',
         });
       }
 
       if (!empresa.activo) {
         return res.status(403).json({
           success: false,
-          message: 'Acceso denegado: La empresa está inactiva.',
+          message: 'Acceso denegado: La empresa est? inactiva.',
         });
       }
 
-      // 2. Resolver submódulo por target (puerto en URL o nombre — soporta dominios sin :5181)
+      // 2. Resolver subm?dulo por target (puerto en URL o nombre ? soporta dominios sin :5181)
       const submodulo = await findSubmoduloForSsoTarget(target);
 
       if (!submodulo) {
         return res.status(404).json({
           success: false,
-          message: `No se encontró un submódulo activo para el target "${target}".`,
+          message: `No se encontr? un subm?dulo activo para el target "${target}".`,
         });
       }
 
-      // 3. Buscar el tenantToken ya generado para empresa + submódulo
+      // 3. Buscar el tenantToken ya generado para empresa + subm?dulo
       const empresaSubmodulo = await (
         prisma as unknown as {
           empresaSubmodulo: {
@@ -166,11 +166,11 @@ export class AuthController {
       if (!empresaSubmodulo || !empresaSubmodulo.activo) {
         return res.status(403).json({
           success: false,
-          message: `El servicio "${target}" no está activado para esta empresa.`,
+          message: `El servicio "${target}" no est? activado para esta empresa.`,
         });
       }
 
-      // Renovar ventana de sesión al entrar desde app externa (evita "expirada por inactividad")
+      // Renovar ventana de sesi?n al entrar desde app externa (evita "expirada por inactividad")
       const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
       await (
         prisma as unknown as {
@@ -196,7 +196,7 @@ export class AuthController {
         data: { tokenExpiresAt: new Date(Date.now() + TOKEN_TTL_MS) },
       });
 
-      // 5. Generar token dinámico con metadata
+      // 5. Generar token din?mico con metadata
       const { generateSsoToken, buildAccessUrl } =
         await import('../../utils/tenant-token');
       const dynamicToken = generateSsoToken(empresa.id, submodulo.id, metadata);
@@ -204,7 +204,7 @@ export class AuthController {
       const redirectUrl = buildAccessUrl(submodulo.url!, dynamicToken);
 
       logger.info(
-        `ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id}`,
+        `ssoDelegate: empresa=${empresa.id} target=${target} sub=${submodulo.id} metadata=${JSON.stringify(metadata)}`,
       );
 
       return res.json({
