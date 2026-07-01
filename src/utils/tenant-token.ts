@@ -65,12 +65,19 @@ export function generateSsoToken(
 /**
  * Verifica la firma del tenant token y retorna el payload.
  * Lanza un error si la firma es inválida o el tipo no coincide.
+ *
+ * @param options.allowExpired  Si es true, valida la firma pero ignora la
+ *   expiración (`exp`). Se usa en /verify para deslizar la sesión: el token
+ *   de sesión expira en 1 h, pero mientras la empresa siga activa el verify
+ *   (cada 30 s) reemite un token fresco. La firma se sigue verificando.
  */
-export function verifyTenantToken(token: string): TenantTokenPayload {
-  const decoded = jwt.verify(
-    token,
-    env.TENANT_TOKEN_SECRET,
-  ) as TenantTokenPayload;
+export function verifyTenantToken(
+  token: string,
+  options?: { allowExpired?: boolean },
+): TenantTokenPayload {
+  const decoded = jwt.verify(token, env.TENANT_TOKEN_SECRET, {
+    ignoreExpiration: options?.allowExpired ?? false,
+  }) as TenantTokenPayload;
 
   if (decoded.type !== 'tenant_access') {
     throw new Error('Tipo de token inválido');

@@ -20,7 +20,11 @@ export class AccessService {
   async verify(token: string) {
     let payload: ReturnType<typeof verifyTenantToken>;
     try {
-      payload = verifyTenantToken(token);
+      // allowExpired: el nexus_token del navegador expira en 1 h, pero verify
+      // se llama cada 30 s para deslizar la sesión. Se valida la firma (no se
+      // puede falsificar) e ignora solo la expiración; el corte real por
+      // inactividad lo gobierna tokenExpiresAt (+8 h) y empresa.activo.
+      payload = verifyTenantToken(token, { allowExpired: true });
     } catch {
       throw new AppError('Token de acceso inválido o manipulado.', 401);
     }
@@ -155,12 +159,22 @@ export class AccessService {
       });
     }
 
+    // Token deslizante: se reemite un nexus_token fresco (1 h) en cada verify,
+    // preservando la metadata original. El frontend lo guarda en sessionStorage,
+    // de modo que la sesión nunca caduca mientras la pestaña esté abierta y la
+    // empresa siga activa (sin recargas ni reconexión manual).
+    const refreshedToken = payload.metadata
+      ? generateSsoToken(empresaId, submoduloId, payload.metadata)
+      : generateAccessToken(empresaId, submoduloId);
+
     logger.info(
       `verify: acceso concedido empresa=${empresaId} submodulo=${submoduloId}`,
     );
 
     return {
       active: true,
+      access_token: refreshedToken,
+      expires_in: 3600,
       empresa: {
         id: empresa.id,
         nombre: empresa.nombre,
@@ -170,7 +184,9 @@ export class AccessService {
         id: submodulo.id,
         nombre: submodulo.nombre,
         url: submodulo.url,
-        accessUrl: submodulo.url ? buildAccessUrl(submodulo.url, token) : null,
+        accessUrl: submodulo.url
+          ? buildAccessUrl(submodulo.url, refreshedToken)
+          : null,
       },
     };
   }
