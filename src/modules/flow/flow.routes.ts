@@ -15,6 +15,7 @@ import {
   getSession,
   saveSession,
   advanceSession,
+  navigateSession,
 } from './flow.service';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import { verifyTenantToken } from '../../utils/tenant-token';
@@ -152,6 +153,36 @@ router.post('/done/:sid', async (req: Request, res: Response) => {
   const result = advanceSession(req.params.sid, fromOrder, patch);
   if (!result) {
     res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
+    return;
+  }
+  res.json({ success: true, data: result });
+});
+
+/**
+ * POST /api/flow/navigate/:sid?to=N
+ * Guarda estado y redirige a un módulo anterior o posterior del flujo.
+ * Público (stepper adelante/atrás en los frontends).
+ */
+router.post('/navigate/:sid', async (req: Request, res: Response) => {
+  const toOrder = Number(req.query.to ?? 0);
+  if (!toOrder || toOrder < 1) {
+    res.status(400).json({
+      success: false,
+      message: 'Se requiere query to=N (orden del módulo).',
+    });
+    return;
+  }
+  const patch =
+    req.body && typeof req.body === 'object'
+      ? (req.body as Record<string, unknown>)
+      : {};
+  const result = navigateSession(req.params.sid, toOrder, patch);
+  if (!result) {
+    res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
+    return;
+  }
+  if ('error' in result) {
+    res.status(400).json({ success: false, message: result.error });
     return;
   }
   res.json({ success: true, data: result });

@@ -338,6 +338,48 @@ export function advanceSession(
   return { finished: true, sid };
 }
 
+/**
+ * Navega a un módulo del flujo (adelante o atrás) guardando el estado actual.
+ * No altera el historial de completados; solo cambia `current`.
+ */
+export function navigateSession(
+  sid: string,
+  toOrder: number,
+  patch: Record<string, unknown>,
+) {
+  const s = SESSIONS.get(sid);
+  if (!s) return null;
+
+  if (patch && typeof patch === 'object') {
+    s.data = { ...s.data, ...patch };
+  }
+
+  const slot = s.slots.find((sl) => sl.order === toOrder);
+  if (!slot) {
+    return {
+      error: `Módulo con orden ${toOrder} no está activo en esta sesión.`,
+    };
+  }
+
+  s.current = toOrder;
+  s.updatedAt = Date.now();
+
+  logger.info(`[flow] navigate sid=${sid} → order=${toOrder} (${slot.nombre})`);
+
+  syncSessionToDb(sid).catch((e) =>
+    logger.error(`Error sync DB: ${e.message}`),
+  );
+
+  return {
+    url: `${slot.accessUrl}&sid=${sid}`,
+    module: {
+      order: slot.order,
+      submoduloId: slot.submoduloId,
+      nombre: slot.nombre,
+    },
+  };
+}
+
 // ─── Sincronización a Base de Datos (Persistencia Real) ───────────────────────
 
 async function syncSessionToDb(sid: string) {
