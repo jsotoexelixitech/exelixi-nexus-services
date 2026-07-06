@@ -11,13 +11,53 @@ import logger from '../../utils/logger';
  *  Campos desconocidos se eliminan con strip(). */
 const ssoMetadataSchema = z
   .object({
-    cproductor: z.string().max(20).optional(),
+    cproductor: z.union([z.string(), z.number()]).optional(),
     canal: z.string().max(50).optional(),
     cramo: z.number().int().positive().optional(),
-    cusuario: z.string().max(60).optional(),
+    cusuario: z.union([z.string(), z.number()]).optional(),
     ctipo: z.number().int().nonnegative().optional(),
+    ccanalalt_in: z.union([z.string(), z.number()]).optional(),
+    cscanalalt_in: z.union([z.string(), z.number()]).optional(),
+    cgestor_in: z.string().max(120).optional(),
   })
   .strip();
+
+/** Campos SSO que pueden venir en el root del body (apps Angular/La Mundial). */
+const SSO_ROOT_METADATA_KEYS = [
+  'cproductor',
+  'cusuario',
+  'cramo',
+  'ctipo',
+  'canal',
+  'ccanalalt_in',
+  'cscanalalt_in',
+  'cgestor_in',
+] as const;
+
+/**
+ * Fusiona metadata anidada + campos en la ra?z del body SSO.
+ * Ignora strings vac?os para no pisar defaults del m?dulo.
+ */
+function mergeSsoMetadata(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const nested =
+    body.metadata &&
+    typeof body.metadata === 'object' &&
+    !Array.isArray(body.metadata)
+      ? (body.metadata as Record<string, unknown>)
+      : {};
+
+  const fromRoot: Record<string, unknown> = {};
+  for (const key of SSO_ROOT_METADATA_KEYS) {
+    const value = body[key];
+    if (value !== undefined && value !== null && value !== '') {
+      fromRoot[key] = value;
+    }
+  }
+
+  return { ...nested, ...fromRoot };
+}
 
 const authService = new AuthService();
 
@@ -33,12 +73,12 @@ const SSO_TARGET_PORT: Record<string, string> = {
 const SSO_TARGET_NAME: Record<string, string> = {
   ocr: 'OCR Documentos',
   formulario: 'Formulario',
-  emision: 'Emisión',
+  emision: 'Emisi?n',
   pagos: 'Pagos',
 };
 
 /**
- * Resuelve el submódulo destino del SSO: primero por puerto en URL, luego por nombre.
+ * Resuelve el subm?dulo destino del SSO: primero por puerto en URL, luego por nombre.
  */
 async function findSubmoduloForSsoTarget(target: string) {
   const key = target in SSO_TARGET_PORT ? target : 'ocr';
@@ -91,25 +131,25 @@ export class AuthController {
 
   async ssoDelegate(req: Request, res: Response) {
     try {
-      const { metadata: rawMetadata, target = 'ocr' } = req.body;
+      const { target = 'ocr' } = req.body;
       const apiKey = req.headers['x-api-key'];
+      const mergedRaw = mergeSsoMetadata(req.body as Record<string, unknown>);
 
-      if (!rawMetadata || !apiKey) {
+      if (!apiKey) {
         return res.status(400).json({
           success: false,
           error: 'invalid_request',
-          message:
-            'Faltan campos obligatorios (metadata) o el header x-api-key.',
+          message: 'Falta el header x-api-key.',
         });
       }
 
       // Validar y sanitizar metadata con Zod (campos desconocidos descartados)
-      const metaParsed = ssoMetadataSchema.safeParse(rawMetadata);
+      const metaParsed = ssoMetadataSchema.safeParse(mergedRaw);
       if (!metaParsed.success) {
         return res.status(400).json({
           success: false,
           error: 'invalid_metadata',
-          message: 'Metadata con formato inválido.',
+          message: 'Metadata con formato inv?lido.',
           details: metaParsed.error.issues,
         });
       }
@@ -124,28 +164,28 @@ export class AuthController {
       if (!empresa) {
         return res.status(401).json({
           success: false,
-          message: 'Acceso denegado: API Key inválida o no registrada.',
+          message: 'Acceso denegado: API Key inv?lida o no registrada.',
         });
       }
 
       if (!empresa.activo) {
         return res.status(403).json({
           success: false,
-          message: 'Acceso denegado: La empresa está inactiva.',
+          message: 'Acceso denegado: La empresa est? inactiva.',
         });
       }
 
-      // 2. Resolver submódulo por target (puerto en URL o nombre — soporta dominios sin :5181)
+      // 2. Resolver subm?dulo por target (puerto en URL o nombre ? soporta dominios sin :5181)
       const submodulo = await findSubmoduloForSsoTarget(target);
 
       if (!submodulo) {
         return res.status(404).json({
           success: false,
-          message: `No se encontró un submódulo activo para el target "${target}".`,
+          message: `No se encontr? un subm?dulo activo para el target "${target}".`,
         });
       }
 
-      // 3. Buscar el tenantToken ya generado para empresa + submódulo
+      // 3. Buscar el tenantToken ya generado para empresa + subm?dulo
       const empresaSubmodulo = await (
         prisma as unknown as {
           empresaSubmodulo: {
@@ -166,11 +206,11 @@ export class AuthController {
       if (!empresaSubmodulo || !empresaSubmodulo.activo) {
         return res.status(403).json({
           success: false,
-          message: `El servicio "${target}" no está activado para esta empresa.`,
+          message: `El servicio "${target}" no est? activado para esta empresa.`,
         });
       }
 
-      // Renovar ventana de sesión al entrar desde app externa (evita "expirada por inactividad")
+      // Renovar ventana de sesi?n al entrar desde app externa (evita "expirada por inactividad")
       const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
       await (
         prisma as unknown as {
@@ -196,7 +236,7 @@ export class AuthController {
         data: { tokenExpiresAt: new Date(Date.now() + TOKEN_TTL_MS) },
       });
 
-      // 5. Generar token dinámico con metadata
+      // 5. Generar token din?mico con metadata
       const { generateSsoToken, buildAccessUrl } =
         await import('../../utils/tenant-token');
       const dynamicToken = generateSsoToken(empresa.id, submodulo.id, metadata);
@@ -204,7 +244,7 @@ export class AuthController {
 
       const ssoMsg = 'sse ' + empresa.id + '/' + target + '/' + submodulo.id;
       logger.info('ssoDelegate ' + ssoMsg);
-      logger.info('sso-body ' + JSON.stringify(rawMetadata));
+      logger.info('sso-body ' + JSON.stringify(mergedRaw));
 
       return res.json({
         success: true,
