@@ -8,6 +8,11 @@
 
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
+import {
+  appendProductToUrl,
+  resolveFlowProduct,
+  type FlowProduct,
+} from '../../utils/flow-product';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -151,12 +156,24 @@ export async function startFlowFromToken(
   // Buscar el grupo al que pertenece este submódulo
   const submodulo = await prisma.submodulo.findUnique({
     where: { id: submoduloId },
-    select: { id: true, moduloId: true },
+    select: {
+      id: true,
+      moduloId: true,
+      nombre: true,
+      url: true,
+      modulo: { select: { nombre: true } },
+    },
   });
 
   if (!submodulo) {
     return { error: 'Submódulo no encontrado.' };
   }
+
+  const flowProduct = resolveFlowProduct({
+    submoduloUrl: submodulo.url,
+    submoduloNombre: submodulo.nombre,
+    moduloNombre: submodulo.modulo?.nombre,
+  });
 
   const moduloGroupId = submodulo.moduloId;
   const rawSlots = await getActiveSlots(empresaId, moduloGroupId);
@@ -196,20 +213,23 @@ export async function startFlowFromToken(
     slots,
     current: slots[0].order,
     history: [],
-    data: metadata ? { metadata } : {},
+    data: {
+      product: flowProduct,
+      ...(metadata ? { metadata } : {}),
+    },
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
   SESSIONS.set(sid, session);
 
   logger.info(
-    `[flow] auto-start sid=${sid} empresa=${empresaId} desde token submodulo=${submoduloId} slots=${slots.length}`,
+    `[flow] auto-start sid=${sid} empresa=${empresaId} desde token submodulo=${submoduloId} product=${flowProduct} slots=${slots.length}`,
   );
 
   const first = slots[0];
   return {
     sid,
-    firstUrl: `${first.accessUrl}&sid=${sid}`,
+    firstUrl: appendProductToUrl(`${first.accessUrl}&sid=${sid}`, flowProduct),
     totalActive: slots.length,
     alreadyChained: true,
   };
@@ -320,7 +340,10 @@ export function advanceSession(
     );
     return {
       finished: false,
-      nextUrl: `${nextSlot.accessUrl}&sid=${sid}`,
+      nextUrl: appendProductToUrl(
+        `${nextSlot.accessUrl}&sid=${sid}`,
+        (s.data.product as FlowProduct) || 'rcv',
+      ),
       nextModule: {
         order: nextSlot.order,
         submoduloId: nextSlot.submoduloId,
@@ -371,7 +394,10 @@ export function navigateSession(
   );
 
   return {
-    url: `${slot.accessUrl}&sid=${sid}`,
+    url: appendProductToUrl(
+      `${slot.accessUrl}&sid=${sid}`,
+      (s.data.product as FlowProduct) || 'rcv',
+    ),
     module: {
       order: slot.order,
       submoduloId: slot.submoduloId,

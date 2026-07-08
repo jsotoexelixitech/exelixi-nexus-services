@@ -7,6 +7,7 @@ import {
 } from '../../utils/tenant-token';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
+import { resolveFlowProduct } from '../../utils/flow-product';
 
 /** 8 horas — ventana de renovación por cada petición activa */
 const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
@@ -48,7 +49,14 @@ export class AccessService {
 
     const submodulo = await prisma.submodulo.findUnique({
       where: { id: submoduloId },
-      select: { id: true, nombre: true, url: true, activo: true },
+      select: {
+        id: true,
+        nombre: true,
+        url: true,
+        activo: true,
+        moduloId: true,
+        modulo: { select: { nombre: true } },
+      },
     });
 
     if (!submodulo || !submodulo.activo) {
@@ -56,12 +64,7 @@ export class AccessService {
       return { active: false, reason: 'Servicio no disponible.' };
     }
 
-    const moduloId = (
-      await prisma.submodulo.findUnique({
-        where: { id: submoduloId },
-        select: { moduloId: true },
-      })
-    )?.moduloId;
+    const moduloId = submodulo.moduloId;
 
     if (moduloId) {
       const empresaModulo = await prisma.empresaModulo.findFirst({
@@ -171,8 +174,15 @@ export class AccessService {
       `verify: acceso concedido empresa=${empresaId} submodulo=${submoduloId}`,
     );
 
+    const flowProduct = resolveFlowProduct({
+      submoduloUrl: submodulo.url,
+      submoduloNombre: submodulo.nombre,
+      moduloNombre: submodulo.modulo?.nombre,
+    });
+
     return {
       active: true,
+      product: flowProduct,
       access_token: refreshedToken,
       expires_in: 3600,
       empresa: {
@@ -184,6 +194,7 @@ export class AccessService {
         id: submodulo.id,
         nombre: submodulo.nombre,
         url: submodulo.url,
+        moduloNombre: submodulo.modulo?.nombre ?? null,
         accessUrl: submodulo.url
           ? buildAccessUrl(submodulo.url, refreshedToken)
           : null,
