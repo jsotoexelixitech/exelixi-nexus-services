@@ -12,6 +12,7 @@ import { Router, Request, Response } from 'express';
 import {
   startFlow,
   startFlowFromToken,
+  startCheckoutLink,
   getSession,
   saveSession,
   advanceSession,
@@ -104,6 +105,60 @@ router.post('/start-from-token', async (req: Request, res: Response) => {
 
   res.json({ success: true, data: result });
 });
+
+/**
+ * POST /api/flow/checkout-link
+ * Crea sesión con datos de checkout y devuelve URL directa a Pagos.
+ * Requiere x-api-key (server-to-server).
+ *
+ * Body: {
+ *   empresaId, moduloGroupId,
+ *   checkout: { title, totalVes, lines?, totalUsd?, exchangeRate? },
+ *   rules?: { requirePayment?, methods?, onSuccess? },
+ *   payload?: object,
+ *   payer?: object,
+ *   ...campos legacy wizard (selectedPlan, vehicle, tomador, etc.)
+ * }
+ */
+router.post(
+  '/checkout-link',
+  apiKeyGuard,
+  async (req: Request, res: Response) => {
+    const { empresaId, moduloGroupId } = req.body as {
+      empresaId?: number;
+      moduloGroupId?: number;
+    };
+
+    if (!empresaId || !moduloGroupId) {
+      res.status(400).json({
+        success: false,
+        message: 'Se requiere empresaId y moduloGroupId.',
+      });
+      return;
+    }
+
+    const patch =
+      req.body && typeof req.body === 'object'
+        ? ({ ...req.body } as Record<string, unknown>)
+        : {};
+
+    delete patch.empresaId;
+    delete patch.moduloGroupId;
+
+    const result = await startCheckoutLink(
+      Number(empresaId),
+      Number(moduloGroupId),
+      patch,
+    );
+
+    if ('error' in result) {
+      res.status(400).json({ success: false, message: result.error });
+      return;
+    }
+
+    res.json({ success: true, data: result });
+  },
+);
 
 /**
  * GET /api/flow/session/:sid

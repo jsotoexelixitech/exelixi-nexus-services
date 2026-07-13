@@ -281,6 +281,113 @@ export async function startFlow(empresaId: number, moduloGroupId: number) {
   };
 }
 
+/**
+ * Crea una sesión de checkout directo en Pagos (u otro submódulo final).
+ * El sistema externo envía checkout + reglas; el cliente abre checkoutUrl.
+ */
+export async function startCheckoutLink(
+  empresaId: number,
+  moduloGroupId: number,
+  patch: Record<string, unknown>,
+): Promise<
+  | { error: string }
+  | {
+      sid: string;
+      checkoutUrl: string;
+      pagosModule: { order: number; nombre: string };
+    }
+> {
+  const checkout = patch.checkout as Record<string, unknown> | undefined;
+  const totalVes = Number(checkout?.totalVes);
+  if (!checkout || !Number.isFinite(totalVes) || totalVes <= 0) {
+    return {
+      error: 'Se requiere checkout.totalVes positivo.',
+    };
+  }
+
+  const normalized: Record<string, unknown> = { ...patch };
+  if (normalized.rules && !normalized.checkoutRules) {
+    normalized.checkoutRules = normalized.rules;
+    delete normalized.rules;
+  }
+  if (normalized.payer && !normalized.checkoutPayer) {
+    normalized.checkoutPayer = normalized.payer;
+    delete normalized.payer;
+  }
+  if (normalized.payload && !normalized.checkoutPayload) {
+    normalized.checkoutPayload = normalized.payload;
+    delete normalized.payload;
+  }
+
+  const rawSlots = await getActiveSlots(empresaId, moduloGroupId);
+  if (rawSlots.length === 0) {
+    return { error: 'No hay submódulos activos para esta empresa.' };
+  }
+
+  const pagosRaw =
+    rawSlots.find((s) => /pago/i.test(s.nombre)) ??
+    rawSlots[rawSlots.length - 1];
+
+  const slots: SubmoduloSlot[] = await Promise.all(
+    rawSlots.map(async (s) => ({
+      ...s,
+      accessUrl: await buildAccessUrl(empresaId, s.submoduloId, s.accessUrl),
+    })),
+  );
+
+  const pagosSlot = slots.find((s) => s.submoduloId === pagosRaw.submoduloId);
+  if (!pagosSlot) {
+    return { error: 'No se encontró el submódulo de Pagos en el grupo.' };
+  }
+
+  const productHint =
+    (normalized.product as FlowProduct | undefined) ??
+    resolveFlowProduct({ submoduloNombre: pagosSlot.nombre });
+
+  const sid = await createCotizacion(empresaId);
+  const session: FlowSession = {
+    sid,
+    empresaId,
+    moduloGroupId,
+    slots,
+    current: pagosSlot.order,
+    history: [],
+    data: {
+      ...normalized,
+      product: productHint,
+      quoteState: normalized.quoteState ?? 'ready',
+      quote:
+        normalized.quote ??
+        ({
+          mprima: totalVes,
+          mprimaext: Number(checkout.totalUsd) || totalVes,
+          ptasa: Number(checkout.exchangeRate) || 1,
+        } as Record<string, unknown>),
+    },
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  SESSIONS.set(sid, session);
+
+  logger.info(
+    `[flow] checkout-link sid=${sid} empresa=${empresaId} pagos=${pagosSlot.nombre} totalVes=${totalVes}`,
+  );
+
+  const base = appendProductToUrl(
+    `${pagosSlot.accessUrl}&sid=${sid}`,
+    productHint,
+  );
+  const checkoutUrl = base.includes('wizardStep=')
+    ? base
+    : `${base}${base.includes('?') ? '&' : '?'}wizardStep=5`;
+
+  return {
+    sid,
+    checkoutUrl,
+    pagosModule: { order: pagosSlot.order, nombre: pagosSlot.nombre },
+  };
+}
+
 export function getSession(sid: string) {
   const s = SESSIONS.get(sid);
   if (!s) return null;
@@ -464,7 +571,9 @@ async function syncSessionToDb(sid: string) {
       if (!metodo) {
         metodo = await prisma.pagoMetodo.create({ data: { nombre: 'SyPago' } });
       }
-      const monto = Number(data.quote?.mprima || data.otpAmount || 0);
+      const monto = Number(
+        data.checkout?.totalVes ?? data.quote?.mprima ?? data.otpAmount ?? 0,
+      );
       const ref =
         data.paymentReference ||
         data.otpResult?.transaction_id ||

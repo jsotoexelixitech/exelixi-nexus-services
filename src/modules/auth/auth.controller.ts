@@ -7,6 +7,52 @@ import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
 import logger from '../../utils/logger';
 
+/** Línea de detalle en checkout Pagos (metadata SSO). */
+const ssoCheckoutLineSchema = z.object({
+  label: z.string().min(1).max(200),
+  amountVes: z.number().positive(),
+  amountUsd: z.number().positive().optional(),
+});
+
+/** Bloque checkout para abrir Pagos con monto/concepto vía sso-delegate. */
+const ssoCheckoutSchema = z.object({
+  referenceId: z.string().max(100).optional(),
+  title: z.string().min(1).max(200),
+  subtitle: z.string().max(300).optional(),
+  lines: z.array(ssoCheckoutLineSchema).max(30).optional(),
+  totalVes: z.number().positive(),
+  totalUsd: z.number().positive().optional(),
+  exchangeRate: z.number().positive().optional(),
+});
+
+const ssoOnSuccessSchema = z
+  .object({
+    mode: z.enum(['none', 'redirect', 'webhook', 'emit']).optional(),
+    redirectUrl: z.string().max(2048).optional(),
+    webhookUrl: z.string().max(2048).optional(),
+  })
+  .optional();
+
+const ssoCheckoutRulesSchema = z
+  .object({
+    requirePayment: z.boolean().optional(),
+    methods: z
+      .array(z.enum(['mobile', 'otp', 'transfer', 'card']))
+      .max(4)
+      .optional(),
+    onSuccess: ssoOnSuccessSchema,
+  })
+  .optional();
+
+const ssoPayerSchema = z
+  .object({
+    documentType: z.string().max(2).optional(),
+    documentNumber: z.string().max(20).optional(),
+    name: z.string().max(120).optional(),
+    phone: z.string().max(20).optional(),
+  })
+  .optional();
+
 /** Schema de metadata permitida en el token SSO.
  *  Campos desconocidos se eliminan con strip(). */
 const ssoMetadataSchema = z
@@ -19,6 +65,12 @@ const ssoMetadataSchema = z
     ccanalalt_in: z.union([z.string(), z.number()]).optional(),
     cscanalalt_in: z.union([z.string(), z.number()]).optional(),
     cgestor_in: z.string().max(120).optional(),
+    /** Checkout Pagos — mismo patrón que canal en emisión, vía sso-delegate. */
+    checkout: ssoCheckoutSchema.optional(),
+    rules: ssoCheckoutRulesSchema,
+    payer: ssoPayerSchema,
+    /** Datos opacos devueltos al origen (webhook / emisión). */
+    payload: z.record(z.string(), z.unknown()).optional(),
   })
   .strip();
 
@@ -149,11 +201,17 @@ export class AuthController {
         return res.status(400).json({
           success: false,
           error: 'invalid_metadata',
-          message: 'Metadata con formato inv?lido.',
+          message: 'Metadata con formato inválido.',
           details: metaParsed.error.issues,
         });
       }
       const metadata = metaParsed.data;
+
+      if (target === 'pagos' && !metadata.checkout) {
+        logger.info(
+          `[sso-delegate] pagos sin checkout en metadata — flujo legacy/canal empresa=${apiKey ? '***' : 'none'}`,
+        );
+      }
 
       // 1. Buscar la empresa por apiKey
       const empresa = await prisma.empresa.findUnique({
