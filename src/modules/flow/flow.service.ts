@@ -129,6 +129,15 @@ async function buildAccessUrl(
 
 // ─── Operaciones de sesión ────────────────────────────────────────────────────
 
+/** SSO con checkout embebido: Pagos puede abrirse sin pasar por OCR. */
+function isCheckoutSsoMetadata(metadata?: unknown): boolean {
+  if (!metadata || typeof metadata !== 'object') return false;
+  const checkout = (metadata as Record<string, unknown>).checkout;
+  if (!checkout || typeof checkout !== 'object') return false;
+  const totalVes = Number((checkout as Record<string, unknown>).totalVes);
+  return Number.isFinite(totalVes) && totalVes > 0;
+}
+
 /**
  * Inicia el flujo automáticamente a partir de un nexus_token existente.
  *
@@ -146,6 +155,7 @@ export async function startFlowFromToken(
   metadata?: any,
 ): Promise<
   | { error: string }
+  | { standalone: true; checkoutMode: true; totalActive: number }
   | {
       sid: string;
       firstUrl: string;
@@ -183,6 +193,21 @@ export async function startFlowFromToken(
     return {
       error:
         'Solo hay un submódulo activo en este grupo; no se requiere encadenamiento.',
+    };
+  }
+
+  // Checkout SSO embebido: Pagos (u otro submódulo) es entrada válida con metadata.checkout
+  if (
+    isCheckoutSsoMetadata(metadata) &&
+    rawSlots[0].submoduloId !== submoduloId
+  ) {
+    logger.info(
+      `[flow] checkout-standalone empresa=${empresaId} submodulo=${submoduloId} (no OCR chain)`,
+    );
+    return {
+      standalone: true,
+      checkoutMode: true,
+      totalActive: rawSlots.length,
     };
   }
 

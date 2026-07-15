@@ -97,6 +97,11 @@ router.post('/start-from-token', async (req: Request, res: Response) => {
     payload.metadata,
   );
 
+  if ('standalone' in result && result.standalone) {
+    res.json({ success: true, data: result });
+    return;
+  }
+
   if ('error' in result) {
     // 409 = no es punto de entrada o flujo de 1 solo módulo; el módulo continúa standalone
     res.status(409).json({ success: false, message: result.error });
