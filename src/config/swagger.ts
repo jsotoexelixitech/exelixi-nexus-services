@@ -30,6 +30,21 @@ const options: swaggerJsdoc.Options = {
         description:
           'Catálogo global de módulos y submódulos (administración). Distinto del listado de módulos activos de la empresa en el menú.',
       },
+      {
+        name: 'Flow',
+        description:
+          'Bridge inter-módulo: sesiones `sid`, checkout directo a Pagos y auto-arranque desde `nexus_token`.',
+      },
+      {
+        name: 'Access',
+        description:
+          'Verificación pública de tokens tenant, heartbeat y canje API Key → access_token (OAuth-like).',
+      },
+      {
+        name: 'Integración externa',
+        description:
+          'Guía SSO para QASys2000 / terceros: ver `docs/INTEGRACION-SSO-Y-PAGOS.md`.',
+      },
     ],
     info: {
       title: 'Exelixi Nexus API',
@@ -43,11 +58,20 @@ Esta API proporciona una base sólida para aplicaciones multi-tenant con un sist
 - 👥 **Gestión de Usuarios**: Control total sobre perfiles y estados.
 - 🛠️ **Módulos**: Configuración flexible de funcionalidades por empresa.
 
-### Integración para Terceros (OAuth 2.0)
-Los sistemas externos que deseen integrarse con los módulos de Exelixi deben utilizar el flujo **Client Credentials Grant**.
-1. Solicite su **API Key** (Token Permanente) al administrador de Exelixi.
-2. Intercambie su API Key por un **Access Token** de corta duración llamando a \`POST /api/access/token\`.
-3. Utilice el **Access Token** en la cabecera \`Authorization: Bearer <token>\` de todas sus peticiones hacia los módulos (OCR, Formulario, Emisión, Pagos).
+### Integración para terceros (SSO seguro)
+
+**Flujo RCV (recomendado):** \`POST /api/auth/sso-delegate\` con \`x-api-key\` + metadata (\`cproductor\`, \`cusuario\`, canal…) → redirigir al usuario a \`redirect_url\`.
+
+**Pagos standalone:** mismo endpoint con \`target: "pagos"\` y \`metadata.checkout.totalVes\` + \`metadata.payload.notifyUrl\`.
+
+**Alternativa server-to-server:** \`POST /api/flow/checkout-link\`.
+
+Documentación completa: \`docs/INTEGRACION-SSO-Y-PAGOS.md\`.
+
+### OAuth-like (API Key → access_token)
+1. Solicite su **API Key** al administrador Nexus.
+2. \`POST /api/access/token\` con la API Key.
+3. Use \`Authorization: Bearer <access_token>\` hacia módulos que lo requieran.
 
 ### Seguridad General
 La mayoría de los endpoints administrativos requieren:
@@ -181,6 +205,133 @@ La mayoría de los endpoints administrativos requieren:
             success: { type: 'boolean', example: true },
             message: { type: 'string' },
             data: { description: 'Datos adicionales' },
+          },
+        },
+        SsoMetadataCanal: {
+          type: 'object',
+          description:
+            'Canal Sis2000 embebido en el JWT. **cproductor** debe ser entero ≥ 1 (no string vacío).',
+          properties: {
+            cproductor: {
+              type: 'string',
+              example: '80080',
+              description:
+                'Código productor La Mundial (obligatorio para planes RCV)',
+            },
+            cusuario: { type: 'string', example: '7' },
+            cramo: {
+              type: 'integer',
+              example: 18,
+              description: '18 = automóvil RCV',
+            },
+            ctipo: {
+              type: 'integer',
+              example: 1,
+              description: '1=particular, 2=rústico, 3=carga',
+            },
+            ccanalalt_in: { type: 'string', example: '27' },
+            cscanalalt_in: { type: 'integer', example: 0 },
+            cgestor_in: { type: 'string', example: 'GESTOR-01' },
+            canal: { type: 'string', maxLength: 50 },
+          },
+        },
+        SsoCheckoutLine: {
+          type: 'object',
+          required: ['label', 'amountVes'],
+          properties: {
+            label: { type: 'string', example: 'Prima RCV anual' },
+            amountVes: { type: 'number', example: 120000 },
+            amountUsd: { type: 'number', example: 336 },
+          },
+        },
+        SsoCheckout: {
+          type: 'object',
+          required: ['title', 'totalVes'],
+          properties: {
+            referenceId: { type: 'string', example: 'POL-2026-001' },
+            title: { type: 'string', example: 'Pago póliza RCV' },
+            subtitle: { type: 'string', example: 'La Mundial de Seguros' },
+            lines: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/SsoCheckoutLine' },
+            },
+            totalVes: { type: 'number', example: 125000.5 },
+            totalUsd: { type: 'number', example: 350 },
+            exchangeRate: { type: 'number', example: 357.14 },
+          },
+        },
+        SsoCheckoutRules: {
+          type: 'object',
+          properties: {
+            requirePayment: { type: 'boolean', example: true },
+            methods: {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: ['mobile', 'otp', 'transfer', 'card'],
+              },
+              example: ['mobile', 'otp'],
+            },
+            onSuccess: {
+              type: 'object',
+              properties: {
+                mode: {
+                  type: 'string',
+                  enum: ['none', 'redirect', 'webhook', 'emit'],
+                },
+                redirectUrl: { type: 'string', format: 'uri' },
+                webhookUrl: { type: 'string', format: 'uri' },
+              },
+            },
+          },
+        },
+        SsoPayer: {
+          type: 'object',
+          properties: {
+            documentType: { type: 'string', example: 'V' },
+            documentNumber: { type: 'string', example: '12345678' },
+            name: { type: 'string', example: 'JUAN PEREZ' },
+            phone: { type: 'string', example: '04141234567' },
+          },
+        },
+        SsoMetadataPagos: {
+          allOf: [
+            { $ref: '#/components/schemas/SsoMetadataCanal' },
+            {
+              type: 'object',
+              properties: {
+                checkout: { $ref: '#/components/schemas/SsoCheckout' },
+                rules: { $ref: '#/components/schemas/SsoCheckoutRules' },
+                payer: { $ref: '#/components/schemas/SsoPayer' },
+                payload: {
+                  type: 'object',
+                  description:
+                    'Datos opacos; incluir notifyUrl para webhook post-pago',
+                  properties: {
+                    notifyUrl: {
+                      type: 'string',
+                      format: 'uri',
+                      example: 'https://tu-app.com/api/pago-callback',
+                    },
+                  },
+                  additionalProperties: true,
+                },
+              },
+            },
+          ],
+        },
+        SsoDelegateResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            redirect_url: {
+              type: 'string',
+              format: 'uri',
+              example:
+                'https://cierrelmds.exelixitech.com/ocr/?nexus_token=eyJhbGciOiJIUzI1NiIs...',
+            },
+            empresa: { type: 'string', example: 'Cooperativa Demo' },
+            modulo: { type: 'string', example: 'OCR Documentos' },
           },
         },
       },

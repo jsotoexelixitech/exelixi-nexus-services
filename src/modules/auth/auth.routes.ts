@@ -113,10 +113,25 @@ router.post('/login', validate(loginSchema), controller.login);
  *   post:
  *     tags:
  *       - Auth
- *     summary: Delegar sesión (SSO)
+ *       - Integración externa
+ *     summary: Delegar sesión SSO (RCV, Pagos, OCR…)
  *     description: |
- *       Genera un JWT temporal con metadata dinámica de un tercero para delegar el flujo.
- *       Valida el x-api-key contra la empresa y busca al usuario por correo.
+ *       **Integración segura server-to-server** para apps externas (QASys2000, Angular La Mundial).
+ *
+ *       1. Valida **`x-api-key`** → identifica la empresa tenant.
+ *       2. Sanitiza **`metadata`** (Zod; campos desconocidos descartados).
+ *       3. Genera JWT **`nexus_token`** (1 h) con `empresaId`, `submoduloId` y metadata.
+ *       4. Devuelve **`redirect_url`** para abrir en el navegador del usuario.
+ *
+ *       ### Flujo RCV
+ *       `target: "ocr"` (default) + metadata canal: **`cproductor`** (≥1, obligatorio), `cusuario`, `cramo`, canal alterno.
+ *
+ *       ### Pagos standalone
+ *       `target: "pagos"` + `metadata.checkout.totalVes` + `metadata.payload.notifyUrl`.
+ *
+ *       Guía: `docs/INTEGRACION-SSO-Y-PAGOS.md`
+ *
+ *       **Rate limit:** 30 peticiones/minuto por IP.
  *     security:
  *       - apiKeyAuth: []
  *     requestBody:
@@ -125,20 +140,81 @@ router.post('/login', validate(loginSchema), controller.login);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [correo, metadata]
  *             properties:
- *               correo: { type: string, format: email }
- *               metadata: { type: object }
+ *               target:
+ *                 type: string
+ *                 enum: [ocr, formulario, emision, pagos]
+ *                 default: ocr
+ *                 description: Primer submódulo al que entra el usuario
+ *               metadata:
+ *                 oneOf:
+ *                   - $ref: '#/components/schemas/SsoMetadataCanal'
+ *                   - $ref: '#/components/schemas/SsoMetadataPagos'
+ *               cproductor:
+ *                 type: string
+ *                 example: '80080'
+ *                 description: Alternativa legacy en raíz (strings vacíos se ignoran)
+ *               cusuario:
+ *                 type: string
+ *                 example: '7'
+ *               cramo:
+ *                 type: integer
+ *                 example: 18
+ *               ctipo:
+ *                 type: integer
+ *                 example: 1
+ *               ccanalalt_in:
+ *                 type: string
+ *                 example: '27'
+ *               cscanalalt_in:
+ *                 type: integer
+ *                 example: 0
+ *               cgestor_in:
+ *                 type: string
+ *           examples:
+ *             rcvQaSys2000:
+ *               summary: Entrada flujo RCV (QASys2000)
+ *               value:
+ *                 target: ocr
+ *                 cproductor: '80080'
+ *                 cusuario: '7'
+ *                 cramo: 18
+ *                 ccanalalt_in: '27'
+ *                 cscanalalt_in: 0
+ *             pagosStandalone:
+ *               summary: Pagos solo cobro (webhook)
+ *               value:
+ *                 target: pagos
+ *                 metadata:
+ *                   checkout:
+ *                     title: Pago póliza RCV
+ *                     totalVes: 125000.5
+ *                   rules:
+ *                     methods: [mobile, otp]
+ *                   payload:
+ *                     notifyUrl: https://tu-app.com/api/pago-callback
+ *                     polizaId: POL-2026-001
  *     responses:
  *       200:
- *         description: JWT generado
+ *         description: URL de redirección con nexus_token
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean }
- *                 redirect_url: { type: string }
+ *               $ref: '#/components/schemas/SsoDelegateResponse'
+ *       400:
+ *         description: Falta x-api-key o metadata inválida
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: API Key inválida
+ *       403:
+ *         description: Empresa inactiva o submódulo no activado
+ *       404:
+ *         description: Submódulo destino no encontrado
+ *       429:
+ *         description: Rate limit excedido
  */
 router.post('/sso-delegate', ssoDelegateLimiter, controller.ssoDelegate);
 

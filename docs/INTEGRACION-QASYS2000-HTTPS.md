@@ -1,7 +1,8 @@
 # QASys2000 → Nexus API (HTTPS / Mixed Content)
 
-> **Producción La Mundial:** usar prefijos en  
-> **`https://cierrelmds.exelixitech.com`** — ver [CIERRELMDS-HTTPS-PREFIJOS.md](./CIERRELMDS-HTTPS-PREFIJOS.md).
+> **Producción La Mundial (activa):** prefijos HTTPS en  
+> **`https://cierrelmds.exelixitech.com/admin/`**, `/ocr/`, `/nexus-api/`, etc.  
+> Ver [CIERRELMDS-HTTPS-PREFIJOS.md](./CIERRELMDS-HTTPS-PREFIJOS.md).
 
 ## Problema
 
@@ -72,6 +73,24 @@ Cuando infra cree registros A, migrar a:
 
 - `https://nexus-api.lamundialdeseguros.com`
 - `https://nexus-admin.lamundialdeseguros.com`
+
+## Producción activa — cierrelmds.exelixitech.com
+
+| Servicio           | URL                                                                |
+| ------------------ | ------------------------------------------------------------------ |
+| Nexus Admin        | https://cierrelmds.exelixitech.com/admin/                          |
+| Nexus API (SSO)    | https://cierrelmds.exelixitech.com/nexus-api/api/auth/sso-delegate |
+| OCR (redirect SSO) | https://cierrelmds.exelixitech.com/ocr/                            |
+
+Angular QASys2000:
+
+```typescript
+'https://cierrelmds.exelixitech.com/nexus-api/api/auth/sso-delegate';
+```
+
+Ver mapa completo: [CIERRELMDS-HTTPS-PREFIJOS.md](./CIERRELMDS-HTTPS-PREFIJOS.md).
+
+**Integración SSO (RCV + Pagos):** [INTEGRACION-SSO-Y-PAGOS.md](./INTEGRACION-SSO-Y-PAGOS.md) · Swagger Nexus `/nexus-api/api-docs`
 
 ## Checklist
 

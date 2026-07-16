@@ -125,6 +125,74 @@ router.post('/start-from-token', async (req: Request, res: Response) => {
  *   ...campos legacy wizard (selectedPlan, vehicle, tomador, etc.)
  * }
  */
+/**
+ * @openapi
+ * /api/flow/checkout-link:
+ *   post:
+ *     tags:
+ *       - Flow
+ *       - Integración externa
+ *     summary: Crear sesión y URL directa a Pagos
+ *     description: |
+ *       Server-to-server (requiere **x-api-key**). Crea `sid` con datos de checkout
+ *       y devuelve **checkoutUrl** apuntando al submódulo Pagos de la empresa.
+ *
+ *       Alternativa a `sso-delegate` cuando el backend conoce `empresaId` y `moduloGroupId`.
+ *
+ *       Ver `docs/INTEGRACION-SSO-Y-PAGOS.md`.
+ *     security:
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [empresaId, moduloGroupId, checkout]
+ *             properties:
+ *               empresaId:
+ *                 type: integer
+ *                 example: 5
+ *               moduloGroupId:
+ *                 type: integer
+ *                 example: 1
+ *               checkout:
+ *                 $ref: '#/components/schemas/SsoCheckout'
+ *               rules:
+ *                 $ref: '#/components/schemas/SsoCheckoutRules'
+ *               payer:
+ *                 $ref: '#/components/schemas/SsoPayer'
+ *               payload:
+ *                 type: object
+ *                 properties:
+ *                   notifyUrl:
+ *                     type: string
+ *                     format: uri
+ *                 additionalProperties: true
+ *     responses:
+ *       200:
+ *         description: Sesión creada
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     sid: { type: string, example: '316' }
+ *                     checkoutUrl:
+ *                       type: string
+ *                       format: uri
+ *                     pagosModule:
+ *                       type: object
+ *                       properties:
+ *                         order: { type: integer }
+ *                         nombre: { type: string }
+ *       400:
+ *         description: checkout.totalVes inválido o módulo Pagos no activo
+ */
 router.post(
   '/checkout-link',
   apiKeyGuard,
