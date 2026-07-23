@@ -180,8 +180,9 @@ Dependencia: `jsonwebtoken` (+ tipos `@types/jsonwebtoken` si usas TS).
 | Activar por empresa           | **Empresas** → perfil → módulos/submódulos |
 | Ver API Key (apps standalone) | **Conexiones de aplicaciones**             |
 
-**Alternativa en BD (servidor):** editar y ejecutar  
-`exelixi-nexus-services/scripts/register-modulo.sql` con `psql` (mismos nombres/URL que usarías en la UI).
+**Alternativa en BD (servidor):**  
+`npm run register-modulo -- --modulo "…" --submodulo "…" --url "…"`  
+(o `scripts/register-modulo.sql`). Guía completa: [`../ONBOARDING-MODULO-NUEVO.md`](../ONBOARDING-MODULO-NUEVO.md).
 
 Flujo típico para el usuario final:
 
