@@ -50,8 +50,15 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
   'https://pagos.200-75-131-138.sslip.io',
   'https://rcv.200-75-131-138.sslip.io',
 
-  // --- cierrelmds (prefijos HTTPS, un solo origen) ---
+  // --- cierrelmds.exelixitech.com (HTTPS :443 prefijos + puertos directos) ---
   'https://cierrelmds.exelixitech.com',
+  'https://cierrelmds.exelixitech.com:3092',
+  'https://cierrelmds.exelixitech.com:5200',
+  'https://cierrelmds.exelixitech.com:5181',
+  'https://cierrelmds.exelixitech.com:5182',
+  'https://cierrelmds.exelixitech.com:5183',
+  'https://cierrelmds.exelixitech.com:5184',
+  'https://cierrelmds.exelixitech.com:5180',
 ];
 
 /**

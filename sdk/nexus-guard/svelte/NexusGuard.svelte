@@ -1,51 +1,77 @@
 <script lang="ts">
-  /**
-   * NexusGuard.svelte — Wrapper para Svelte / SvelteKit
-   *
-   * USO en +layout.svelte o App.svelte:
-   *
-   *   <script>
-   *     import NexusGuard from './nexus/NexusGuard.svelte'
-   *   </script>
-   *   <NexusGuard nexusApiUrl="http://192.168.8.120:3091" serviceName="RCV">
-   *     <slot />
-   *   </NexusGuard>
-   *
-   * Acceder a empresa desde cualquier componente hijo:
-   *   import { nexusStore } from './nexus/NexusGuard.svelte'
-   *   $nexusStore.empresa.nombre
-   */
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { writable } from 'svelte/store';
-  import { verifyNexusAccess } from '../core/nexus-core';
-  import type { NexusEmpresa, NexusSubmodulo } from '../core/nexus-core';
+  import { verifyNexusAccess, heartbeatNexus } from './core/nexus-core';
+  import type { NexusEmpresa, NexusSubmodulo } from './core/nexus-core';
 
   export let nexusApiUrl: string;
   export let serviceName: string = 'Servicio';
   export let logoUrl: string = '';
 
+  const HEARTBEAT_MS = 5 * 60 * 1000;
+
   type State =
     | { status: 'loading' }
-    | { status: 'active';   empresa: NexusEmpresa; submodulo: NexusSubmodulo }
-    | { status: 'blocked';  reason: string };
+    | { status: 'active'; empresa: NexusEmpresa; submodulo: NexusSubmodulo }
+    | { status: 'blocked'; reason: string };
 
-  // Store exportado para que los hijos accedan a empresa/submodulo
-  export const nexusStore = writable<{ empresa: NexusEmpresa | null; submodulo: NexusSubmodulo | null }>({
+  export const nexusStore = writable<{
+    empresa: NexusEmpresa | null;
+    submodulo: NexusSubmodulo | null;
+  }>({
     empresa: null,
     submodulo: null,
   });
 
   let state: State = { status: 'loading' };
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
+  }
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(async () => {
+      const active = await heartbeatNexus(nexusApiUrl);
+      if (!active) {
+        stopHeartbeat();
+        nexusStore.set({ empresa: null, submodulo: null });
+        state = {
+          status: 'blocked',
+          reason: 'Sesión expirada. Acceso suspendido.',
+        };
+      }
+    }, HEARTBEAT_MS);
+  }
 
   onMount(async () => {
+    if (!nexusApiUrl?.trim()) {
+      state = {
+        status: 'blocked',
+        reason: 'VITE_NEXUS_API_URL no está configurada en .env',
+      };
+      return;
+    }
+
     const result = await verifyNexusAccess(nexusApiUrl);
     if (result.active) {
       nexusStore.set({ empresa: result.empresa, submodulo: result.submodulo });
-      state = { status: 'active', empresa: result.empresa, submodulo: result.submodulo };
+      state = {
+        status: 'active',
+        empresa: result.empresa,
+        submodulo: result.submodulo,
+      };
+      startHeartbeat();
     } else {
       state = { status: 'blocked', reason: result.reason };
     }
   });
+
+  onDestroy(stopHeartbeat);
 </script>
 
 {#if state.status === 'loading'}
@@ -53,7 +79,7 @@
     <div class="nexus-card">
       {#if logoUrl}<img src={logoUrl} alt={serviceName} class="nexus-logo" />{/if}
       <div class="nexus-spinner"></div>
-      <p class="nexus-subtitle">Verificando acceso…</p>
+      <p class="nexus-subtitle">Verificando acceso con Exélixi Nexus…</p>
     </div>
   </div>
 

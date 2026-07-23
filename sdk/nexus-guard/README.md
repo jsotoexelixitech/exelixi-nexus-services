@@ -22,25 +22,28 @@ sdk/nexus-guard/
 **1.** Copia `nexus-core.ts`, `useNexusAccess.ts` y `NexusGuard.tsx` a `src/nexus/`
 
 **2.** `.env`:
+
 ```
 VITE_NEXUS_API_URL=http://192.168.8.120:3091
 ```
 
 **3.** `main.tsx`:
+
 ```tsx
-import { NexusGuard } from './nexus/NexusGuard'
+import { NexusGuard } from './nexus/NexusGuard';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <NexusGuard serviceName="RCV">
     <App />
-  </NexusGuard>
-)
+  </NexusGuard>,
+);
 ```
 
 **4.** Acceder a empresa en cualquier componente:
+
 ```tsx
-import { useNexus } from './nexus/NexusGuard'
-const { empresa } = useNexus()
+import { useNexus } from './nexus/NexusGuard';
+const { empresa } = useNexus();
 // empresa.id, empresa.nombre, empresa.rif
 ```
 
@@ -48,14 +51,18 @@ const { empresa } = useNexus()
 
 ## Svelte / SvelteKit
 
-**1.** Copia `nexus-core.ts` y `frameworks/svelte/NexusGuard.svelte` a `src/nexus/`
+**Kit autocontenido:** copia toda la carpeta [`svelte/`](./svelte/) (incluye `core/`, `backend/`, guía `INTEGRACION.md`).
+
+**1.** Copia el kit a `src/lib/nexus/` (SvelteKit) o `src/nexus/` (Vite) — ver [`svelte/INTEGRACION.md`](./svelte/INTEGRACION.md)
 
 **2.** `.env`:
+
 ```
 VITE_NEXUS_API_URL=http://192.168.8.120:3091
 ```
 
 **3.** `App.svelte` o `+layout.svelte`:
+
 ```svelte
 <script>
   import NexusGuard from './nexus/NexusGuard.svelte'
@@ -67,6 +74,7 @@ VITE_NEXUS_API_URL=http://192.168.8.120:3091
 ```
 
 **4.** Acceder a empresa en componentes hijos:
+
 ```svelte
 <script>
   import { nexusStore } from './nexus/NexusGuard.svelte'
@@ -81,14 +89,16 @@ VITE_NEXUS_API_URL=http://192.168.8.120:3091
 **1.** Copia `nexus-core.ts` y `frameworks/vue/NexusGuard.vue` a `src/nexus/`
 
 **2.** `.env`:
+
 ```
 VITE_NEXUS_API_URL=http://192.168.8.120:3091
 ```
 
 **3.** `App.vue`:
+
 ```vue
 <script setup>
-import NexusGuard from './nexus/NexusGuard.vue'
+import NexusGuard from './nexus/NexusGuard.vue';
 </script>
 
 <template>
@@ -99,10 +109,11 @@ import NexusGuard from './nexus/NexusGuard.vue'
 ```
 
 **4.** Acceder a empresa en componentes hijos:
+
 ```vue
 <script setup>
-import { useNexus } from './nexus/NexusGuard.vue'
-const { empresa } = useNexus()
+import { useNexus } from './nexus/NexusGuard.vue';
+const { empresa } = useNexus();
 </script>
 ```
 
@@ -113,43 +124,47 @@ const { empresa } = useNexus()
 **1.** Copia `nexus-core.ts` a `src/nexus/`
 
 **2.** `environment.ts`:
+
 ```typescript
 export const environment = {
-  nexusApiUrl: 'http://192.168.8.120:3091'
-}
+  nexusApiUrl: 'http://192.168.8.120:3091',
+};
 ```
 
 **3.** Crea `src/nexus/nexus.guard.ts`:
+
 ```typescript
-import { Injectable } from '@angular/core'
-import { CanActivate, Router } from '@angular/router'
-import { verifyNexusAccess } from './nexus-core'
-import { environment } from '../environments/environment'
+import { Injectable } from '@angular/core';
+import { CanActivate, Router } from '@angular/router';
+import { verifyNexusAccess } from './nexus-core';
+import { environment } from '../environments/environment';
 
 @Injectable({ providedIn: 'root' })
 export class NexusGuard implements CanActivate {
   constructor(private router: Router) {}
 
   async canActivate(): Promise<boolean> {
-    const result = await verifyNexusAccess(environment.nexusApiUrl)
+    const result = await verifyNexusAccess(environment.nexusApiUrl);
     if (!result.active) {
-      this.router.navigate(['/blocked'])
-      return false
+      this.router.navigate(['/blocked']);
+      return false;
     }
-    localStorage.setItem('nexus_empresa', JSON.stringify(result.empresa))
-    return true
+    localStorage.setItem('nexus_empresa', JSON.stringify(result.empresa));
+    return true;
   }
 }
 ```
 
 **4.** Aplica en `app-routing.module.ts`:
+
 ```typescript
 { path: '', canActivate: [NexusGuard], component: HomeComponent }
 ```
 
 **5.** Acceder a empresa:
+
 ```typescript
-const empresa = JSON.parse(localStorage.getItem('nexus_empresa') || '{}')
+const empresa = JSON.parse(localStorage.getItem('nexus_empresa') || '{}');
 ```
 
 ---
@@ -159,34 +174,42 @@ const empresa = JSON.parse(localStorage.getItem('nexus_empresa') || '{}')
 **1.** Crea `src/nexus/nexus-core.ts` (mismo archivo)
 
 **2.** `.env.local`:
+
 ```
 NEXUS_API_URL=http://192.168.8.120:3091
 ```
 
 **3.** `middleware.ts` (raíz del proyecto):
+
 ```typescript
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server';
 
 export async function middleware(req: NextRequest) {
-  const token = req.nextUrl.searchParams.get('nexus_token')
-              ?? req.cookies.get('nexus_token')?.value
+  const token =
+    req.nextUrl.searchParams.get('nexus_token') ??
+    req.cookies.get('nexus_token')?.value;
 
-  if (!token) return NextResponse.redirect(new URL('/blocked', req.url))
+  if (!token) return NextResponse.redirect(new URL('/blocked', req.url));
 
   const res = await fetch(`${process.env.NEXUS_API_URL}/api/access/verify`, {
     headers: { Authorization: `Bearer ${token}` },
-    cache: 'no-store'
-  }).then(r => r.json()).catch(() => ({ active: false }))
+    cache: 'no-store',
+  })
+    .then((r) => r.json())
+    .catch(() => ({ active: false }));
 
-  if (!res.active) return NextResponse.redirect(new URL('/blocked', req.url))
+  if (!res.active) return NextResponse.redirect(new URL('/blocked', req.url));
 
-  const response = NextResponse.next()
-  response.cookies.set('nexus_token', token, { httpOnly: true, sameSite: 'strict' })
-  response.cookies.set('nexus_empresa', JSON.stringify(res.empresa))
-  return response
+  const response = NextResponse.next();
+  response.cookies.set('nexus_token', token, {
+    httpOnly: true,
+    sameSite: 'strict',
+  });
+  response.cookies.set('nexus_empresa', JSON.stringify(res.empresa));
+  return response;
 }
 
-export const config = { matcher: ['/((?!blocked|_next|favicon).*)'] }
+export const config = { matcher: ['/((?!blocked|_next|favicon).*)'] };
 ```
 
 ---
@@ -196,6 +219,7 @@ export const config = { matcher: ['/((?!blocked|_next|favicon).*)'] }
 **1.** Copia `frameworks/vanilla/nexus-guard.js` a tu proyecto
 
 **2.** En tu HTML:
+
 ```html
 <div id="app" style="display:none">
   <!-- tu app aquí -->
@@ -206,13 +230,13 @@ export const config = { matcher: ['/((?!blocked|_next|favicon).*)'] }
   NexusGuard.init({
     nexusApiUrl: 'http://192.168.8.120:3091',
     serviceName: 'RCV',
-    onActive: function(empresa, submodulo) {
-      document.getElementById('app').style.display = 'block'
-      console.log('Empresa:', empresa.nombre)
+    onActive: function (empresa, submodulo) {
+      document.getElementById('app').style.display = 'block';
+      console.log('Empresa:', empresa.nombre);
       // Guarda empresa para usarla en tus fetch
-      window.__empresa = empresa
-    }
-  })
+      window.__empresa = empresa;
+    },
+  });
 </script>
 ```
 
@@ -224,13 +248,13 @@ El `empresa.id` que devuelve Nexus es el identificador de tenant. Inclúyelo en 
 
 ```javascript
 // Listar datos de esa empresa
-fetch(`/api/polizas?empresaId=${empresa.id}`)
+fetch(`/api/polizas?empresaId=${empresa.id}`);
 
-// Guardar datos para esa empresa  
+// Guardar datos para esa empresa
 fetch('/api/polizas', {
   method: 'POST',
-  body: JSON.stringify({ ...datos, empresaId: empresa.id })
-})
+  body: JSON.stringify({ ...datos, empresaId: empresa.id }),
+});
 ```
 
 El backend de tu servicio filtra siempre por `empresaId` — así cada empresa solo ve sus propios datos.
