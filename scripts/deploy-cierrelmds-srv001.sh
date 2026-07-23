@@ -17,10 +17,10 @@ build_module() {
   pm2 restart "${pm2_name}"
 }
 
-echo "=== Build nexus-admin base=/admin/ ==="
+echo "=== Build nexus-admin (VITE_APP_BASE=./, Apache strip /admin/) ==="
 cd "$HOME/nexus-admin"
 git pull origin main
-export VITE_APP_BASE="/admin/"
+export VITE_APP_BASE="./"
 export VITE_API_URL="${VITE_NEXUS_API_URL}"
 npm run build && pm2 restart nexus-admin
 if [[ ! -f dist/logo-dark-bg.png ]]; then
