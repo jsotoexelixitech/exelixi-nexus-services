@@ -67,6 +67,8 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
  */
 const TRUSTED_HOST_SUFFIXES: string[] = [
   'lamundialdeseguros.com',
+  // Módulos Exélixi en subdominios (*.exelixitech.com → siniestros, cierrelmds, …)
+  'exelixitech.com',
   // srv001 dev HTTPS vía sslip.io (Caddy + Let's Encrypt)
   '200-75-131-138.sslip.io',
 ];
