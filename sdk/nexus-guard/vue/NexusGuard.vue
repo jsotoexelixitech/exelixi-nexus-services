@@ -1,26 +1,9 @@
 <template>
-  <!-- NexusGuard.vue — Wrapper para Vue 3
-  
-  USO en App.vue:
-    <script setup>
-      import NexusGuard from './nexus/NexusGuard.vue'
-    </script>
-    <template>
-      <NexusGuard nexus-api-url="http://192.168.8.120:3091" service-name="RCV">
-        <RouterView />
-      </NexusGuard>
-    </template>
-
-  Acceder a empresa desde componentes hijos:
-    import { useNexus } from './nexus/NexusGuard.vue'
-    const { empresa } = useNexus()
-  -->
-
   <div v-if="state.status === 'loading'" class="nexus-fullpage">
     <div class="nexus-card">
       <img v-if="logoUrl" :src="logoUrl" :alt="serviceName" class="nexus-logo" />
       <div class="nexus-spinner"></div>
-      <p class="nexus-subtitle">Verificando acceso…</p>
+      <p class="nexus-subtitle">Verificando acceso con Exélixi Nexus…</p>
     </div>
   </div>
 
@@ -38,9 +21,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, provide, inject } from 'vue';
-import { verifyNexusAccess } from '../core/nexus-core';
-import type { NexusEmpresa, NexusSubmodulo } from '../core/nexus-core';
+import { ref, onMounted, onUnmounted, provide } from 'vue';
+import { startNexusAccessPoll } from './core/nexus-core';
+import type { NexusEmpresa, NexusSubmodulo, NexusMetadata } from './core/nexus-core';
+import { NEXUS_KEY } from './useNexus';
 
 const props = defineProps<{
   nexusApiUrl: string;
@@ -50,33 +34,53 @@ const props = defineProps<{
 
 type State =
   | { status: 'loading' }
-  | { status: 'active';  empresa: NexusEmpresa; submodulo: NexusSubmodulo }
+  | { status: 'active'; empresa: NexusEmpresa; submodulo: NexusSubmodulo; metadata?: NexusMetadata }
   | { status: 'blocked'; reason: string };
 
 const state = ref<State>({ status: 'loading' });
-const nexusData = ref<{ empresa: NexusEmpresa | null; submodulo: NexusSubmodulo | null }>({
+const nexusData = ref<{
+  empresa: NexusEmpresa | null;
+  submodulo: NexusSubmodulo | null;
+  metadata?: NexusMetadata;
+}>({
   empresa: null,
   submodulo: null,
 });
 
-provide('nexus', nexusData);
+provide(NEXUS_KEY, nexusData);
 
-onMounted(async () => {
-  const result = await verifyNexusAccess(props.nexusApiUrl);
-  if (result.active) {
-    nexusData.value = { empresa: result.empresa, submodulo: result.submodulo };
-    state.value = { status: 'active', empresa: result.empresa, submodulo: result.submodulo };
-  } else {
-    state.value = { status: 'blocked', reason: result.reason };
+let stopPoll: (() => void) | undefined;
+
+onMounted(() => {
+  if (!props.nexusApiUrl?.trim()) {
+    state.value = {
+      status: 'blocked',
+      reason: 'VITE_NEXUS_API_URL no está configurada en .env',
+    };
+    return;
   }
+
+  stopPoll = startNexusAccessPoll(props.nexusApiUrl, (result) => {
+    if (result.active) {
+      nexusData.value = {
+        empresa: result.empresa,
+        submodulo: result.submodulo,
+        metadata: result.metadata,
+      };
+      state.value = {
+        status: 'active',
+        empresa: result.empresa,
+        submodulo: result.submodulo,
+        metadata: result.metadata,
+      };
+    } else {
+      nexusData.value = { empresa: null, submodulo: null };
+      state.value = { status: 'blocked', reason: result.reason };
+    }
+  });
 });
 
-// Composable para componentes hijos
-export function useNexus() {
-  const data = inject<typeof nexusData>('nexus');
-  if (!data) throw new Error('useNexus debe usarse dentro de <NexusGuard>');
-  return data.value;
-}
+onUnmounted(() => stopPoll?.());
 </script>
 
 <style scoped>

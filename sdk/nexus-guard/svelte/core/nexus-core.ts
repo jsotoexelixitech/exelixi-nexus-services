@@ -42,6 +42,9 @@ export type NexusResult =
 
 const SESSION_KEY = '__nexus_token__';
 
+/** Intervalo de re-verificación (alineado con access.service — verify cada ~30 s). */
+export const NEXUS_VERIFY_POLL_MS = 30_000;
+
 // ── Almacenamiento del token activo ─────────────────────────────────────────
 
 /** Devuelve el token activo en memoria (sessionStorage). */
@@ -102,12 +105,14 @@ export async function verifyNexusAccess(
       },
     );
 
-    // Token renovado en tránsito — lo guardamos
-    const refreshed = res.headers.get('X-Nexus-Token-Refreshed');
-    if (refreshed) setNexusToken(refreshed);
-    else if (urlToken) setNexusToken(urlToken);
-
     const data = await res.json();
+
+    if (data.access_token) setNexusToken(data.access_token);
+    else {
+      const refreshed = res.headers.get('X-Nexus-Token-Refreshed');
+      if (refreshed) setNexusToken(refreshed);
+      else if (urlToken) setNexusToken(urlToken);
+    }
 
     if (data.active) {
       return {
@@ -131,9 +136,37 @@ export async function verifyNexusAccess(
 }
 
 /**
+ * Inicia polling periódico con GET /api/access/verify.
+ * Bloquea o desbloquea la UI según empresa/módulo activos en Admin (máx. ~30 s).
+ */
+export function startNexusAccessPoll(
+  nexusApiUrl: string,
+  onResult: (result: NexusResult) => void,
+  intervalMs: number = NEXUS_VERIFY_POLL_MS,
+): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+
+  const tick = () => {
+    if (stopped) return;
+    void verifyNexusAccess(nexusApiUrl).then((result) => {
+      if (!stopped) onResult(result);
+    });
+  };
+
+  tick();
+  timer = setInterval(tick, intervalMs);
+
+  return () => {
+    stopped = true;
+    if (timer) clearInterval(timer);
+  };
+}
+
+/**
  * Llama al heartbeat para renovar la sesión y guardar el nuevo token.
  * Retorna true si la sesión sigue activa, false si fue suspendida.
- * Llamar cada 5 minutos mientras la app esté en uso (useNexusAccess lo hace).
+ * Preferir startNexusAccessPoll (verify) en frontends — comprueba empresa activa en Admin.
  *
  * @param nexusApiUrl  URL base del servidor Nexus.
  */

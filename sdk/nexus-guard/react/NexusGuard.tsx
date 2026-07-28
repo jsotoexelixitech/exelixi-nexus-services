@@ -1,30 +1,27 @@
 /**
  * NexusGuard — Componente que envuelve TODA la app de un servicio.
  *
- * Colócalo en el main.tsx / App.tsx de cada servicio externo:
- *
- *   import { NexusGuard } from './hooks/NexusGuard'
+ *   import { NexusGuard } from './nexus/NexusGuard';
  *
  *   ReactDOM.createRoot(document.getElementById('root')!).render(
- *     <NexusGuard>
+ *     <NexusGuard nexusApiUrl={import.meta.env.VITE_NEXUS_API_URL} serviceName="RCV">
  *       <App />
- *     </NexusGuard>
- *   )
- *
- * Si el servicio está inactivo o el token es inválido → pantalla de bloqueo.
- * Si está activo → renderiza los children normalmente.
- * Los datos de empresa/submódulo se exponen via NexusContext.
+ *     </NexusGuard>,
+ *   );
  */
 
 import React, { createContext, useContext, ReactNode } from 'react';
-import { useNexusAccess, NexusEmpresa, NexusSubmodulo } from './useNexusAccess';
-// core: ../core/nexus-core.ts
-
-// ─── Context ─────────────────────────────────────────────────────────────────
+import {
+  useNexusAccess,
+  NexusEmpresa,
+  NexusSubmodulo,
+  NexusMetadata,
+} from './useNexusAccess';
 
 type NexusContextValue = {
   empresa: NexusEmpresa;
   submodulo: NexusSubmodulo;
+  metadata?: NexusMetadata;
 };
 
 const NexusContext = createContext<NexusContextValue | null>(null);
@@ -35,22 +32,20 @@ export function useNexus(): NexusContextValue {
   return ctx;
 }
 
-// ─── Guard Component ─────────────────────────────────────────────────────────
-
 type NexusGuardProps = {
   children: ReactNode;
-  /** Nombre del servicio mostrado en la pantalla de bloqueo */
+  nexusApiUrl: string;
   serviceName?: string;
-  /** URL del logo del servicio (opcional) */
   logoUrl?: string;
 };
 
 export function NexusGuard({
   children,
+  nexusApiUrl,
   serviceName = 'Servicio',
   logoUrl,
 }: NexusGuardProps) {
-  const access = useNexusAccess();
+  const access = useNexusAccess(nexusApiUrl);
 
   if (access.status === 'loading') {
     return (
@@ -58,13 +53,13 @@ export function NexusGuard({
         <div style={styles.card}>
           {logoUrl && <img src={logoUrl} alt={serviceName} style={styles.logo} />}
           <div style={styles.spinner} />
-          <p style={styles.subtitle}>Verificando acceso…</p>
+          <p style={styles.subtitle}>Verificando acceso con Exélixi Nexus…</p>
         </div>
       </div>
     );
   }
 
-  if (access.status === 'inactive' || access.status === 'error') {
+  if (access.status === 'blocked') {
     return (
       <div style={styles.fullPage}>
         <div style={styles.card}>
@@ -80,17 +75,18 @@ export function NexusGuard({
     );
   }
 
-  // access.status === 'active'
   return (
     <NexusContext.Provider
-      value={{ empresa: access.empresa, submodulo: access.submodulo }}
+      value={{
+        empresa: access.empresa,
+        submodulo: access.submodulo,
+        metadata: access.metadata,
+      }}
     >
       {children}
     </NexusContext.Provider>
   );
 }
-
-// ─── Inline styles (sin dependencias externas) ───────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
   fullPage: {
@@ -149,7 +145,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-// Keyframe injection (solo una vez)
 if (typeof document !== 'undefined') {
   const styleId = '__nexus_guard_spin__';
   if (!document.getElementById(styleId)) {

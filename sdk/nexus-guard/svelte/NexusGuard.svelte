@@ -1,14 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { writable } from 'svelte/store';
-  import { verifyNexusAccess, heartbeatNexus } from './core/nexus-core';
+  import { startNexusAccessPoll } from './core/nexus-core';
   import type { NexusEmpresa, NexusSubmodulo } from './core/nexus-core';
 
   export let nexusApiUrl: string;
   export let serviceName: string = 'Servicio';
   export let logoUrl: string = '';
-
-  const HEARTBEAT_MS = 5 * 60 * 1000;
 
   type State =
     | { status: 'loading' }
@@ -24,31 +22,9 @@
   });
 
   let state: State = { status: 'loading' };
-  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let stopPoll: (() => void) | undefined;
 
-  function stopHeartbeat() {
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = undefined;
-    }
-  }
-
-  function startHeartbeat() {
-    stopHeartbeat();
-    heartbeatTimer = setInterval(async () => {
-      const active = await heartbeatNexus(nexusApiUrl);
-      if (!active) {
-        stopHeartbeat();
-        nexusStore.set({ empresa: null, submodulo: null });
-        state = {
-          status: 'blocked',
-          reason: 'Sesión expirada. Acceso suspendido.',
-        };
-      }
-    }, HEARTBEAT_MS);
-  }
-
-  onMount(async () => {
+  onMount(() => {
     if (!nexusApiUrl?.trim()) {
       state = {
         status: 'blocked',
@@ -57,21 +33,22 @@
       return;
     }
 
-    const result = await verifyNexusAccess(nexusApiUrl);
-    if (result.active) {
-      nexusStore.set({ empresa: result.empresa, submodulo: result.submodulo });
-      state = {
-        status: 'active',
-        empresa: result.empresa,
-        submodulo: result.submodulo,
-      };
-      startHeartbeat();
-    } else {
-      state = { status: 'blocked', reason: result.reason };
-    }
+    stopPoll = startNexusAccessPoll(nexusApiUrl, (result) => {
+      if (result.active) {
+        nexusStore.set({ empresa: result.empresa, submodulo: result.submodulo });
+        state = {
+          status: 'active',
+          empresa: result.empresa,
+          submodulo: result.submodulo,
+        };
+      } else {
+        nexusStore.set({ empresa: null, submodulo: null });
+        state = { status: 'blocked', reason: result.reason };
+      }
+    });
   });
 
-  onDestroy(stopHeartbeat);
+  onDestroy(() => stopPoll?.());
 </script>
 
 {#if state.status === 'loading'}

@@ -110,7 +110,7 @@ Sin barra final. Debe apuntar a **exelixi-nexus-services**, no al admin React.
 `NexusGuard` ya hace:
 
 - `GET /api/access/verify` al cargar
-- Heartbeat cada **5 minutos** (`POST /api/access/heartbeat`)
+- Re-verificación cada **~30 s** (`startNexusAccessPoll`)
 - Pantalla de bloqueo si falta token o la empresa/submódulo no están activos
 
 **SSR:** la verificación corre en el navegador (`onMount`). No llames `verifyNexusAccess` en `load` del servidor.
