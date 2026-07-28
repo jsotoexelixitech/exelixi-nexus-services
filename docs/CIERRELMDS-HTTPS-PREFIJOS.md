@@ -1,43 +1,59 @@
-# cierrelmds.exelixitech.com — Mapa HTTPS con prefijos
+# cierrelmds.exelixitech.com — Mapa HTTPS (producción activa)
 
-Dominio único para QASys2000 + módulos Exelixi en **srv001** (`192.168.8.120`).  
-**Todos los servicios públicos usan prefijo** (incluido OCR en `/ocr/`, no en la raíz).
+Dominio único **La Mundial / Exélixi** en **srv001** (`192.168.8.120`).  
+Apache en **HTTPS :443** publica cada servicio con **prefijo** (`/admin/`, `/ocr/`, …).
 
-**SysIP-backend (`:3002`)** — solo interno, sin prefijo público.
+**Verificado** (curl 2026-07-07): todos los prefijos responden `HTTP 200`.
 
----
-
-## 1. URLs públicas (documentación / integración)
-
-| Prefijo        | URL HTTPS                                      | Puerto PM2 | Servicio       |
-| -------------- | ---------------------------------------------- | ---------- | -------------- |
-| `/ocr/`        | https://cierrelmds.exelixitech.com/ocr/        | 5181       | OCR web        |
-| `/formulario/` | https://cierrelmds.exelixitech.com/formulario/ | 5182       | Formulario web |
-| `/emision/`    | https://cierrelmds.exelixitech.com/emision/    | 5183       | Emisión web    |
-| `/pagos/`      | https://cierrelmds.exelixitech.com/pagos/      | 5184       | Pagos web      |
-| `/nexus-api/`  | https://cierrelmds.exelixitech.com/nexus-api/  | 3092       | Nexus API      |
-| `/admin/`      | https://cierrelmds.exelixitech.com/admin/      | 5200       | Nexus Admin    |
-
-Redirección recomendada: `/` → `/ocr/` (301).
+**nest-api (`:3002`)** — prefijo público **`/api-docs-nest-api/`** (Apache strip → `:3002`).
 
 ---
 
-## 2. Endpoints API y documentación Swagger
+## 1. URLs públicas recomendadas (HTTPS :443)
+
+| Prefijo               | URL HTTPS                                             | Puerto PM2 | PM2              |
+| --------------------- | ----------------------------------------------------- | ---------- | ---------------- |
+| `/api-docs-nest-api/` | https://cierrelmds.exelixitech.com/api-docs-nest-api/ | 3002       | `sysip-nest-api` |
+| `/admin/`             | https://cierrelmds.exelixitech.com/admin/             | 5200       | `nexus-admin`    |
+| `/ocr/`               | https://cierrelmds.exelixitech.com/ocr/               | 5181       | `ocr-web`        |
+| `/formulario/`        | https://cierrelmds.exelixitech.com/formulario/        | 5182       | `form-web`       |
+| `/emision/`           | https://cierrelmds.exelixitech.com/emision/           | 5183       | `emision-web`    |
+| `/pagos/`             | https://cierrelmds.exelixitech.com/pagos/             | 5184       | `pagos-web`      |
+| `/nexus-api/`         | https://cierrelmds.exelixitech.com/nexus-api/         | 3092       | `nexus-api`      |
+
+Las APIs de módulos (`:4001`–`:4004`) **no se publican por HTTPS externo**.  
+Los frontends las consumen vía proxy interno (`{prefijo}api` → `127.0.0.1:400x` o `vite preview`).
+
+---
+
+## 2. Acceso alternativo por puerto (interno / firewall)
+
+Si el puerto está abierto, también funciona acceso directo al PM2:
+
+| Servicio | URL alternativa                          |
+| -------- | ---------------------------------------- |
+| Admin    | https://cierrelmds.exelixitech.com:5200/ |
+| OCR      | https://cierrelmds.exelixitech.com:5181/ |
+| …        | `:5182`, `:5183`, `:5184`, `:3092`       |
+
+Desde internet, lo habitual es **:443 con prefijo**. Los puertos altos pueden estar cerrados en el firewall.
+
+---
+
+## 3. Endpoints API y Swagger
 
 | Recurso                  | URL HTTPS                                                          |
 | ------------------------ | ------------------------------------------------------------------ |
 | Health check             | https://cierrelmds.exelixitech.com/nexus-api/health                |
 | SSO delegate (QASys2000) | https://cierrelmds.exelixitech.com/nexus-api/api/auth/sso-delegate |
 | Swagger Nexus API        | https://cierrelmds.exelixitech.com/nexus-api/api-docs              |
-
-Las APIs de módulos (`:4001`–`:4004`, Swagger en `/docs`) **no se publican por HTTPS**.  
-Los frontends las consumen vía proxy interno (`{prefijo}api` → `127.0.0.1:400x`).
+| Swagger nest-api         | https://cierrelmds.exelixitech.com/api-docs-nest-api/docs          |
 
 ---
 
-## 3. Apache (infra) — ProxyPass
+## 4. Apache (infra) — ProxyPass
 
-Usar **un solo** VirtualHost SSL: `cierrelmds.exelixitech.com-le-ssl.conf` (Certbot).
+VirtualHost SSL: `cierrelmds.exelixitech.com` (Certbot).
 
 ```apache
 # Frontends: SIN strip del prefijo (Vite base=/ocr/, etc.)
@@ -60,43 +76,39 @@ ProxyPassReverse /admin/       http://127.0.0.1:5200/admin/
 ProxyPass        /nexus-api/   http://127.0.0.1:3092/
 ProxyPassReverse /nexus-api/   http://127.0.0.1:3092/
 
-RedirectMatch ^/$ /ocr/
-```
-
-Verificación:
-
-```bash
-curl -s https://cierrelmds.exelixitech.com/nexus-api/health
-# → JSON {"status":"ok",...}  (NO HTML de OCR)
-
-curl -sI https://cierrelmds.exelixitech.com/ocr/ | head -3
-curl -sI https://cierrelmds.exelixitech.com/admin/ | head -3
+# nest-api (La Mundial RCV / personas): CON strip del prefijo
+ProxyPass        /api-docs-nest-api/   http://127.0.0.1:3002/
+ProxyPassReverse /api-docs-nest-api/   http://127.0.0.1:3002/
 ```
 
 ---
 
-## 4. Deploy aplicaciones (dev / srv001)
+## 5. Build en srv001
 
-Script: `scripts/deploy-cierrelmds-prefixes-srv001.sh`
-
-Variables de build por servicio:
+Script: `scripts/deploy-cierrelmds-srv001.sh`
 
 ```bash
 export VITE_NEXUS_API_URL=https://cierrelmds.exelixitech.com/nexus-api
 
-# Módulos (ocr, formulario, emision, pagos)
+# Módulos
 export VITE_APP_BASE=/ocr/          # o /formulario/, /emision/, /pagos/
-cd frontend && npm run build && pm2 restart ocr-web
 
 # Nexus Admin
 export VITE_APP_BASE=/admin/
 export VITE_API_URL=$VITE_NEXUS_API_URL
-cd ~/nexus-admin && npm run build && pm2 restart nexus-admin
 ```
+
+| Repo            | `VITE_APP_BASE` |
+| --------------- | --------------- |
+| `~/nexus-admin` | `/admin/`       |
+| OCR             | `/ocr/`         |
+| Formulario      | `/formulario/`  |
+| Emisión         | `/emision/`     |
+| Pagos           | `/pagos/`       |
 
 ---
 
-## 5. Base de datos — URLs de submódulos (flujo SSO / flow)
+## 6. Base de datos — URLs de submódulos (flujo SSO / bridge)
 
 ```sql
 UPDATE submodulo SET submodulo_url = 'https://cierrelmds.exelixitech.com/ocr/'        WHERE submodulo_nombre ILIKE 'OCR Documentos%';
@@ -105,47 +117,40 @@ UPDATE submodulo SET submodulo_url = 'https://cierrelmds.exelixitech.com/emision
 UPDATE submodulo SET submodulo_url = 'https://cierrelmds.exelixitech.com/pagos/'      WHERE submodulo_nombre ILIKE 'Pagos%';
 ```
 
+El SSO también resuelve por **nombre** si la URL no lleva puerto (`auth.controller.ts`).
+
 ---
 
-## 6. QASys2000 (Angular HTTPS)
+## 7. QASys2000 (Angular HTTPS)
 
 ```typescript
-// SSO — POST con header x-api-key
 'https://cierrelmds.exelixitech.com/nexus-api/api/auth/sso-delegate';
 
-// Respuesta redirect_url apunta a:
-// https://cierrelmds.exelixitech.com/ocr/?nexus_token=...
+// redirect_url → https://cierrelmds.exelixitech.com/ocr/?nexus_token=...
 ```
 
-Origen permitido en CORS: `https://qasys2000.lamundialdeseguros.com` (ya configurado).
+CORS: origen `https://cierrelmds.exelixitech.com` (puerto 443 implícito) + puertos directos si aplica.
 
 ---
 
-## 7. Flujo resumido
+## 8. Verificación
+
+```bash
+curl -sI https://cierrelmds.exelixitech.com/admin/ | head -3
+curl -sI https://cierrelmds.exelixitech.com/ocr/ | head -3
+curl -s  https://cierrelmds.exelixitech.com/nexus-api/health
+```
+
+---
+
+## 9. Flujo resumido
 
 ```mermaid
 flowchart LR
-  QASys[QASys2000 HTTPS] -->|POST sso-delegate| NexusAPI["/nexus-api/"]
+  QASys[QASys2000 HTTPS] -->|sso-delegate| NexusAPI["/nexus-api/"]
   NexusAPI -->|redirect_url| OCR["/ocr/"]
-  OCR -->|verify token| NexusAPI
   OCR --> Form["/formulario/"]
   Form --> Emision["/emision/"]
   Emision --> Pagos["/pagos/"]
   Admin["/admin/"] --> NexusAPI
 ```
-
----
-
-## 8. Estado del código (repositorios)
-
-| Repo                   | Prefijo Vite        | Remote srv001    |
-| ---------------------- | ------------------- | ---------------- |
-| ocr-documentos-modulo  | `/ocr/`             | jsotoexelixitech |
-| Formulario-modulo      | `/formulario/`      | jsotoexelixitech |
-| Emision-Plan-modulo    | `/emision/`         | jsotoexelixitech |
-| Pagos-Poliza-modulo    | `/pagos/`           | jsotoexelixitech |
-| exelixi-nexus (admin)  | `/admin/`           | jsotoexelixitech |
-| exelixi-nexus-services | proxy `/nexus-api/` | jsotoexelixitech |
-
-**Pendiente infra:** aplicar ProxyPass en Apache (especialmente `/nexus-api/`).  
-**Pendiente deploy:** `nexus-admin` rebuild con `VITE_APP_BASE=/admin/` en srv001.
