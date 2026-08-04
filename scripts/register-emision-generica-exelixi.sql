@@ -12,7 +12,7 @@ DO $$
 DECLARE
   v_modulo_nombre    text := 'Emisión Genérica Exélixi';
   v_submodulo_nombre text := 'OCR Catálogo Exélixi';
-  v_submodulo_url    text := 'https://cierrelmds.exelixitech.com/ocr/?flow=exelixi-catalog';
+  v_submodulo_url    text := 'https://cierrelmds.exelixitech.com/ocr/exelixi/';
   v_modulo_id        int;
 BEGIN
   INSERT INTO modulo (modulo_nombre, modulo_estatus)
@@ -40,6 +40,12 @@ BEGIN
   );
 
   RAISE NOTICE 'Módulo id=% — submódulo "%" registrado o ya existía.', v_modulo_id, v_submodulo_nombre;
+
+  UPDATE submodulo
+  SET submodulo_url = v_submodulo_url
+  WHERE submodulo_nombre = v_submodulo_nombre
+    AND submodulo_modulo_id = v_modulo_id
+    AND submodulo_url IS DISTINCT FROM v_submodulo_url;
 END $$;
 
 SELECT m.modulo_id, m.modulo_nombre, s.submodulo_id, s.submodulo_nombre, s.submodulo_url
