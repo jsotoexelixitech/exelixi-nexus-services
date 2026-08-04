@@ -127,9 +127,30 @@ pm2 env ocr-web | grep VITE
 - **Fix:** `git checkout -- frontend/.env.production && git pull`
 - **Prevención:** No editar `.env.production` en servidor; cambios solo en repo + push
 
----
+### INC-2026-08-04-E — `/ocr/` redirige a producto-builder (Apache + puerto 5181)
 
-## 5. Comandos de verificación post-deploy
+- **Cuándo:** Tras configurar Apache `/producto-builder/` en srv001
+- **Síntoma:** `curl -I https://cierrelmds.exelixitech.com/ocr/` → `302 Location: /producto-builder/`; navegador muestra _"base URL `/producto-builder/`"_ en `/ocr/exelixi/`
+- **Causa:** Apache ya no proxy `/ocr/` → `127.0.0.1:5181/ocr/` (OCR). El puerto 5181 responde con app **producto-builder**, no `ocr-web`.
+- **Fix PM2 (jsoto):**
+  ```bash
+  pm2 describe ocr-web | grep -E 'cwd|script|args'
+  pm2 describe producto-builder-web | grep -E 'cwd|script|args'
+  ss -tlnp | grep -E '5181|5215'
+  # ocr-web debe: cwd ~/exelixi/ocr-documentos-modulo/frontend, preview --port 5181
+  cd ~/exelixi/ocr-documentos-modulo && git checkout -- frontend/.env.production && git pull
+  bash scripts/build-cierrelmds.sh && pm2 reload ecosystem.config.js --env production
+  curl -s http://127.0.0.1:5181/ocr/ | head -5   # debe ser HTML Exélixi OCR, NO mensaje producto-builder
+  ```
+- **Fix Apache (admin infra):** restaurar en VirtualHost cierrelmds:
+  ```apache
+  ProxyPass        /ocr/         http://127.0.0.1:5181/ocr/
+  ProxyPassReverse /ocr/         http://127.0.0.1:5181/ocr/
+  ```
+  Verificar: `curl -sI https://cierrelmds.exelixitech.com/ocr/` debe ser **200**, no 302 a producto-builder.
+- **Workaround temporal:** `https://cierrelmds.exelixitech.com/ocr/?flow=exelixi-catalog` solo funciona cuando Apache+5181 estén corregidos.
+
+---
 
 ```bash
 # PM2 estable (uptime > 30s, ↺ no sube)
