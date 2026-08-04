@@ -9,6 +9,7 @@
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import {
+  appendExelixiFlowToUrl,
   appendProductToUrl,
   resolveFlowProduct,
   type FlowProduct,
@@ -472,9 +473,12 @@ export function advanceSession(
     );
     return {
       finished: false,
-      nextUrl: appendProductToUrl(
-        `${nextSlot.accessUrl}&sid=${sid}`,
-        (s.data.product as FlowProduct) || 'rcv',
+      nextUrl: appendExelixiFlowToUrl(
+        appendProductToUrl(
+          `${nextSlot.accessUrl}&sid=${sid}`,
+          (s.data.product as FlowProduct) || 'rcv',
+        ),
+        Boolean(s.data.exelixiCatalogFlow),
       ),
       nextModule: {
         order: nextSlot.order,
@@ -526,9 +530,12 @@ export function navigateSession(
   );
 
   return {
-    url: appendProductToUrl(
-      `${slot.accessUrl}&sid=${sid}`,
-      (s.data.product as FlowProduct) || 'rcv',
+    url: appendExelixiFlowToUrl(
+      appendProductToUrl(
+        `${slot.accessUrl}&sid=${sid}`,
+        (s.data.product as FlowProduct) || 'rcv',
+      ),
+      Boolean(s.data.exelixiCatalogFlow),
     ),
     module: {
       order: slot.order,

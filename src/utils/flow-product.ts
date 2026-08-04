@@ -49,3 +49,28 @@ export function appendProductToUrl(url: string, product: FlowProduct): string {
     return `${url}${sep}product=${product}`;
   }
 }
+
+/** Propaga ?flow=exelixi-catalog en URLs del bridge (metadata de sesión, no sessionStorage). */
+export function appendExelixiFlowToUrl(
+  url: string,
+  exelixiCatalogFlow?: boolean,
+): string {
+  if (!url || !exelixiCatalogFlow) return url;
+  try {
+    const u = new URL(url, 'https://cierrelmds.exelixitech.com');
+    if (
+      u.searchParams.get('product') === 'rcv' ||
+      u.searchParams.get('product') === 'funerario'
+    ) {
+      return url;
+    }
+    if (!u.searchParams.has('flow')) {
+      u.searchParams.set('flow', 'exelixi-catalog');
+    }
+    return u.toString();
+  } catch {
+    if (url.includes('flow=exelixi-catalog')) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}flow=exelixi-catalog`;
+  }
+}
