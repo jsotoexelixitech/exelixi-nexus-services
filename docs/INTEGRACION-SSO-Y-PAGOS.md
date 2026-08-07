@@ -274,11 +274,11 @@ Swagger Pagos: `{pagos-api}/docs` — sección **Integración SSO / Checkout**.
 
 ## 6. Swagger / documentación interactiva
 
-| Servicio                                   | URL docs                                                    |
-| ------------------------------------------ | ----------------------------------------------------------- |
-| **Nexus API** (SSO, flow, access)          | `https://cierrelmds.exelixitech.com/nexus-api/api-docs`     |
-| **Pagos API** (verify-mobile, OTP, notify) | `https://cierrelmds.exelixitech.com/pagos-api/docs`         |
-| **nest-api**                               | `https://cierrelmds.exelixitech.com/api-docs-nest-api/docs` |
+| Servicio                                   | URL docs                                                |
+| ------------------------------------------ | ------------------------------------------------------- |
+| **Nexus API** (SSO, flow, access)          | `https://cierrelmds.exelixitech.com/nexus-api/api-docs` |
+| **Pagos API** (verify-mobile, OTP, notify) | `https://cierrelmds.exelixitech.com/pagos-api/docs`     |
+| **nest-api**                               | `https://cierrelmds.exelixitech.com/nest-api-docs/docs` |
 
 En Nexus Swagger ver: **Auth → POST /api/auth/sso-delegate**, **Flow → POST /api/flow/checkout-link**, **Access → verify / heartbeat / token**.
 

@@ -5,21 +5,21 @@ Apache en **HTTPS :443** publica cada servicio con **prefijo** (`/admin/`, `/ocr
 
 **Verificado** (curl 2026-07-07): todos los prefijos responden `HTTP 200`.
 
-**nest-api (`:3002`)** — prefijo público **`/api-docs-nest-api/`** (Apache strip → `:3002`).
+**nest-api (`:3002`)** — prefijo público **`/nest-api-docs/`** (Apache strip → `:3002`).
 
 ---
 
 ## 1. URLs públicas recomendadas (HTTPS :443)
 
-| Prefijo               | URL HTTPS                                             | Puerto PM2 | PM2              |
-| --------------------- | ----------------------------------------------------- | ---------- | ---------------- |
-| `/api-docs-nest-api/` | https://cierrelmds.exelixitech.com/api-docs-nest-api/ | 3002       | `sysip-nest-api` |
-| `/admin/`             | https://cierrelmds.exelixitech.com/admin/             | 5200       | `nexus-admin`    |
-| `/ocr/`               | https://cierrelmds.exelixitech.com/ocr/               | 5181       | `ocr-web`        |
-| `/formulario/`        | https://cierrelmds.exelixitech.com/formulario/        | 5182       | `form-web`       |
-| `/emision/`           | https://cierrelmds.exelixitech.com/emision/           | 5183       | `emision-web`    |
-| `/pagos/`             | https://cierrelmds.exelixitech.com/pagos/             | 5184       | `pagos-web`      |
-| `/nexus-api/`         | https://cierrelmds.exelixitech.com/nexus-api/         | 3092       | `nexus-api`      |
+| Prefijo           | URL HTTPS                                         | Puerto PM2 | PM2              |
+| ----------------- | ------------------------------------------------- | ---------- | ---------------- |
+| `/nest-api-docs/` | https://cierrelmds.exelixitech.com/nest-api-docs/ | 3002       | `sysip-nest-api` |
+| `/admin/`         | https://cierrelmds.exelixitech.com/admin/         | 5200       | `nexus-admin`    |
+| `/ocr/`           | https://cierrelmds.exelixitech.com/ocr/           | 5181       | `ocr-web`        |
+| `/formulario/`    | https://cierrelmds.exelixitech.com/formulario/    | 5182       | `form-web`       |
+| `/emision/`       | https://cierrelmds.exelixitech.com/emision/       | 5183       | `emision-web`    |
+| `/pagos/`         | https://cierrelmds.exelixitech.com/pagos/         | 5184       | `pagos-web`      |
+| `/nexus-api/`     | https://cierrelmds.exelixitech.com/nexus-api/     | 3092       | `nexus-api`      |
 
 Las APIs de módulos (`:4001`–`:4004`) **no se publican por HTTPS externo**.  
 Los frontends las consumen vía proxy interno (`{prefijo}api` → `127.0.0.1:400x` o `vite preview`).
@@ -47,7 +47,7 @@ Desde internet, lo habitual es **:443 con prefijo**. Los puertos altos pueden es
 | Health check             | https://cierrelmds.exelixitech.com/nexus-api/health                |
 | SSO delegate (QASys2000) | https://cierrelmds.exelixitech.com/nexus-api/api/auth/sso-delegate |
 | Swagger Nexus API        | https://cierrelmds.exelixitech.com/nexus-api/api-docs              |
-| Swagger nest-api         | https://cierrelmds.exelixitech.com/api-docs-nest-api/docs          |
+| Swagger nest-api         | https://cierrelmds.exelixitech.com/nest-api-docs/docs              |
 
 ---
 
@@ -77,8 +77,8 @@ ProxyPass        /nexus-api/   http://127.0.0.1:3092/
 ProxyPassReverse /nexus-api/   http://127.0.0.1:3092/
 
 # nest-api (La Mundial RCV / personas): CON strip del prefijo
-ProxyPass        /api-docs-nest-api/   http://127.0.0.1:3002/
-ProxyPassReverse /api-docs-nest-api/   http://127.0.0.1:3002/
+ProxyPass        /nest-api-docs/   http://127.0.0.1:3002/
+ProxyPassReverse /nest-api-docs/   http://127.0.0.1:3002/
 ```
 
 ---

@@ -45,12 +45,23 @@ cd ~/exelixi/Pagos-Poliza-modulo && git pull origin main && cd frontend && npm r
 cd ~/auto-casa && git pull origin main && npm run build && pm2 restart rcv-web
 ```
 
-## Variable de entorno frontends
+## Variable de entorno frontends (local / srv001 interno)
 
 ```
 VITE_NEXUS_API_URL=http://192.168.8.120:3092
 VITE_EMPRESA_ID=1
 ```
+
+## URLs HTTPS producción (cierrelmds.exelixitech.com)
+
+| Servicio       | URL                                            |
+| -------------- | ---------------------------------------------- |
+| Nexus Admin    | https://cierrelmds.exelixitech.com/admin/      |
+| Nexus API      | https://cierrelmds.exelixitech.com/nexus-api/  |
+| OCR Documentos | https://cierrelmds.exelixitech.com/ocr/        |
+| Formulario     | https://cierrelmds.exelixitech.com/formulario/ |
+| Emisión Plan   | https://cierrelmds.exelixitech.com/emision/    |
+| Pagos Póliza   | https://cierrelmds.exelixitech.com/pagos/      |
 
 ## Notas críticas
 

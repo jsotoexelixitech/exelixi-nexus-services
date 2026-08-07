@@ -3,7 +3,7 @@
 > **Servidor:** srv001 · `192.168.8.120` · usuario `jsoto`  
 > **Dominio HTTPS:** `cierrelmds.exelixitech.com`  
 > **Regla IDE:** `.cursor/rules/06-srv001-env-incidentes.mdc`  
-> **Última actualización:** 2026-08-04 (sesión flujo Exélixi `/ocr/exelixi/`)
+> **Última actualización:** 2026-08-04 (mapa puertos — ver `SRV001-MAPA-PUERTOS.md`)
 
 ---
 
@@ -64,7 +64,8 @@
 | `/producto-builder-api/` | `127.0.0.1:3015/producto-builder-api/` |
 | `/nest-api-docs/`        | `127.0.0.1:3002/` (strip)              |
 
-Detalle: `docs/CIERRELMDS-HTTPS-PREFIJOS.md`
+Detalle: `docs/CIERRELMDS-HTTPS-PREFIJOS.md`  
+**Mapa canónico (Apache = fuente de verdad):** `docs/SRV001-MAPA-PUERTOS.md`
 
 ---
 
@@ -76,9 +77,10 @@ Detalle: `docs/CIERRELMDS-HTTPS-PREFIJOS.md`
 | ---------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------- |
 | `~/nexus-api/.env`                                         | `PORT`, `DATABASE_URL`                                    | `PORT=3092`, PostgreSQL Nexus           |
 | `~/exelixi/ocr-documentos-modulo/server/.env`              | `PORT`, `PRODUCT_BUILDER_API_URL`, `BUILDER_CATALOG_MODE` | `4001`, `http://127.0.0.1:3015`, `true` |
-| `~/exelixi/ocr-documentos-modulo/frontend/.env.production` | `VITE_APP_BASE`                                           | `/ocr/` (repo; no editar en srv001)     |
+| `~/exelixi/ocr-documentos-modulo/frontend/.env.production` | `VITE_APP_BASE`                                           | **`/ocr/`** (absoluto)                  |
+| `~/exelixi/Formulario-modulo/frontend/.env.production`     | `VITE_APP_BASE`                                           | **`./`** (relativo, como emisión)       |
 | `~/exelixi/Formulario-modulo/server/.env`                  | `PORT`, `NEST_API_URL`                                    | `4002`, `http://127.0.0.1:3002`         |
-| `~/exelixi/Formulario-modulo/frontend/.env.production`     | `VITE_APP_BASE`                                           | `/formulario/`                          |
+| `~/exelixi/Pagos-Poliza-modulo/frontend/.env.production`   | `VITE_APP_BASE`                                           | **`./`** (relativo)                     |
 | `~/producto-builder/.env`                                  | `PORT`, prefijos API                                      | API `3015`, front `5215`                |
 
 ### Verificar claves (sin mostrar valores)
@@ -149,6 +151,14 @@ pm2 env ocr-web | grep VITE
   ```
   Verificar: `curl -sI https://cierrelmds.exelixitech.com/ocr/` debe ser **200**, no 302 a producto-builder.
 - **Workaround temporal:** `https://cierrelmds.exelixitech.com/ocr/?flow=exelixi-catalog` solo funciona cuando Apache+5181 estén corregidos.
+
+### INC-2026-08-04-F — pagos-api / pagos-web puertos incorrectos (conflicto RCV)
+
+- **Cuándo:** Deploy Pagos-Poliza-modulo con ecosystem desalineado del mapa Apache
+- **Síntoma:** `pagos-api` errored (↺ 17+); `EADDRINUSE` o crash; `pagos-web` en **5180** compite con `rcv-web`
+- **Causa:** ecosystem tenía `PORT=3001` (mismo que `rcv-api`) y preview **5180** (mismo que `rcv-web`). Apache espera **4003** / **5184**
+- **Fix:** alinear `ecosystem.config.js` con `SRV001-MAPA-PUERTOS.md` → `pagos-api` **4003**, `pagos-web` **5184** — **sin tocar Apache**
+- **Prevención:** ejecutar `bash ~/nexus-api/scripts/srv001-inventario-env.sh` antes de cualquier cambio de puertos
 
 ---
 

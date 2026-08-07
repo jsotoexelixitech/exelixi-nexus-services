@@ -18,4 +18,15 @@ alwaysApply: true
 | `exelixi-modulos/modulo-emision` | `emision-api/web` :4004/:5183 | `cd ~/exelixi/Emision-Plan-modulo && git pull && cd frontend && npm run build && pm2 restart emision-web` |
 | `exelixi-modulos/modulo-pagos` | `pagos-api/web` :4003/:5184 | `cd ~/exelixi/Pagos-Poliza-modulo && git pull && cd frontend && npm run build && pm2 restart pagos-web` |
 | `auto-casa-inspeccion` | `rcv-api/web` :3001/:5180 | `cd ~/auto-casa && git pull && npm run build && pm2 restart rcv-web` |
+
+## URLs HTTPS producción (cierrelmds.exelixitech.com)
+
+| Servicio | URL |
+| -------- | --- |
+| Nexus Admin | https://cierrelmds.exelixitech.com/admin/ |
+| Nexus API | https://cierrelmds.exelixitech.com/nexus-api/ |
+| OCR Documentos | https://cierrelmds.exelixitech.com/ocr/ |
+| Formulario | https://cierrelmds.exelixitech.com/formulario/ |
+| Emisión Plan | https://cierrelmds.exelixitech.com/emision/ |
+| Pagos Póliza | https://cierrelmds.exelixitech.com/pagos/ |
 | `SysIP-backend` | `sysip-nest-api` :3002 | `cd ~/server-api-sys && git pull && pm2 restart sysip-nest-api` |

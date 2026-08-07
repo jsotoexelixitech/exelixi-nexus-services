@@ -197,6 +197,11 @@ export class CompanyService {
   ) {
     try {
       logger.info(`Actualizando empresa ${id}`);
+
+      if (data.activo === false) {
+        await this.expireCompanyTokens(id);
+      }
+
       return await prisma.empresa.update({
         where: { id },
         data,
@@ -209,18 +214,20 @@ export class CompanyService {
     }
   }
 
+  /** Invalida tokens SSO de todos los submódulos de la empresa (bloqueo inmediato en verify). */
+  private async expireCompanyTokens(empresaId: number): Promise<void> {
+    await prisma.$executeRaw`
+      UPDATE empresa_submodulo
+      SET emsm_token_expires_at = NOW()
+      WHERE emsm_empresa_id = ${empresaId}
+    `;
+  }
+
   async deleteCompany(id: number) {
     try {
       logger.info(`Desactivando empresa ${id}`);
 
-      // Expirar TODOS los tokens de los submódulos de esta empresa de inmediato.
-      // Esto garantiza que el próximo heartbeat de cualquier módulo activo retorne 403,
-      // sin esperar a que el tokenExpiresAt natural llegue a su fin.
-      await prisma.$executeRaw`
-        UPDATE empresa_submodulo
-        SET emsm_token_expires_at = NOW()
-        WHERE emsm_empresa_id = ${id}
-      `;
+      await this.expireCompanyTokens(id);
 
       return await prisma.empresa.update({
         where: { id },

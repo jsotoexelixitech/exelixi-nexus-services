@@ -16,15 +16,17 @@ grep -m5 "NombreFuncionOClase" c:\Users\javier.soto\Desktop\all-projects\tags
 
 Resultado: `símbolo → archivo → línea exacta`. Lee solo esa sección.
 
-## PASO 2 — code-rag MCP (costo: tokens mínimos)
+## PASO 2 — ripgrep (costo: tokens mínimos)
 
-Para búsqueda semántica o cuando no conoces el nombre exacto del símbolo:
+Cuando no conoces el nombre exacto del símbolo, busca texto en el código:
 
 ```
-code_search("descripción en lenguaje natural de lo que buscas")
+rg -m5 "descripción o endpoint" --glob "!node_modules/**" --glob "!dist/**" --glob "!build/**"
 ```
 
-Devuelve fragmentos relevantes con ruta + rango de líneas.
+Devuelve archivo + línea. Lee solo ese fragmento.
+
+**No usar** MCP `code-rag` / `code_search()` — desactivado por alto consumo de CPU/RAM.
 
 ## PASO 3 — Lectura directa (último recurso)
 
@@ -39,10 +41,4 @@ Solo si los pasos 1 y 2 no identificaron el archivo:
 
 ```
 .\update-tags.ps1  (en la raíz del workspace)
-```
-
-Y re-indexar code-rag:
-
-```
-$env:REPO_ROOT="c:\Users\javier.soto\Desktop\all-projects"; npx code-rag-mcp reindex
 ```
