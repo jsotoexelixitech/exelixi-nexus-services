@@ -128,6 +128,47 @@ async function buildAccessUrl(
   return buildUrl(baseUrl, token);
 }
 
+/** Quita nexus_token de una URL de submódulo para regenerar acceso fresco. */
+function stripNexusTokenFromUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.delete('nexus_token');
+    const qs = u.searchParams.toString();
+    return `${u.origin}${u.pathname}${qs ? `?${qs}` : ''}`;
+  } catch {
+    return url.replace(/([?&])nexus_token=[^&]*&?/g, '$1').replace(/[?&]$/, '');
+  }
+}
+
+function resolveFlowMetadata(data: Record<string, unknown>): unknown {
+  if (data.metadata && typeof data.metadata === 'object') {
+    return data.metadata;
+  }
+  return undefined;
+}
+
+/** URL de navegación con token recién emitido (evita 401 tras pausas largas). */
+async function buildFreshSlotUrl(
+  empresaId: number,
+  slot: SubmoduloSlot,
+  sessionData: Record<string, unknown>,
+  sid: string,
+): Promise<string> {
+  const base = stripNexusTokenFromUrl(slot.accessUrl);
+  const metadata = resolveFlowMetadata(sessionData);
+  const withToken = await buildAccessUrl(
+    empresaId,
+    slot.submoduloId,
+    base,
+    metadata,
+  );
+  const product = (sessionData.product as FlowProduct) || 'rcv';
+  return appendExelixiFlowToUrl(
+    appendProductToUrl(`${withToken}&sid=${sid}`, product),
+    Boolean(sessionData.exelixiCatalogFlow),
+  );
+}
+
 // ─── Operaciones de sesión ────────────────────────────────────────────────────
 
 /** SSO con checkout embebido: Pagos puede abrirse sin pasar por OCR. */
@@ -446,7 +487,7 @@ export function saveSession(sid: string, patch: Record<string, unknown>) {
   return { sid, savedKeys: Object.keys(patch) };
 }
 
-export function advanceSession(
+export async function advanceSession(
   sid: string,
   fromOrder: number,
   patch: Record<string, unknown>,
@@ -471,15 +512,15 @@ export function advanceSession(
     logger.info(
       `[flow] advance sid=${sid} from=${fromOrder} → next=${nextSlot.order} (${nextSlot.nombre})`,
     );
+    const nextUrl = await buildFreshSlotUrl(
+      s.empresaId,
+      nextSlot,
+      s.data,
+      sid,
+    );
     return {
       finished: false,
-      nextUrl: appendExelixiFlowToUrl(
-        appendProductToUrl(
-          `${nextSlot.accessUrl}&sid=${sid}`,
-          (s.data.product as FlowProduct) || 'rcv',
-        ),
-        Boolean(s.data.exelixiCatalogFlow),
-      ),
+      nextUrl,
       nextModule: {
         order: nextSlot.order,
         submoduloId: nextSlot.submoduloId,
@@ -501,7 +542,7 @@ export function advanceSession(
  * Navega a un módulo del flujo (adelante o atrás) guardando el estado actual.
  * No altera el historial de completados; solo cambia `current`.
  */
-export function navigateSession(
+export async function navigateSession(
   sid: string,
   toOrder: number,
   patch: Record<string, unknown>,
@@ -529,14 +570,10 @@ export function navigateSession(
     logger.error(`Error sync DB: ${e.message}`),
   );
 
+  const url = await buildFreshSlotUrl(s.empresaId, slot, s.data, sid);
+
   return {
-    url: appendExelixiFlowToUrl(
-      appendProductToUrl(
-        `${slot.accessUrl}&sid=${sid}`,
-        (s.data.product as FlowProduct) || 'rcv',
-      ),
-      Boolean(s.data.exelixiCatalogFlow),
-    ),
+    url,
     module: {
       order: slot.order,
       submoduloId: slot.submoduloId,

@@ -278,7 +278,7 @@ router.post('/done/:sid', async (req: Request, res: Response) => {
     req.body && typeof req.body === 'object'
       ? (req.body as Record<string, unknown>)
       : {};
-  const result = advanceSession(req.params.sid, fromOrder, patch);
+  const result = await advanceSession(req.params.sid, fromOrder, patch);
   if (!result) {
     res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
     return;
@@ -304,7 +304,7 @@ router.post('/navigate/:sid', async (req: Request, res: Response) => {
     req.body && typeof req.body === 'object'
       ? (req.body as Record<string, unknown>)
       : {};
-  const result = navigateSession(req.params.sid, toOrder, patch);
+  const result = await navigateSession(req.params.sid, toOrder, patch);
   if (!result) {
     res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
     return;

@@ -304,7 +304,9 @@ export class AccessService {
     // 1. Verificar firma JWT (local, sin red)
     let payload: ReturnType<typeof verifyTenantToken>;
     try {
-      payload = verifyTenantToken(token);
+      // Misma regla que /verify: firma válida aunque el JWT haya expirado (1 h).
+      // El heartbeat renueva access_token y desliza tokenExpiresAt en BD.
+      payload = verifyTenantToken(token, { allowExpired: true });
     } catch {
       throw new AppError('Token inválido o manipulado.', 401);
     }
