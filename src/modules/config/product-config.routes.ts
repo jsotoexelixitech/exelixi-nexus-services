@@ -15,6 +15,7 @@ import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import { configWriteGuard } from './config-write.guard';
 import type { Producto, Modulo } from './product-config.defaults';
 import { env } from '../../config/env';
+import prisma from '../../config/prisma';
 
 const router = Router();
 
@@ -126,7 +127,7 @@ router.post(
 router.get(
   '/token/:empresaId/:producto/:modulo',
   apiKeyGuard,
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     const { empresaId, producto, modulo } = req.params;
     if (!validateParams(res, producto, modulo)) return;
 
@@ -152,9 +153,24 @@ router.get(
       if (v !== undefined) metadata[key] = v;
     }
 
+    const eid = Number(empresaId);
+    let empresaNombre = pick('empresaNombre');
+    if (!empresaNombre && Number.isInteger(eid) && eid > 0) {
+      try {
+        const emp = await prisma.empresa.findUnique({
+          where: { id: eid },
+          select: { nombre: true },
+        });
+        if (emp?.nombre?.trim()) empresaNombre = emp.nombre.trim();
+      } catch {
+        /* nombre opcional */
+      }
+    }
+
     const token = jwt.sign(
       {
-        empresaId: Number(empresaId),
+        empresaId: eid,
+        ...(empresaNombre ? { empresaNombre } : {}),
         producto,
         modulo,
         scope: 'config-panel',
@@ -171,6 +187,8 @@ router.get(
       token,
       expiresIn: 3600,
       canal,
+      empresaId: eid,
+      empresaNombre: empresaNombre || null,
       metadata,
     });
   },
