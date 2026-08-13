@@ -59,6 +59,8 @@ const ssoMetadataSchema = z
   .object({
     cproductor: z.union([z.string(), z.number()]).optional(),
     canal: z.string().max(50).optional(),
+    /** Tipo de canal emisión RCV (mismo metadata que metadataCanal). */
+    ctipocanal: z.union([z.string(), z.number()]).optional(),
     cramo: z.number().int().positive().optional(),
     cusuario: z.union([z.string(), z.number()]).optional(),
     ctipo: z.number().int().nonnegative().optional(),
@@ -81,6 +83,7 @@ const SSO_ROOT_METADATA_KEYS = [
   'cramo',
   'ctipo',
   'canal',
+  'ctipocanal',
   'ccanalalt_in',
   'cscanalalt_in',
   'cgestor_in',

@@ -39,6 +39,30 @@ export async function getConfig(
       ) {
         merged.healthQuestions = defaults.healthQuestions;
       }
+      // Migrar legacy → healthQuestionsByCanal.default
+      if (producto === 'funerario' && modulo === 'emision') {
+        const by = merged.healthQuestionsByCanal;
+        const legacy = merged.healthQuestions;
+        if (
+          (!by || typeof by !== 'object' || Array.isArray(by)) &&
+          Array.isArray(legacy) &&
+          legacy.length > 0
+        ) {
+          merged.healthQuestionsByCanal = { default: legacy };
+        } else if (
+          by &&
+          typeof by === 'object' &&
+          !Array.isArray(by) &&
+          !Array.isArray((by as Record<string, unknown>).default) &&
+          Array.isArray(legacy) &&
+          legacy.length > 0
+        ) {
+          merged.healthQuestionsByCanal = {
+            ...(by as Record<string, unknown>),
+            default: legacy,
+          };
+        }
+      }
       return merged;
     }
   } catch (err) {
@@ -91,6 +115,22 @@ export async function saveConfig(
       logger.warn(
         `[product-config] healthQuestions vacío ignorado; se conservan ${prevHq.length} preguntas`,
       );
+    }
+    const nextBy = incoming.healthQuestionsByCanal;
+    const prevBy = existing.healthQuestionsByCanal;
+    const nextByEmpty =
+      nextBy &&
+      typeof nextBy === 'object' &&
+      !Array.isArray(nextBy) &&
+      Object.keys(nextBy as object).length === 0;
+    if (
+      nextByEmpty &&
+      prevBy &&
+      typeof prevBy === 'object' &&
+      !Array.isArray(prevBy)
+    ) {
+      merged.healthQuestionsByCanal = prevBy;
+      logger.warn('[product-config] healthQuestionsByCanal vacío ignorado');
     }
   }
 

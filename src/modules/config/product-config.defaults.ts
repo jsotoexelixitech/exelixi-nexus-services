@@ -140,6 +140,10 @@ const EMISION_DEFAULT_FUNERARIO = {
   edadMaxima: 70,
   /** Cuestionario de salud editable en el parametrizador de Emisión */
   healthQuestions: FUNERAL_HEALTH_QUESTIONS_DEFAULT,
+  /** Preguntas por canal (metadata.canal / cproductor del JWT SSO). */
+  healthQuestionsByCanal: {
+    default: FUNERAL_HEALTH_QUESTIONS_DEFAULT,
+  },
   apiMap: [
     { internalKey: 'plan_code', externalKey: 'plan', transform: 'none' },
     { internalKey: 'frecuencia', externalKey: 'frecuencia', transform: 'none' },
