@@ -119,7 +119,9 @@ router.post(
 /**
  * GET /api/config/token/:empresaId/:producto/:modulo
  * Protegido con API key del admin.
- * Genera un JWT de 1h para acceder al parametrizador de ese módulo/empresa.
+ * Genera un JWT de 1h para el parametrizador.
+ * Query opcional (viaja en el token y se refleja en la URL del panel):
+ *   canal, cproductor, cusuario, ctipocanal, ccanalalt_in, cscanalalt_in
  */
 router.get(
   '/token/:empresaId/:producto/:modulo',
@@ -128,12 +130,49 @@ router.get(
     const { empresaId, producto, modulo } = req.params;
     if (!validateParams(res, producto, modulo)) return;
 
+    const q = req.query;
+    const pick = (key: string): string | undefined => {
+      const v = q[key];
+      if (typeof v !== 'string') return undefined;
+      const t = v.trim();
+      return t || undefined;
+    };
+
+    const canal = pick('canal') || 'default';
+    const metadata: Record<string, string> = { canal };
+    for (const key of [
+      'cproductor',
+      'cusuario',
+      'ctipocanal',
+      'ccanalalt_in',
+      'cscanalalt_in',
+      'cramo',
+    ] as const) {
+      const v = pick(key);
+      if (v !== undefined) metadata[key] = v;
+    }
+
     const token = jwt.sign(
-      { empresaId: Number(empresaId), producto, modulo, scope: 'config-panel' },
+      {
+        empresaId: Number(empresaId),
+        producto,
+        modulo,
+        scope: 'config-panel',
+        canal,
+        ...(metadata.cproductor ? { cproductor: metadata.cproductor } : {}),
+        ...(metadata.cusuario ? { cusuario: metadata.cusuario } : {}),
+        metadata,
+      },
       env.JWT_SECRET,
       { expiresIn: '1h' },
     );
-    res.json({ success: true, token, expiresIn: 3600 });
+    res.json({
+      success: true,
+      token,
+      expiresIn: 3600,
+      canal,
+      metadata,
+    });
   },
 );
 
