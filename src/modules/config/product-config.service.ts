@@ -131,6 +131,19 @@ export async function saveConfig(
     ) {
       merged.healthQuestionsByCanal = prevBy;
       logger.warn('[product-config] healthQuestionsByCanal vacío ignorado');
+    } else if (
+      nextBy &&
+      typeof nextBy === 'object' &&
+      !Array.isArray(nextBy) &&
+      prevBy &&
+      typeof prevBy === 'object' &&
+      !Array.isArray(prevBy)
+    ) {
+      // Merge por canal: el integrador puede enviar solo su clave sin borrar las demás
+      merged.healthQuestionsByCanal = {
+        ...(prevBy as Record<string, unknown>),
+        ...(nextBy as Record<string, unknown>),
+      };
     }
   }
 
