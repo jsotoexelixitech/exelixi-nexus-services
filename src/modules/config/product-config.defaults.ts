@@ -6,6 +6,8 @@
  * Si no hay config en BD para una empresa, se retorna este default.
  */
 
+import { FUNERAL_HEALTH_QUESTIONS_DEFAULT } from './funeral-health-questions.default';
+
 export type Producto = 'rcv' | 'funerario';
 export type Modulo = 'ocr' | 'formulario' | 'pagos' | 'emision';
 
@@ -136,10 +138,12 @@ const EMISION_DEFAULT_RCV = {
 const EMISION_DEFAULT_FUNERARIO = {
   diasCarencia: 30,
   edadMaxima: 70,
+  /** Cuestionario de salud editable en el parametrizador de Emisión */
+  healthQuestions: FUNERAL_HEALTH_QUESTIONS_DEFAULT,
   apiMap: [
     { internalKey: 'plan_code', externalKey: 'plan', transform: 'none' },
     { internalKey: 'frecuencia', externalKey: 'frecuencia', transform: 'none' },
-  ]
+  ],
 };
 
 // ─── Mapa de defaults ─────────────────────────────────────────────────────────

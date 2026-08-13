@@ -22,17 +22,30 @@ export async function getConfig(
   producto: Producto,
   modulo: Modulo,
 ): Promise<object> {
+  const defaults = (DEFAULT_CONFIGS[producto]?.[modulo] ?? {}) as Record<string, unknown>;
   try {
     const record = await prisma.productConfig.findUnique({
       where: { empresaId_producto_modulo: { empresaId, producto, modulo } },
     });
-    if (record) return record.configJson as object;
+    if (record) {
+      const stored = record.configJson as Record<string, unknown>;
+      const merged = { ...defaults, ...stored };
+      // Configs antiguas sin healthQuestions: heredar default funerario
+      if (
+        producto === 'funerario' &&
+        modulo === 'emision' &&
+        !Object.prototype.hasOwnProperty.call(stored, 'healthQuestions')
+      ) {
+        merged.healthQuestions = defaults.healthQuestions;
+      }
+      return merged;
+    }
   } catch (err) {
     logger.warn(
       `[product-config] Error leyendo BD, usando default: ${(err as Error).message}`,
     );
   }
-  return DEFAULT_CONFIGS[producto]?.[modulo] ?? {};
+  return defaults;
 }
 
 /**
