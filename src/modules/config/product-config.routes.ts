@@ -4,14 +4,15 @@
  * Endpoints para leer y escribir la configuración paramétrica de cada módulo.
  *
  * GET  /api/config/:empresaId/:producto/:modulo  → retorna config activa (público para módulos)
- * PUT  /api/config/:empresaId/:producto/:modulo  → guarda config personalizada (requiere API key)
- * POST /api/config/:empresaId/:producto/:modulo/reset → restaura default (requiere API key)
+ * PUT  /api/config/:empresaId/:producto/:modulo  → guarda (API key o JWT config-panel)
+ * POST /api/config/:empresaId/:producto/:modulo/reset → restaura default (API key o JWT)
  */
 
 import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { getConfig, saveConfig, resetConfig } from './product-config.service';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
+import { configWriteGuard } from './config-write.guard';
 import type { Producto, Modulo } from './product-config.defaults';
 import { env } from '../../config/env';
 
@@ -63,11 +64,11 @@ router.get(
 
 /**
  * PUT /api/config/:empresaId/:producto/:modulo
- * Protegido con API key — el panel de configuración lo llama al guardar.
+ * Protegido con API key o JWT del parametrizador (?token= desde Nexus Admin).
  */
 router.put(
   '/:empresaId/:producto/:modulo',
-  apiKeyGuard,
+  configWriteGuard,
   async (req: Request, res: Response) => {
     const { empresaId, producto, modulo } = req.params;
     if (!validateParams(res, producto, modulo)) return;
@@ -93,11 +94,11 @@ router.put(
 
 /**
  * POST /api/config/:empresaId/:producto/:modulo/reset
- * Protegido con API key — restaura la config al default hardcoded.
+ * Protegido con API key o JWT del parametrizador.
  */
 router.post(
   '/:empresaId/:producto/:modulo/reset',
-  apiKeyGuard,
+  configWriteGuard,
   async (req: Request, res: Response) => {
     const { empresaId, producto, modulo } = req.params;
     if (!validateParams(res, producto, modulo)) return;
