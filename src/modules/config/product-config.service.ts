@@ -5,6 +5,7 @@
  * Si no existe config guardada en BD, retorna el default (fallback seguro).
  */
 
+import { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
 import {
   DEFAULT_CONFIGS,
@@ -93,10 +94,11 @@ export async function saveConfig(
     }
   }
 
+  const configJsonValue = merged as Prisma.InputJsonValue;
   const record = await prisma.productConfig.upsert({
     where: { empresaId_producto_modulo: { empresaId, producto, modulo } },
-    create: { empresaId, producto, modulo, configJson: merged },
-    update: { configJson: merged },
+    create: { empresaId, producto, modulo, configJson: configJsonValue },
+    update: { configJson: configJsonValue },
   });
   logger.info(
     `[product-config] Config guardada: empresa=${empresaId} producto=${producto} modulo=${modulo}`,
