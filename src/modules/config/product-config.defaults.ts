@@ -11,6 +11,22 @@ import { FUNERAL_HEALTH_QUESTIONS_DEFAULT } from './funeral-health-questions.def
 export type Producto = 'rcv' | 'funerario';
 export type Modulo = 'ocr' | 'formulario' | 'pagos' | 'emision';
 
+const RCV_DOCS_DDS = [
+  { key: 'cedula', activo: true, obligatorio: true, label: 'Cédula de Identidad' },
+  { key: 'pasaporte', activo: true, obligatorio: false, label: 'Pasaporte' },
+  { key: 'licencia', activo: false, obligatorio: false, label: 'Licencia de Conducir' },
+  { key: 'certificado', activo: false, obligatorio: false, label: 'Certificado de Circulación' },
+  { key: 'rif', activo: false, obligatorio: false, label: 'RIF' },
+];
+
+const RCV_DOCS_DDC = [
+  { key: 'cedula', activo: true, obligatorio: true, label: 'Cédula de Identidad' },
+  { key: 'licencia', activo: true, obligatorio: true, label: 'Licencia de Conducir' },
+  { key: 'certificado', activo: true, obligatorio: true, label: 'Certificado de Circulación' },
+  { key: 'pasaporte', activo: false, obligatorio: false, label: 'Pasaporte' },
+  { key: 'rif', activo: true, obligatorio: false, label: 'RIF' },
+];
+
 // ─── OCR Defaults ─────────────────────────────────────────────────────────────
 
 const OCR_DEFAULT_RCV = {
@@ -26,8 +42,15 @@ const OCR_DEFAULT_RCV = {
       obligatorio: true,
       label: 'Certificado de Circulación',
     },
+    pasaporte: { activo: false, obligatorio: false, label: 'Pasaporte' },
     rif: { activo: false, obligatorio: false, label: 'RIF' },
   },
+  /** Circular SAA-02-1079-2026 — documentos por tipo de diligencia. */
+  documentosPorDiligencia: {
+    S: RCV_DOCS_DDS,
+    C: RCV_DOCS_DDC,
+  },
+  validarVigencia: true,
 };
 
 const OCR_DEFAULT_FUNERARIO = {
@@ -67,6 +90,18 @@ const FORMULARIO_DEFAULT_RCV = {
     estado: { activo: true, obligatorio: true, label: 'Estado' },
     ciudad: { activo: true, obligatorio: true, label: 'Ciudad' },
     direccion: { activo: true, obligatorio: true, label: 'Dirección' },
+    cprofesion: {
+      activo: true,
+      obligatorio: true,
+      label: 'Profesión',
+      tipo: 'select',
+    },
+    cactividad: {
+      activo: true,
+      obligatorio: false,
+      label: 'Actividad económica',
+      tipo: 'select',
+    },
   },
   secciones: {
     asegurado: { activo: true, label: 'Asegurado diferente al tomador' },
@@ -129,10 +164,17 @@ const PAGOS_DEFAULT_FUNERARIO = {
 const EMISION_DEFAULT_RCV = {
   permitirEstimado: true,
   inspeccionObligatoria: false,
+  /** Circular SAA-02-1079-2026 — reglas DDS/DDC post-quote. */
+  diligencia: {
+    umbralMultiplicador: 300,
+    fuenteTc: 'bcv',
+    pjSiempreDdc: true,
+    planesMasivos: ['2', '3', '4', '5', '6', '7', '8', '9'],
+  },
   apiMap: [
     { internalKey: 'plan_code', externalKey: 'plan', transform: 'none' },
     { internalKey: 'frecuencia', externalKey: 'frecuencia', transform: 'none' },
-  ]
+  ],
 };
 
 const EMISION_DEFAULT_FUNERARIO = {
