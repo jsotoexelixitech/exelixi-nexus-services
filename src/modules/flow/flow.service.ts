@@ -36,6 +36,12 @@ interface FlowSession {
   updatedAt: number;
 }
 
+interface FlowMeta {
+  moduloGroupId: number;
+  current: number;
+  history: number[];
+}
+
 // ─── Almacén en memoria ───────────────────────────────────────────────────────
 
 const SESSIONS = new Map<string, FlowSession>();
@@ -171,6 +177,122 @@ async function buildFreshSlotUrl(
 
 // ─── Operaciones de sesión ────────────────────────────────────────────────────
 
+function touchFlowMeta(s: FlowSession): void {
+  s.data._flowMeta = {
+    moduloGroupId: s.moduloGroupId,
+    current: s.current,
+    history: s.history,
+  } satisfies FlowMeta;
+}
+
+function formatSessionResponse(s: FlowSession) {
+  const cur = s.slots.find((sl) => sl.order === s.current) ?? null;
+  return {
+    sid: s.sid,
+    empresaId: s.empresaId,
+    current: s.current,
+    currentModule: cur
+      ? { order: cur.order, submoduloId: cur.submoduloId, nombre: cur.nombre }
+      : null,
+    history: s.history,
+    data: s.data,
+    totalActive: s.slots.length,
+  };
+}
+
+async function inferModuloGroupId(empresaId: number): Promise<number | null> {
+  const rows = await prisma.empresaSubmodulo.findMany({
+    where: {
+      empresaId,
+      activo: true,
+      submodulo: { activo: true },
+    },
+    include: { submodulo: { select: { moduloId: true } } },
+  });
+  const counts = new Map<number, number>();
+  for (const row of rows) {
+    const moduloId = row.submodulo.moduloId;
+    counts.set(moduloId, (counts.get(moduloId) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  let bestCount = 0;
+  for (const [moduloId, count] of counts) {
+    if (count > bestCount) {
+      best = moduloId;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+async function restoreSessionFromDb(sid: string): Promise<FlowSession | null> {
+  const cotizacionId = Number(sid);
+  if (isNaN(cotizacionId)) return null;
+
+  const cot = await prisma.cotizacion.findUnique({
+    where: { id: cotizacionId },
+  });
+  if (!cot) return null;
+
+  const data = (
+    cot.jsonData && typeof cot.jsonData === 'object' ? cot.jsonData : {}
+  ) as Record<string, unknown>;
+
+  const stored = data._flowMeta as Partial<FlowMeta> | undefined;
+  let moduloGroupId = stored?.moduloGroupId;
+  if (!moduloGroupId) {
+    moduloGroupId = (await inferModuloGroupId(cot.empresaId)) ?? undefined;
+  }
+  if (!moduloGroupId) return null;
+
+  const rawSlots = await getActiveSlots(cot.empresaId, moduloGroupId);
+  if (rawSlots.length === 0) return null;
+
+  const metadata = resolveFlowMetadata(data);
+  const slots: SubmoduloSlot[] = await Promise.all(
+    rawSlots.map(async (slot) => ({
+      ...slot,
+      accessUrl: await buildAccessUrl(
+        cot.empresaId,
+        slot.submoduloId,
+        slot.accessUrl,
+        metadata,
+      ),
+    })),
+  );
+
+  const session: FlowSession = {
+    sid,
+    empresaId: cot.empresaId,
+    moduloGroupId,
+    slots,
+    current: stored?.current ?? slots[0].order,
+    history: Array.isArray(stored?.history) ? stored.history : [],
+    data,
+    createdAt: cot.createdAt.getTime(),
+    updatedAt: Date.now(),
+  };
+  touchFlowMeta(session);
+  logger.info(
+    `[flow] restored sid=${sid} from DB empresa=${cot.empresaId} modulo=${moduloGroupId}`,
+  );
+  return session;
+}
+
+async function loadSession(sid: string): Promise<FlowSession | null> {
+  const cached = SESSIONS.get(sid);
+  if (cached) {
+    cached.updatedAt = Date.now();
+    return cached;
+  }
+
+  const restored = await restoreSessionFromDb(sid);
+  if (!restored) return null;
+
+  SESSIONS.set(sid, restored);
+  return restored;
+}
+
 /** SSO con checkout embebido: Pagos puede abrirse sin pasar por OCR. */
 function isCheckoutSsoMetadata(metadata?: unknown): boolean {
   if (!metadata || typeof metadata !== 'object') return false;
@@ -288,6 +410,7 @@ export async function startFlowFromToken(
     updatedAt: Date.now(),
   };
   SESSIONS.set(sid, session);
+  touchFlowMeta(session);
 
   logger.info(
     `[flow] auto-start sid=${sid} empresa=${empresaId} desde token submodulo=${submoduloId} product=${flowProduct} slots=${slots.length}`,
@@ -330,6 +453,7 @@ export async function startFlow(empresaId: number, moduloGroupId: number) {
     updatedAt: Date.now(),
   };
   SESSIONS.set(sid, session);
+  touchFlowMeta(session);
 
   logger.info(
     `[flow] start sid=${sid} empresa=${empresaId} modulo=${moduloGroupId} slots=${slots.length}`,
@@ -435,6 +559,7 @@ export async function startCheckoutLink(
     updatedAt: Date.now(),
   };
   SESSIONS.set(sid, session);
+  touchFlowMeta(session);
 
   logger.info(
     `[flow] checkout-link sid=${sid} empresa=${empresaId} pagos=${pagosSlot.nombre} totalVes=${totalVes}`,
@@ -455,29 +580,18 @@ export async function startCheckoutLink(
   };
 }
 
-export function getSession(sid: string) {
-  const s = SESSIONS.get(sid);
+export async function getSession(sid: string) {
+  const s = await loadSession(sid);
   if (!s) return null;
-  s.updatedAt = Date.now();
-  const cur = s.slots.find((sl) => sl.order === s.current) ?? null;
-  return {
-    sid: s.sid,
-    empresaId: s.empresaId,
-    current: s.current,
-    currentModule: cur
-      ? { order: cur.order, submoduloId: cur.submoduloId, nombre: cur.nombre }
-      : null,
-    history: s.history,
-    data: s.data,
-    totalActive: s.slots.length,
-  };
+  return formatSessionResponse(s);
 }
 
-export function saveSession(sid: string, patch: Record<string, unknown>) {
-  const s = SESSIONS.get(sid);
+export async function saveSession(sid: string, patch: Record<string, unknown>) {
+  const s = await loadSession(sid);
   if (!s) return null;
   s.data = { ...s.data, ...patch };
   s.updatedAt = Date.now();
+  touchFlowMeta(s);
 
   // Sincronizar en background (no esperamos)
   syncSessionToDb(sid).catch((e) =>
@@ -492,7 +606,7 @@ export async function advanceSession(
   fromOrder: number,
   patch: Record<string, unknown>,
 ) {
-  const s = SESSIONS.get(sid);
+  const s = await loadSession(sid);
   if (!s) return null;
 
   // Guardar datos del paso actual
@@ -502,6 +616,7 @@ export async function advanceSession(
 
   // Registrar en historial
   if (!s.history.includes(fromOrder)) s.history.push(fromOrder);
+  touchFlowMeta(s);
 
   // Encontrar el siguiente slot activo después del orden actual
   const nextSlot = s.slots.find((sl) => sl.order > fromOrder) ?? null;
@@ -512,12 +627,7 @@ export async function advanceSession(
     logger.info(
       `[flow] advance sid=${sid} from=${fromOrder} → next=${nextSlot.order} (${nextSlot.nombre})`,
     );
-    const nextUrl = await buildFreshSlotUrl(
-      s.empresaId,
-      nextSlot,
-      s.data,
-      sid,
-    );
+    const nextUrl = await buildFreshSlotUrl(s.empresaId, nextSlot, s.data, sid);
     return {
       finished: false,
       nextUrl,
@@ -547,7 +657,7 @@ export async function navigateSession(
   toOrder: number,
   patch: Record<string, unknown>,
 ) {
-  const s = SESSIONS.get(sid);
+  const s = await loadSession(sid);
   if (!s) return null;
 
   if (patch && typeof patch === 'object') {
@@ -563,6 +673,7 @@ export async function navigateSession(
 
   s.current = toOrder;
   s.updatedAt = Date.now();
+  touchFlowMeta(s);
 
   logger.info(`[flow] navigate sid=${sid} → order=${toOrder} (${slot.nombre})`);
 
@@ -587,6 +698,7 @@ export async function navigateSession(
 async function syncSessionToDb(sid: string) {
   const s = SESSIONS.get(sid);
   if (!s) return;
+  touchFlowMeta(s);
 
   const cotizacionId = Number(sid);
   if (isNaN(cotizacionId)) return; // Prevención si alguien inyectó string inválido

@@ -239,7 +239,7 @@ router.post(
  * Público (llamado desde los frontends de módulos).
  */
 router.get('/session/:sid', async (req: Request, res: Response) => {
-  const session = getSession(req.params.sid);
+  const session = await getSession(req.params.sid);
   if (!session) {
     res
       .status(404)
@@ -259,7 +259,7 @@ router.post('/save/:sid', async (req: Request, res: Response) => {
     req.body && typeof req.body === 'object'
       ? (req.body as Record<string, unknown>)
       : {};
-  const result = saveSession(req.params.sid, patch);
+  const result = await saveSession(req.params.sid, patch);
   if (!result) {
     res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
     return;
