@@ -153,6 +153,77 @@ function resolveFlowMetadata(data: Record<string, unknown>): unknown {
   return undefined;
 }
 
+type FlowDocSlot = {
+  status?: string;
+  progress?: number;
+  file?: { url?: string };
+  ocr?: unknown;
+};
+
+function hasProcessedDocuments(documents: unknown): boolean {
+  if (!documents || typeof documents !== 'object') return false;
+  return Object.values(documents as Record<string, FlowDocSlot>).some(
+    (d) => d?.status === 'done',
+  );
+}
+
+/** Evita que formulario/emisión/pagos borren el expediente OCR al hacer advance/save. */
+function mergeFlowSessionData(
+  existing: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...existing, ...patch };
+  if (
+    patch.documents &&
+    hasProcessedDocuments(existing.documents) &&
+    !hasProcessedDocuments(patch.documents)
+  ) {
+    merged.documents = existing.documents;
+  }
+  return merged;
+}
+
+async function enrichDocumentsFromOcrTable(
+  cotizacionId: number,
+  data: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (hasProcessedDocuments(data.documents)) return data;
+
+  const rows = await prisma.ocr.findMany({ where: { cotizacionId } });
+  if (rows.length === 0) return data;
+
+  const documents: Record<string, FlowDocSlot> = {
+    ...(typeof data.documents === 'object' && data.documents
+      ? (data.documents as Record<string, FlowDocSlot>)
+      : {}),
+  };
+
+  for (const row of rows) {
+    const key = String(row.tipoDocumento ?? '').trim();
+    if (!key || !row.rutaDocumento) continue;
+    const current = documents[key] ?? { status: 'idle', progress: 0 };
+    if (current.status === 'done') continue;
+    documents[key] = {
+      ...current,
+      status: 'done',
+      progress: 100,
+      file: { url: row.rutaDocumento },
+      ocr:
+        row.jsonData && typeof row.jsonData === 'object'
+          ? row.jsonData
+          : current.ocr,
+    };
+  }
+
+  if (!hasProcessedDocuments(documents)) return data;
+
+  return {
+    ...data,
+    documents,
+    ocrDone: data.ocrDone ?? true,
+  };
+}
+
 /** URL de navegación con token recién emitido (evita 401 tras pausas largas). */
 async function buildFreshSlotUrl(
   empresaId: number,
@@ -238,6 +309,8 @@ async function restoreSessionFromDb(sid: string): Promise<FlowSession | null> {
     cot.jsonData && typeof cot.jsonData === 'object' ? cot.jsonData : {}
   ) as Record<string, unknown>;
 
+  const enrichedData = await enrichDocumentsFromOcrTable(cotizacionId, data);
+
   const stored = data._flowMeta as Partial<FlowMeta> | undefined;
   let moduloGroupId = stored?.moduloGroupId;
   if (!moduloGroupId) {
@@ -268,7 +341,7 @@ async function restoreSessionFromDb(sid: string): Promise<FlowSession | null> {
     slots,
     current: stored?.current ?? slots[0].order,
     history: Array.isArray(stored?.history) ? stored.history : [],
-    data,
+    data: enrichedData,
     createdAt: cot.createdAt.getTime(),
     updatedAt: Date.now(),
   };
@@ -280,9 +353,16 @@ async function restoreSessionFromDb(sid: string): Promise<FlowSession | null> {
 }
 
 async function loadSession(sid: string): Promise<FlowSession | null> {
+  const cotizacionId = Number(sid);
   const cached = SESSIONS.get(sid);
   if (cached) {
     cached.updatedAt = Date.now();
+    if (!hasProcessedDocuments(cached.data.documents) && !isNaN(cotizacionId)) {
+      cached.data = await enrichDocumentsFromOcrTable(
+        cotizacionId,
+        cached.data,
+      );
+    }
     return cached;
   }
 
@@ -589,7 +669,7 @@ export async function getSession(sid: string) {
 export async function saveSession(sid: string, patch: Record<string, unknown>) {
   const s = await loadSession(sid);
   if (!s) return null;
-  s.data = { ...s.data, ...patch };
+  s.data = mergeFlowSessionData(s.data, patch);
   s.updatedAt = Date.now();
   touchFlowMeta(s);
 
@@ -611,7 +691,7 @@ export async function advanceSession(
 
   // Guardar datos del paso actual
   if (patch && typeof patch === 'object') {
-    s.data = { ...s.data, ...patch };
+    s.data = mergeFlowSessionData(s.data, patch);
   }
 
   // Registrar en historial
@@ -661,7 +741,7 @@ export async function navigateSession(
   if (!s) return null;
 
   if (patch && typeof patch === 'object') {
-    s.data = { ...s.data, ...patch };
+    s.data = mergeFlowSessionData(s.data, patch);
   }
 
   const slot = s.slots.find((sl) => sl.order === toOrder);
