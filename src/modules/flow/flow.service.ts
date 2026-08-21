@@ -114,6 +114,128 @@ async function getActiveSlots(
     });
 }
 
+/** Normaliza URL pública para comparar entradas OCR (17 / 33 / 37 → mismo /ocr/). */
+function normalizeModulePublicUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, '') || '/';
+    return `${u.origin.toLowerCase()}${path.toLowerCase()}`;
+  } catch {
+    return url.trim().toLowerCase().replace(/\/+$/, '');
+  }
+}
+
+function isOcrEntrySubmodulo(nombre: string, url: string | null): boolean {
+  if (nombre.toLowerCase().includes('ocr')) return true;
+  if (!url) return false;
+  try {
+    return /\/ocr(\/|$)/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isChainEntrySubmodulo(
+  tokenSubmoduloId: number,
+  tokenUrl: string | null,
+  rawSlots: SubmoduloSlot[],
+): boolean {
+  if (rawSlots.length === 0) return false;
+  if (rawSlots[0].submoduloId === tokenSubmoduloId) return true;
+  if (!tokenUrl) return false;
+  return (
+    normalizeModulePublicUrl(tokenUrl) ===
+    normalizeModulePublicUrl(rawSlots[0].accessUrl)
+  );
+}
+
+/**
+ * Si el token apunta a un OCR huérfano (ej. sub 33 con solo 1 activo en módulo 7),
+ * busca otra cadena RCV de la empresa con la misma URL de entrada (prioriza módulo 14 QA).
+ */
+async function findRcvChainForEntryUrl(
+  empresaId: number,
+  entryUrl: string,
+): Promise<{ moduloGroupId: number; rawSlots: SubmoduloSlot[] } | null> {
+  const target = normalizeModulePublicUrl(entryUrl);
+
+  const rows = await prisma.empresaSubmodulo.findMany({
+    where: {
+      empresaId,
+      activo: true,
+      submodulo: { activo: true, url: { not: null } },
+    },
+    include: {
+      submodulo: {
+        select: { id: true, nombre: true, url: true, moduloId: true },
+      },
+    },
+    orderBy: { submoduloId: 'asc' },
+  });
+
+  const byModulo = new Map<number, SubmoduloSlot[]>();
+  for (const row of rows) {
+    const sub = row.submodulo!;
+    const list = byModulo.get(sub.moduloId) ?? [];
+    list.push({
+      order: list.length + 1,
+      submoduloId: sub.id,
+      nombre: sub.nombre,
+      accessUrl: sub.url!,
+    });
+    byModulo.set(sub.moduloId, list);
+  }
+
+  let best: {
+    moduloGroupId: number;
+    rawSlots: SubmoduloSlot[];
+    score: number;
+  } | null = null;
+
+  for (const [moduloGroupId, slots] of byModulo) {
+    if (slots.length < 2) continue;
+    if (normalizeModulePublicUrl(slots[0].accessUrl) !== target) continue;
+
+    const score = (moduloGroupId === 14 ? 1000 : 0) + slots.length;
+    if (!best || score > best.score) {
+      best = { moduloGroupId, rawSlots: slots, score };
+    }
+  }
+
+  return best
+    ? { moduloGroupId: best.moduloGroupId, rawSlots: best.rawSlots }
+    : null;
+}
+
+async function resolveFlowChainFromToken(
+  empresaId: number,
+  submodulo: {
+    id: number;
+    moduloId: number;
+    nombre: string;
+    url: string | null;
+  },
+): Promise<{ moduloGroupId: number; rawSlots: SubmoduloSlot[] }> {
+  const moduloGroupId = submodulo.moduloId;
+  const rawSlots = await getActiveSlots(empresaId, moduloGroupId);
+
+  if (rawSlots.length >= 2) {
+    return { moduloGroupId, rawSlots };
+  }
+
+  if (submodulo.url && isOcrEntrySubmodulo(submodulo.nombre, submodulo.url)) {
+    const fallback = await findRcvChainForEntryUrl(empresaId, submodulo.url);
+    if (fallback) {
+      logger.info(
+        `[flow] chain-fallback empresa=${empresaId} tokenSub=${submodulo.id} group=${moduloGroupId} -> group=${fallback.moduloGroupId} slots=${fallback.rawSlots.length}`,
+      );
+      return fallback;
+    }
+  }
+
+  return { moduloGroupId, rawSlots };
+}
+
 /**
  * Genera la URL de acceso con el nexus_token firmado.
  */
@@ -431,8 +553,10 @@ export async function startFlowFromToken(
     moduloNombre: submodulo.modulo?.nombre,
   });
 
-  const moduloGroupId = submodulo.moduloId;
-  const rawSlots = await getActiveSlots(empresaId, moduloGroupId);
+  const { moduloGroupId, rawSlots } = await resolveFlowChainFromToken(
+    empresaId,
+    submodulo,
+  );
 
   // Si solo hay 1 submódulo activo, no hay cadena que armar
   if (rawSlots.length <= 1) {
@@ -445,7 +569,7 @@ export async function startFlowFromToken(
   // Checkout SSO embebido: Pagos (u otro submódulo) es entrada válida con metadata.checkout
   if (
     isCheckoutSsoMetadata(metadata) &&
-    rawSlots[0].submoduloId !== submoduloId
+    !isChainEntrySubmodulo(submoduloId, submodulo.url, rawSlots)
   ) {
     logger.info(
       `[flow] checkout-standalone empresa=${empresaId} submodulo=${submoduloId} (no OCR chain)`,
@@ -457,8 +581,8 @@ export async function startFlowFromToken(
     };
   }
 
-  // Solo el primer slot puede iniciar el flujo automático
-  if (rawSlots[0].submoduloId !== submoduloId) {
+  // Solo el primer slot puede iniciar el flujo (o un OCR alterno con la misma URL)
+  if (!isChainEntrySubmodulo(submoduloId, submodulo.url, rawSlots)) {
     return {
       error: `Este submódulo no es el punto de entrada del flujo. El primero es ${rawSlots[0].nombre}.`,
     };
