@@ -2,6 +2,7 @@ import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
 import { generateTenantToken, buildAccessUrl } from '../../utils/tenant-token';
+import { filterModulosForAdminCatalog } from '../../utils/submodulo-environment';
 
 type TxClient = Omit<
   typeof prisma,
@@ -115,7 +116,7 @@ export class CompanyService {
     }
 
     const empresaSubmodulo = getEmpresaSubmoduloDelegate(prisma);
-    const [catalogo, empresaModulos, empresaSubmodulos] = await Promise.all([
+    const [catalogoRaw, empresaModulos, empresaSubmodulos] = await Promise.all([
       prisma.modulo.findMany({
         include: { submodulos: true },
       }),
@@ -126,6 +127,8 @@ export class CompanyService {
         ? empresaSubmodulo.findMany({ where: { empresaId: id } })
         : Promise.resolve([]),
     ]);
+
+    const catalogo = filterModulosForAdminCatalog(catalogoRaw);
 
     const byModuloId = new Map<number, (typeof empresaModulos)[number]>();
     for (const em of empresaModulos) byModuloId.set(em.moduloId, em);

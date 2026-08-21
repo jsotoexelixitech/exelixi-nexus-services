@@ -1,13 +1,8 @@
 -- srv001qa — Corregir 409 en POST /api/flow/start-from-token
 --
--- Causa: el nexus_token lleva submoduloId 33 (OCR Documentos Cierre) pero en el
--- módulo 7 solo ese sub está activo → getActiveSlots devuelve 1 fila → 409.
---
--- Solución A (inmediata, sin redeploy nexus-api):
---   Cadena 33→34→35→36 activa; 17→20 OFF para que 33 sea el primer slot.
---
--- Solución B (recomendada + deploy nexus-api con chain-fallback):
---   Activar RCV Modular QA (37–40) y copiar URL nueva desde sub 37 en Admin.
+-- Plantilla QA (alineada con qa-standardize-empresa-submodulos.sql):
+--   OFF  módulo 7 subs 17–20 y 33–36 (duplicados / Cierre dev)
+--   ON   módulo 14 RCV Modular QA subs 37–40
 --
 -- Ejecutar:
 --   cd ~/nexus-api && source .env
@@ -19,7 +14,6 @@ CREATE TEMP TABLE tmp_qa_empresas AS
 SELECT empresa_id FROM empresa
 WHERE empresa_estatus = true AND empresa_id IN (5, 6, 7, 8, 9, 10);
 
--- Módulos padre necesarios para verify + cadena
 UPDATE empresa_modulo em
 SET emmo_estatus = true
 FROM tmp_qa_empresas e
@@ -34,22 +28,20 @@ WHERE NOT EXISTS (
   WHERE em.emmo_empresa_id = e.empresa_id AND em.emmo_modulo_id = 14
 );
 
--- Filas faltantes
 INSERT INTO empresa_submodulo (emsm_empresa_id, emsm_submodulo_id, emsm_estatus, emsm_created_at)
 SELECT e.empresa_id, s.submodulo_id, true, NOW()
 FROM tmp_qa_empresas e
 CROSS JOIN submodulo s
-WHERE s.submodulo_id IN (33, 34, 35, 36, 37, 38, 39, 40)
+WHERE s.submodulo_id IN (17, 18, 19, 20, 33, 34, 35, 36, 37, 38, 39, 40)
 AND NOT EXISTS (
   SELECT 1 FROM empresa_submodulo es
   WHERE es.emsm_empresa_id = e.empresa_id AND es.emsm_submodulo_id = s.submodulo_id
 );
 
--- Evitar 8 slots mezclados: OFF 17–20, ON cadena Cierre 33–36
 UPDATE empresa_submodulo es
 SET emsm_estatus = CASE
   WHEN es.emsm_submodulo_id IN (17, 18, 19, 20) THEN false
-  WHEN es.emsm_submodulo_id IN (33, 34, 35, 36) THEN true
+  WHEN es.emsm_submodulo_id IN (33, 34, 35, 36) THEN false
   WHEN es.emsm_submodulo_id IN (37, 38, 39, 40) THEN true
   ELSE es.emsm_estatus
 END
@@ -60,7 +52,7 @@ WHERE es.emsm_empresa_id = e.empresa_id
 COMMIT;
 
 \echo ''
-\echo '=== Conteo activos módulo 7 (debe ser 4: 33–36) ==='
+\echo '=== Conteo activos módulo 7 (debe ser 0) ==='
 SELECT e.empresa_id,
        e.empresa_nombre,
        COUNT(*) FILTER (WHERE es.emsm_estatus) AS activos_mod7

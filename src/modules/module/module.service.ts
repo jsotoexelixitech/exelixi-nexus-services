@@ -1,5 +1,6 @@
 import { networkInterfaces } from 'os';
 import prisma from '../../config/prisma';
+import { filterModulosForAdminCatalog } from '../../utils/submodulo-environment';
 
 export interface FlowStatusResult {
   moduloGroupId: number;
@@ -37,11 +38,12 @@ export class ModuleService {
    * Retorna todos los módulos y sus submódulos (para administración).
    */
   async getAllModules() {
-    return await prisma.modulo.findMany({
+    const rows = await prisma.modulo.findMany({
       include: {
         submodulos: true,
       },
     });
+    return filterModulosForAdminCatalog(rows);
   }
 
   /**
