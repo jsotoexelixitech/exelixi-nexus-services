@@ -12,17 +12,47 @@ export type Producto = 'rcv' | 'funerario';
 export type Modulo = 'ocr' | 'formulario' | 'pagos' | 'emision';
 
 const RCV_DOCS_DDS = [
-  { key: 'cedula', activo: true, obligatorio: true, label: 'Cédula de Identidad' },
+  {
+    key: 'cedula',
+    activo: true,
+    obligatorio: true,
+    label: 'Cédula de Identidad',
+  },
   { key: 'pasaporte', activo: true, obligatorio: false, label: 'Pasaporte' },
-  { key: 'licencia', activo: false, obligatorio: false, label: 'Licencia de Conducir' },
-  { key: 'certificado', activo: false, obligatorio: false, label: 'Certificado de Circulación' },
+  {
+    key: 'licencia',
+    activo: false,
+    obligatorio: false,
+    label: 'Licencia de Conducir',
+  },
+  {
+    key: 'certificado',
+    activo: false,
+    obligatorio: false,
+    label: 'Certificado de Circulación',
+  },
   { key: 'rif', activo: false, obligatorio: false, label: 'RIF' },
 ];
 
 const RCV_DOCS_DDC = [
-  { key: 'cedula', activo: true, obligatorio: true, label: 'Cédula de Identidad' },
-  { key: 'licencia', activo: true, obligatorio: true, label: 'Licencia de Conducir' },
-  { key: 'certificado', activo: true, obligatorio: true, label: 'Certificado de Circulación' },
+  {
+    key: 'cedula',
+    activo: true,
+    obligatorio: true,
+    label: 'Cédula de Identidad',
+  },
+  {
+    key: 'licencia',
+    activo: true,
+    obligatorio: true,
+    label: 'Licencia de Conducir',
+  },
+  {
+    key: 'certificado',
+    activo: true,
+    obligatorio: true,
+    label: 'Certificado de Circulación',
+  },
   { key: 'pasaporte', activo: false, obligatorio: false, label: 'Pasaporte' },
   { key: 'rif', activo: true, obligatorio: false, label: 'RIF' },
 ];
@@ -180,6 +210,11 @@ const EMISION_DEFAULT_RCV = {
 const EMISION_DEFAULT_FUNERARIO = {
   diasCarencia: 30,
   edadMaxima: 70,
+  /** Scoring del cuestionario — todas las solicitudes pasan por revisión técnica (fase 1). */
+  healthScoring: {
+    enabled: true,
+    reviewAll: true,
+  },
   /** Cuestionario de salud editable en el parametrizador de Emisión */
   healthQuestions: FUNERAL_HEALTH_QUESTIONS_DEFAULT,
   /** Preguntas por canal (metadata.canal / cproductor del JWT SSO). */

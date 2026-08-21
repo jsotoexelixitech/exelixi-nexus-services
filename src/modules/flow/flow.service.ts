@@ -271,7 +271,9 @@ function formatSessionResponse(s: FlowSession) {
   };
 }
 
-async function inferModuloGroupId(empresaId: number): Promise<number | null> {
+export async function inferModuloGroupId(
+  empresaId: number,
+): Promise<number | null> {
   const rows = await prisma.empresaSubmodulo.findMany({
     where: {
       empresaId,
@@ -640,6 +642,7 @@ export async function startCheckoutLink(
   };
   SESSIONS.set(sid, session);
   touchFlowMeta(session);
+  await syncSessionToDb(sid);
 
   logger.info(
     `[flow] checkout-link sid=${sid} empresa=${empresaId} pagos=${pagosSlot.nombre} totalVes=${totalVes}`,

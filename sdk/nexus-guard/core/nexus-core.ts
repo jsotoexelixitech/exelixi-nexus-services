@@ -71,6 +71,46 @@ export function getTokenFromUrl(): string | null {
   return new URLSearchParams(window.location.search).get('nexus_token');
 }
 
+/** Quita nexus_token de la barra de dirección tras guardarlo (evita re-verificar JWT viejo al F5). */
+export function stripNexusTokenFromUrl(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const u = new URL(window.location.href);
+    if (!u.searchParams.has('nexus_token')) return;
+    u.searchParams.delete('nexus_token');
+    const next = u.pathname + u.search + u.hash;
+    window.history.replaceState({}, '', next || u.pathname);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Resuelve la URL de Nexus API en el navegador.
+ * En HTTPS, si el build apunta a IP interna u otro host, usa same-origin /nexus-api
+ * (requiere ProxyPass en Apache del subdominio del módulo).
+ */
+export function resolveNexusApiUrl(configured?: string): string {
+  const trimmed = configured?.trim().replace(/\/$/, '') ?? '';
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+    const internal = /^http:\/\/(192\.168\.|10\.|127\.0\.0\.1|localhost)/i;
+    if (!trimmed || internal.test(trimmed)) {
+      return `${window.location.origin}/nexus-api`;
+    }
+    try {
+      const cfgHost = new URL(trimmed).host;
+      if (cfgHost !== window.location.host) {
+        return `${window.location.origin}/nexus-api`;
+      }
+    } catch {
+      return `${window.location.origin}/nexus-api`;
+    }
+    return trimmed;
+  }
+  if (trimmed) return trimmed;
+  return 'http://localhost:3092';
+}
+
 // ── Verificación y heartbeat ─────────────────────────────────────────────────
 
 /**
@@ -84,7 +124,9 @@ export async function verifyNexusAccess(
 ): Promise<NexusResult> {
   const urlToken = getTokenFromUrl();
   const storedToken = getNexusToken();
-  const token = urlToken ?? storedToken;
+  // Token refrescado en sessionStorage tiene prioridad sobre ?nexus_token= de la URL
+  // (evita bloqueos al recargar con un JWT viejo en la barra de direcciones).
+  const token = storedToken ?? urlToken;
 
   if (!token) {
     return {
@@ -93,17 +135,16 @@ export async function verifyNexusAccess(
     };
   }
 
+  const apiBase = resolveNexusApiUrl(nexusApiUrl);
+
   try {
-    const res = await fetch(
-      `${nexusApiUrl.replace(/\/$/, '')}/api/access/verify`,
-      {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+    const res = await fetch(`${apiBase.replace(/\/$/, '')}/api/access/verify`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
       },
-    );
+    });
 
     const data = await res.json();
 
@@ -111,10 +152,11 @@ export async function verifyNexusAccess(
     else {
       const refreshed = res.headers.get('X-Nexus-Token-Refreshed');
       if (refreshed) setNexusToken(refreshed);
-      else if (urlToken) setNexusToken(urlToken);
+      else if (urlToken && !storedToken) setNexusToken(urlToken);
     }
 
     if (data.active) {
+      if (urlToken) stripNexusTokenFromUrl();
       return {
         active: true,
         empresa: data.empresa,
@@ -174,9 +216,11 @@ export async function heartbeatNexus(nexusApiUrl: string): Promise<boolean> {
   const token = getNexusToken();
   if (!token) return false;
 
+  const apiBase = resolveNexusApiUrl(nexusApiUrl);
+
   try {
     const res = await fetch(
-      `${nexusApiUrl.replace(/\/$/, '')}/api/access/heartbeat`,
+      `${apiBase.replace(/\/$/, '')}/api/access/heartbeat`,
       {
         method: 'POST',
         headers: {

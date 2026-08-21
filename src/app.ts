@@ -28,6 +28,7 @@ import accessRoutes from './modules/access/access.routes';
 import flowRoutes from './modules/flow/flow.routes';
 import productConfigRoutes from './modules/config/product-config.routes';
 import emisionRoutes from './modules/emision/emision.routes';
+import funeralSubmissionRoutes from './modules/funeral-submission/funeral-submission.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -107,6 +108,9 @@ app.use('/api/flow', flowRoutes);
 // GET /api/config/:empresaId/:producto/:modulo es público para que los módulos lo lean sin API key.
 // PUT/POST tienen apiKeyGuard dentro del router.
 app.use('/api/config', productConfigRoutes);
+
+// Solicitudes funerario (revisión técnica) — guards propios en el router
+app.use('/api/funeral-submissions', funeralSubmissionRoutes);
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);

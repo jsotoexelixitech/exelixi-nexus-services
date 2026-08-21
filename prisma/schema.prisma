@@ -28,6 +28,7 @@ model Empresa {
   pagoMetodos  PagoMetodo[]
   emisiones    Emision[]
   productConfigs ProductConfig[]
+  funeralSubmissions FuneralSubmission[]
   feeTransaccion Decimal?         @default(0) @map("empresa_fee_transaccion") @db.Decimal(10, 2)
   apiKey         String?          @unique @map("empresa_api_key") @db.VarChar(128)
 
@@ -303,4 +304,36 @@ model ProductConfig {
 
   @@unique([empresaId, producto, modulo], map: "uq_product_config")
   @@map("product_config")
+}
+
+/// Solicitud funerario pendiente de revisión técnica (scoring + cuestionario).
+model FuneralSubmission {
+  id               String    @id @default(uuid()) @map("funeral_submission_id") @db.Uuid
+  empresaId        Int       @map("funeral_submission_empresa_id")
+  sessionId        String    @map("funeral_submission_session_id") @db.VarChar(128)
+  canal            String    @default("default") @map("funeral_submission_canal") @db.VarChar(64)
+  estado           String    @default("pending") @map("funeral_submission_estado") @db.VarChar(32)
+  tomadorRif       String?   @map("funeral_submission_tomador_rif") @db.VarChar(32)
+  tomadorNombre    String?   @map("funeral_submission_tomador_nombre") @db.VarChar(256)
+  tomadorEmail     String?   @map("funeral_submission_tomador_email") @db.VarChar(256)
+  cplan            String    @map("funeral_submission_cplan") @db.VarChar(16)
+  planName         String?   @map("funeral_submission_plan_name") @db.VarChar(256)
+  cramo            Int?      @map("funeral_submission_cramo")
+  scoreTotal       Int       @default(0) @map("funeral_submission_score_total")
+  scoreBreakdown   Json      @default("[]") @map("funeral_submission_score_breakdown") @db.JsonB
+  healthAnswers    Json      @default("{}") @map("funeral_submission_health_answers") @db.JsonB
+  snapshotJson     Json      @map("funeral_submission_snapshot") @db.JsonB
+  rejectReason     String?   @map("funeral_submission_reject_reason") @db.Text
+  reviewedBy       String?   @map("funeral_submission_reviewed_by") @db.VarChar(128)
+  reviewedAt       DateTime? @map("funeral_submission_reviewed_at") @db.Timestamp(6)
+  paymentUrl       String?   @map("funeral_submission_payment_url") @db.Text
+  paymentSid       String?   @map("funeral_submission_payment_sid") @db.VarChar(128)
+  paymentExpiresAt DateTime? @map("funeral_submission_payment_expires_at") @db.Timestamp(6)
+  createdAt        DateTime  @default(now()) @map("funeral_submission_created_at") @db.Timestamp(6)
+  updatedAt        DateTime  @updatedAt @map("funeral_submission_updated_at") @db.Timestamp(6)
+  empresa          Empresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade, map: "fk_funeral_submission_empresa")
+
+  @@index([empresaId, estado], map: "idx_funeral_submission_empresa_estado")
+  @@index([sessionId], map: "idx_funeral_submission_session")
+  @@map("funeral_submission")
 }
