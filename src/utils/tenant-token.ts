@@ -87,11 +87,32 @@ export function verifyTenantToken(
 }
 
 /**
+ * Reescribe el host de submodulo_url según el entorno (QA vs dev).
+ * En srv001qa: NEXUS_PUBLIC_ORIGIN=https://nexusqa.exelixitech.com
+ * Conserva path (/ocr/, /formulario/, …) y query del registro en BD.
+ */
+export function rewritePublicModuleUrl(submoduloUrl: string): string {
+  const origin = process.env.NEXUS_PUBLIC_ORIGIN?.trim();
+  if (!origin) return submoduloUrl;
+
+  try {
+    const pub = new URL(origin.includes('://') ? origin : `https://${origin}`);
+    const u = new URL(submoduloUrl);
+    u.protocol = pub.protocol;
+    u.hostname = pub.hostname;
+    u.port = pub.port;
+    return u.toString();
+  } catch {
+    return submoduloUrl;
+  }
+}
+
+/**
  * Normaliza la URL base del submódulo para redirects con prefijo Apache (/ocr/, etc.).
  * Paths con segmento reciben barra final; host:puerto sin path (/) no cambia.
  */
 export function normalizeSubmoduloAccessBase(submoduloUrl: string): string {
-  const trimmed = submoduloUrl.trim();
+  const trimmed = rewritePublicModuleUrl(submoduloUrl.trim());
   try {
     const url = new URL(trimmed);
     const search = url.search;

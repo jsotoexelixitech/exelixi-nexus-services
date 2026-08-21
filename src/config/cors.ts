@@ -59,6 +59,15 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
   'https://cierrelmds.exelixitech.com:5183',
   'https://cierrelmds.exelixitech.com:5184',
   'https://cierrelmds.exelixitech.com:5180',
+
+  // --- srv001qa HTTPS nexusqa (QA estable) ---
+  'https://nexusqa.exelixitech.com',
+  'http://192.168.8.121:5181',
+  'http://192.168.8.121:5182',
+  'http://192.168.8.121:5183',
+  'http://192.168.8.121:5184',
+  'http://192.168.8.121:5200',
+  'http://192.168.8.121:3092',
 ];
 
 /**
