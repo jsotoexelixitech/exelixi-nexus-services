@@ -47,6 +47,7 @@ export function buildFuneralCheckoutPatch(
       requirePayment: true,
       lockFields: true,
       hideNavigation: true,
+      onSuccess: { mode: 'emit' },
     },
     checkout: {
       title: `Póliza funerario — ${planLabel}`,
