@@ -50,8 +50,8 @@ export function buildFuneralCheckoutPatch(
       onSuccess: { mode: 'emit' },
     },
     checkout: {
-      title: `Póliza funerario — ${planLabel}`,
-      subtitle: 'Pago autorizado tras revisión técnica',
+      title: planLabel,
+      subtitle: 'Seguro funerario · pago en línea',
       totalVes,
       totalUsd: mprimaext > 0 ? mprimaext : undefined,
       exchangeRate: ptasa,
