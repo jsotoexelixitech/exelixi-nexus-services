@@ -138,48 +138,60 @@ export class CompanyService {
       bySubmoduloId.set(esm.submoduloId, esm);
     }
 
-    const modulos = catalogo.map(
-      (m: { id: number; submodulos?: unknown; [key: string]: unknown }) => {
-        const em = byModuloId.get(m.id);
-        const submodulos = Array.isArray(m.submodulos)
-          ? (
-              m.submodulos as Array<{
-                id: number;
-                nombre: string;
-                url: string | null;
-                activo: boolean;
-                moduloId: number;
-                [key: string]: unknown;
-              }>
-            ).map((sm) => {
-              const esm = bySubmoduloId.get(sm.id);
-              const tenantToken = esm?.tenantToken ?? null;
-              const accessUrl =
-                tenantToken && sm.url
-                  ? buildAccessUrl(sm.url, tenantToken)
-                  : null;
-              return {
-                ...sm,
-                activoEmpresa: esm?.activo ?? false,
-                tenantToken,
-                accessUrl,
-              };
-            })
-          : m.submodulos;
+    const modulos = await Promise.all(
+      catalogo.map(
+        async (m: {
+          id: number;
+          submodulos?: unknown;
+          [key: string]: unknown;
+        }) => {
+          const em = byModuloId.get(m.id);
+          const submodulos = Array.isArray(m.submodulos)
+            ? await Promise.all(
+                (
+                  m.submodulos as Array<{
+                    id: number;
+                    nombre: string;
+                    url: string | null;
+                    activo: boolean;
+                    moduloId: number;
+                    [key: string]: unknown;
+                  }>
+                ).map(async (sm) => {
+                  let esm = bySubmoduloId.get(sm.id);
+                  if (!esm && sm.url) {
+                    esm = await this.ensureEmpresaSubmoduloToken(id, sm.id);
+                    if (esm) bySubmoduloId.set(sm.id, esm);
+                  }
+                  const tenantToken = esm?.tenantToken ?? null;
+                  const accessUrl =
+                    tenantToken && sm.url
+                      ? buildAccessUrl(sm.url, tenantToken)
+                      : null;
+                  return {
+                    ...sm,
+                    activoEmpresa: esm?.activo ?? false,
+                    tenantToken,
+                    accessUrl,
+                  };
+                }),
+              )
+            : m.submodulos;
 
-        return {
-          id: em?.id ?? null,
-          empresaId: id,
-          moduloId: m.id,
-          token: em?.token ?? null,
-          activo: em?.activo ?? false,
-          createdAt: em?.createdAt ?? null,
-          modulo: {
-            ...m,
-            submodulos,
-          },
-        };
-      },
+          return {
+            id: em?.id ?? null,
+            empresaId: id,
+            moduloId: m.id,
+            token: em?.token ?? null,
+            activo: em?.activo ?? false,
+            createdAt: em?.createdAt ?? null,
+            modulo: {
+              ...m,
+              submodulos,
+            },
+          };
+        },
+      ),
     );
 
     return {
@@ -254,13 +266,14 @@ export class CompanyService {
         where: { empresaId, moduloId },
       });
 
+      let result;
       if (existing) {
-        return await prisma.empresaModulo.update({
+        result = await prisma.empresaModulo.update({
           where: { id: existing.id },
           data: { activo: active },
         });
       } else {
-        return await prisma.empresaModulo.create({
+        result = await prisma.empresaModulo.create({
           data: {
             empresaId,
             moduloId,
@@ -269,6 +282,12 @@ export class CompanyService {
           },
         });
       }
+
+      if (active) {
+        await this.provisionModuleSubmodulesForCompany(empresaId, moduloId);
+      }
+
+      return result;
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : 'Error desconocido';
@@ -419,5 +438,60 @@ export class CompanyService {
       logger.error(`Error al obtener tokens de conexión: ${message}`);
       throw new AppError('Error al recuperar los tokens de conexión.', 500);
     }
+  }
+
+  /** Crea EmpresaSubmodulo + tenantToken si falta (p. ej. submódulo nuevo en catálogo). */
+  async ensureEmpresaSubmoduloToken(
+    empresaId: number,
+    submoduloId: number,
+  ): Promise<EmpresaSubmoduloRow | null> {
+    const esCm = getEmpresaSubmoduloDelegate(prisma);
+    if (!esCm) return null;
+
+    const existing = await esCm.findFirst({
+      where: { empresaId, submoduloId },
+    });
+    if (existing) return existing;
+
+    const tenantToken = generateTenantToken(empresaId, submoduloId);
+    logger.info(
+      `Token provisionado empresa=${empresaId} submodulo=${submoduloId}`,
+    );
+    return esCm.create({
+      data: {
+        empresaId,
+        submoduloId,
+        activo: false,
+        tenantToken,
+      },
+    });
+  }
+
+  /** Tras crear un submódulo: tokens para todas las empresas activas. */
+  async provisionSubmoduleForAllCompanies(submoduloId: number) {
+    const empresas = await prisma.empresa.findMany({
+      where: { activo: true },
+      select: { id: true },
+    });
+    await Promise.all(
+      empresas.map((e) => this.ensureEmpresaSubmoduloToken(e.id, submoduloId)),
+    );
+    logger.info(
+      `Submódulo ${submoduloId}: tokens provisionados para ${empresas.length} empresa(s)`,
+    );
+  }
+
+  /** Al activar un módulo en una empresa: asegura tokens de todos sus submódulos. */
+  async provisionModuleSubmodulesForCompany(
+    empresaId: number,
+    moduloId: number,
+  ) {
+    const subs = await prisma.submodulo.findMany({
+      where: { moduloId, activo: true },
+      select: { id: true },
+    });
+    await Promise.all(
+      subs.map((s) => this.ensureEmpresaSubmoduloToken(empresaId, s.id)),
+    );
   }
 }

@@ -1,9 +1,11 @@
 import { Response } from 'express';
 import { ModuleService } from './module.service';
+import { CompanyService } from '../company/company.service';
 import { AuthRequest } from '../../middlewares/auth.middleware';
 import { getErrorMessage } from '../../utils/error-handler';
 
 const moduleService = new ModuleService();
+const companyService = new CompanyService();
 
 export class ModuleController {
   async getActive(req: AuthRequest, res: Response) {
@@ -74,6 +76,7 @@ export class ModuleController {
         nombre,
         url,
       );
+      await companyService.provisionSubmoduleForAllCompanies(submodule.id);
       res.status(201).json({
         success: true,
         data: submodule,
