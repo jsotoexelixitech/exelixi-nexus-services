@@ -160,8 +160,14 @@ export class CompanyService {
                 ).map(async (sm) => {
                   let esm = bySubmoduloId.get(sm.id);
                   if (!esm && sm.url) {
-                    esm = await this.ensureEmpresaSubmoduloToken(id, sm.id);
-                    if (esm) bySubmoduloId.set(sm.id, esm);
+                    const ensured = await this.ensureEmpresaSubmoduloToken(
+                      id,
+                      sm.id,
+                    );
+                    if (ensured) {
+                      esm = ensured;
+                      bySubmoduloId.set(sm.id, esm);
+                    }
                   }
                   const tenantToken = esm?.tenantToken ?? null;
                   const accessUrl =
