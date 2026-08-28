@@ -329,6 +329,10 @@ model FuneralSubmission {
   paymentUrl       String?   @map("funeral_submission_payment_url") @db.Text
   paymentSid       String?   @map("funeral_submission_payment_sid") @db.VarChar(128)
   paymentExpiresAt DateTime? @map("funeral_submission_payment_expires_at") @db.Timestamp(6)
+  cnpoliza         String?   @map("funeral_submission_cnpoliza") @db.VarChar(64)
+  cnrecibo         String?   @map("funeral_submission_cnrecibo") @db.VarChar(64)
+  urlpoliza        String?   @map("funeral_submission_urlpoliza") @db.Text
+  emittedAt        DateTime? @map("funeral_submission_emitted_at") @db.Timestamp(6)
   createdAt        DateTime  @default(now()) @map("funeral_submission_created_at") @db.Timestamp(6)
   updatedAt        DateTime  @updatedAt @map("funeral_submission_updated_at") @db.Timestamp(6)
   empresa          Empresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade, map: "fk_funeral_submission_empresa")

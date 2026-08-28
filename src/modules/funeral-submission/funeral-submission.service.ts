@@ -53,6 +53,10 @@ function formatRow(row: {
   paymentUrl: string | null;
   paymentSid: string | null;
   paymentExpiresAt: Date | null;
+  cnpoliza: string | null;
+  cnrecibo: string | null;
+  urlpoliza: string | null;
+  emittedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -78,6 +82,10 @@ function formatRow(row: {
     paymentUrl: row.paymentUrl,
     paymentSid: row.paymentSid,
     paymentExpiresAt: row.paymentExpiresAt,
+    cnpoliza: row.cnpoliza,
+    cnrecibo: row.cnrecibo,
+    urlpoliza: row.urlpoliza,
+    emittedAt: row.emittedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -246,10 +254,30 @@ export class FuneralSubmissionService {
       ...emission,
     };
 
+    const cnpoliza = String(emission.cnpoliza ?? '').trim() || null;
+    const cnrecibo =
+      emission.cnrecibo != null
+        ? String(emission.cnrecibo).trim() || null
+        : null;
+    const urlpoliza =
+      emission.urlpoliza != null
+        ? String(emission.urlpoliza).trim() || null
+        : null;
+    const emittedAt =
+      typeof emission.emittedAt === 'string'
+        ? new Date(emission.emittedAt)
+        : new Date();
+
     const row = await prisma.funeralSubmission.update({
       where: { id },
       data: {
         estado: 'paid',
+        cnpoliza,
+        cnrecibo,
+        urlpoliza,
+        emittedAt: Number.isFinite(emittedAt.getTime())
+          ? emittedAt
+          : new Date(),
         snapshotJson: snapshot as Prisma.InputJsonValue,
       },
     });
