@@ -30,6 +30,7 @@ const ssoOnSuccessSchema = z
     mode: z.enum(['none', 'redirect', 'webhook', 'emit']).optional(),
     redirectUrl: z.string().max(2048).optional(),
     webhookUrl: z.string().max(2048).optional(),
+    target: z.string().max(20).optional(),
   })
   .optional();
 
@@ -37,9 +38,16 @@ const ssoCheckoutRulesSchema = z
   .object({
     requirePayment: z.boolean().optional(),
     methods: z
-      .array(z.enum(['mobile', 'otp', 'transfer', 'card']))
-      .max(4)
+      .array(z.enum(['mobile', 'otp', 'transfer', 'card', 'domiciliacion']))
+      .max(5)
       .optional(),
+    fraccionado: z.boolean().optional(),
+    requireFirstPayment: z.boolean().optional(),
+    requireDomiciliacion: z.boolean().optional(),
+    autoRedirect: z.boolean().optional(),
+    redirectDelayMs: z.number().int().nonnegative().max(60000).optional(),
+    hideNavigation: z.boolean().optional(),
+    lockFields: z.boolean().optional(),
     onSuccess: ssoOnSuccessSchema,
   })
   .optional();
