@@ -6,6 +6,7 @@
  * GET    /api/funeral-submissions/:id          → detalle
  * POST   /api/funeral-submissions/:id/approve  → aprobar (fase 2: email + checkout)
  * POST   /api/funeral-submissions/:id/reject   → rechazar
+ * POST   /api/funeral-submissions/:id/emission → registrar póliza emitida (x-api-key)
  */
 import { Router, Request, Response } from 'express';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
@@ -127,6 +128,61 @@ router.post(
       res.json({ success: true, data });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error al aprobar';
+      res.status(400).json({ success: false, message: msg });
+    }
+  },
+);
+
+router.post(
+  '/:id/emission',
+  apiKeyGuard,
+  async (req: Request, res: Response) => {
+    const body = req.body ?? {};
+    const cnpoliza = String(body.cnpoliza ?? '').trim();
+    if (!cnpoliza) {
+      res.status(400).json({
+        success: false,
+        message: 'Se requiere cnpoliza en el body.',
+      });
+      return;
+    }
+
+    const emission: Record<string, unknown> = {
+      cnpoliza,
+      cnrecibo: body.cnrecibo != null ? String(body.cnrecibo) : undefined,
+      urlpoliza: body.urlpoliza != null ? String(body.urlpoliza) : undefined,
+      url_ingreso_caja:
+        body.url_ingreso_caja != null
+          ? String(body.url_ingreso_caja)
+          : undefined,
+      url_conductor_habitual:
+        body.url_conductor_habitual != null
+          ? String(body.url_conductor_habitual)
+          : undefined,
+      url_club_arys:
+        body.url_club_arys != null ? String(body.url_club_arys) : undefined,
+      emittedAt:
+        typeof body.emittedAt === 'string'
+          ? body.emittedAt
+          : new Date().toISOString(),
+      quote:
+        body.quote && typeof body.quote === 'object' ? body.quote : undefined,
+    };
+
+    try {
+      const data = await svc.recordEmission(req.params.id, emission, {
+        empresaId: body.empresaId != null ? Number(body.empresaId) : undefined,
+      });
+      if (!data) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada.' });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Error al registrar emisión';
       res.status(400).json({ success: false, message: msg });
     }
   },

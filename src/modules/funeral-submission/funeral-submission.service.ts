@@ -225,4 +225,34 @@ export class FuneralSubmissionService {
     });
     return formatRow(row);
   }
+
+  async recordEmission(
+    id: string,
+    emission: Record<string, unknown>,
+    opts?: { empresaId?: number },
+  ) {
+    const existing = await this.getById(id, opts?.empresaId);
+    if (!existing) return null;
+
+    const snapshot =
+      existing.snapshot && typeof existing.snapshot === 'object'
+        ? { ...(existing.snapshot as Record<string, unknown>) }
+        : {};
+
+    snapshot.emission = {
+      ...(snapshot.emission && typeof snapshot.emission === 'object'
+        ? (snapshot.emission as Record<string, unknown>)
+        : {}),
+      ...emission,
+    };
+
+    const row = await prisma.funeralSubmission.update({
+      where: { id },
+      data: {
+        estado: 'paid',
+        snapshotJson: snapshot as Prisma.InputJsonValue,
+      },
+    });
+    return formatRow(row);
+  }
 }
