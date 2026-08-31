@@ -90,14 +90,39 @@ export function verifyTenantToken(
  * Reescribe el host de submodulo_url según el entorno (QA vs dev).
  * En srv001qa: NEXUS_PUBLIC_ORIGIN=https://nexusqa.exelixitech.com
  * Conserva path (/ocr/, /formulario/, …) y query del registro en BD.
+ *
+ * Producción GCIA (subdominio por módulo: ocr.exelixitech.com, …): no reescribe
+ * URLs HTTPS ya públicas ni cuando NEXUS_PUBLIC_ORIGIN apunta al host del API.
  */
+function isInternalModuleHostname(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h.startsWith('192.168.') ||
+    h.startsWith('10.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+  );
+}
+
 export function rewritePublicModuleUrl(submoduloUrl: string): string {
   const origin = process.env.NEXUS_PUBLIC_ORIGIN?.trim();
   if (!origin) return submoduloUrl;
 
   try {
-    const pub = new URL(origin.includes('://') ? origin : `https://${origin}`);
     const u = new URL(submoduloUrl);
+    const pub = new URL(origin.includes('://') ? origin : `https://${origin}`);
+
+    // Subdominios producción (*.exelixitech.com por módulo) — respetar BD.
+    if (!isInternalModuleHostname(u.hostname) && u.protocol === 'https:') {
+      return submoduloUrl;
+    }
+
+    // NEXUS_PUBLIC_ORIGIN en host de API (nexus-api.*) no debe pisar fronts.
+    if (pub.hostname.toLowerCase().startsWith('nexus-api.')) {
+      return submoduloUrl;
+    }
+
     u.protocol = pub.protocol;
     u.hostname = pub.hostname;
     u.port = pub.port;

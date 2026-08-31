@@ -18,7 +18,11 @@ Acceso interno: `http://172.30.149.75:<puerto>`
 ## `.env` nexus-api
 
 ```bash
-NEXUS_PUBLIC_ORIGIN=https://nexus-api.exelixitech.com
+# Producción GCIA subdominios: NO usar — reescribe mal los links a nexus-api.*
+# NEXUS_PUBLIC_ORIGIN=
+
+# Solo QA/cierrelmds (un host + prefijos /ocr/, /formulario/):
+# NEXUS_PUBLIC_ORIGIN=https://nexusqa.exelixitech.com
 ```
 
 ## `.env` nest-api
