@@ -132,6 +132,14 @@ const SSO_TARGET_PORT: Record<string, string> = {
   pagos: '5184',
 };
 
+/** Host producción GCIA (Srv-Gcia-proyect — subdominios *.exelixitech.com). */
+const SSO_TARGET_HOST: Record<string, string> = {
+  ocr: 'ocr.exelixitech.com',
+  formulario: 'formulario.exelixitech.com',
+  emision: 'emision.exelixitech.com',
+  pagos: 'pagos.exelixitech.com',
+};
+
 /** Nombre en BD cuando la URL ya no incluye el puerto (ej. cierrelmds.exelixitech.com). */
 const SSO_TARGET_NAME: Record<string, string> = {
   ocr: 'OCR Documentos',
@@ -154,6 +162,15 @@ async function findSubmoduloForSsoTarget(target: string) {
     select,
   });
   if (byPort) return byPort;
+
+  const hostHint = SSO_TARGET_HOST[key];
+  if (hostHint) {
+    const byHost = await prisma.submodulo.findFirst({
+      where: { url: { contains: hostHint }, activo: true },
+      select,
+    });
+    if (byHost) return byHost;
+  }
 
   return prisma.submodulo.findFirst({
     where: {

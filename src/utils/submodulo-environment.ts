@@ -6,12 +6,19 @@ export const SUBS_RCV_CLASSIC = new Set([17, 18, 19, 20]);
 export const SUBS_RCV_CIERRE = new Set([33, 34, 35, 36]);
 export const SUBS_RCV_QA = new Set([37, 38, 39, 40]);
 
-export type NexusDeployEnv = 'qa' | 'dev' | 'neutral';
+export type NexusDeployEnv = 'qa' | 'dev' | 'production' | 'neutral';
 
 export function detectNexusDeployEnv(): NexusDeployEnv {
   const origin = (process.env.NEXUS_PUBLIC_ORIGIN || '').trim().toLowerCase();
   if (origin.includes('nexusqa')) return 'qa';
   if (origin.includes('cierrelmds')) return 'dev';
+  if (
+    origin.includes('exelixitech.com') &&
+    !origin.includes('nexusqa') &&
+    !origin.includes('cierrelmds')
+  ) {
+    return 'production';
+  }
   return 'neutral';
 }
 

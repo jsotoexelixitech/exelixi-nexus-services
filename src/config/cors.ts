@@ -62,6 +62,23 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
 
   // --- srv001qa HTTPS nexusqa (QA estable) ---
   'https://nexusqa.exelixitech.com',
+
+  // --- Srv-Gcia-proyect producción (*.exelixitech.com subdominios + IP directa) ---
+  'https://ocr.exelixitech.com',
+  'https://formulario.exelixitech.com',
+  'https://emision.exelixitech.com',
+  'https://pagos.exelixitech.com',
+  'https://nexus-api.exelixitech.com',
+  'https://nest-api.exelixitech.com',
+  'http://172.30.149.75:5180',
+  'http://172.30.149.75:5181',
+  'http://172.30.149.75:5182',
+  'http://172.30.149.75:5183',
+  'http://172.30.149.75:5184',
+  'http://172.30.149.75:5200',
+  'http://172.30.149.75:3092',
+  'http://172.30.149.75:3002',
+
   'http://192.168.8.121:5181',
   'http://192.168.8.121:5182',
   'http://192.168.8.121:5183',
