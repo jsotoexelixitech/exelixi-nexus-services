@@ -7,19 +7,53 @@
  * PUT  /api/config/:empresaId/:producto/:modulo  → guarda (API key o JWT config-panel)
  * POST /api/config/:empresaId/:producto/:modulo/reset → restaura default (API key o JWT)
  * GET  /api/config/token/:empresaId/:producto/:modulo → JWT parametrizador (API key)
+ * POST /api/config/refresh-token → renueva JWT config-panel (12 h, pestaña abierta)
  */
 
 import { Router, Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
 import { getConfig, saveConfig, resetConfig } from './product-config.service';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import { configWriteGuard } from './config-write.guard';
 import type { Producto, Modulo } from './product-config.defaults';
-import { env } from '../../config/env';
 import prisma from '../../config/prisma';
 import { signRevisionToken } from '../funeral-submission/revision-token';
+import {
+  refreshConfigPanelToken,
+  signConfigPanelToken,
+} from './config-panel-token';
 
 const router = Router();
+
+router.post('/refresh-token', async (req: Request, res: Response) => {
+  const raw =
+    (typeof req.body?.token === 'string' && req.body.token.trim()) ||
+    (typeof req.headers['x-config-token'] === 'string' &&
+      req.headers['x-config-token'].trim()) ||
+    (typeof req.headers.authorization === 'string' &&
+      req.headers.authorization.replace(/^Bearer\s+/i, '').trim()) ||
+    '';
+  if (!raw) {
+    res.status(400).json({
+      success: false,
+      message: 'Falta token del parametrizador.',
+    });
+    return;
+  }
+  try {
+    const signed = refreshConfigPanelToken(raw);
+    res.json({
+      success: true,
+      token: signed.token,
+      expiresIn: signed.expiresIn,
+    });
+  } catch (err: unknown) {
+    const msg =
+      err instanceof Error
+        ? err.message
+        : 'Token del parametrizador inválido o expirado.';
+    res.status(403).json({ success: false, message: msg });
+  }
+});
 
 const VALID_PRODUCTOS: Producto[] = ['rcv', 'funerario'];
 const VALID_MODULOS: Modulo[] = ['ocr', 'formulario', 'pagos', 'emision'];
@@ -123,11 +157,21 @@ router.get(
       });
     }
 
-    const token = jwt.sign(claims, env.JWT_SECRET, { expiresIn: '1h' });
+    const signed = signConfigPanelToken({
+      empresaId: claims.empresaId,
+      empresaNombre: claims.empresaNombre,
+      producto,
+      modulo,
+      scope: 'config-panel',
+      canal,
+      cproductor: metadata.cproductor,
+      cusuario: metadata.cusuario,
+      metadata,
+    });
     res.json({
       success: true,
-      token,
-      expiresIn: 3600,
+      token: signed.token,
+      expiresIn: signed.expiresIn,
       canal,
       empresaId: eid,
       empresaNombre: empresaNombre || null,

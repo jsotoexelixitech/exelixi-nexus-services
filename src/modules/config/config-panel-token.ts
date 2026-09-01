@@ -1,19 +1,19 @@
 /**
- * JWT de la vista técnica funerario. 12 h + refresh mientras el tab está abierto.
+ * JWT del parametrizador (?token= en /config). 12 h + refresh con la pestaña abierta.
+ * Scope distinto de revision-panel: no se intercambian.
  */
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
 
-export const REVISION_TOKEN_TTL = '12h';
-export const REVISION_TOKEN_EXPIRES_SEC = 12 * 60 * 60;
-/** Permite refrescar un token vencido hace poco (pestaña abierta). */
+export const CONFIG_TOKEN_TTL = '12h';
+export const CONFIG_TOKEN_EXPIRES_SEC = 12 * 60 * 60;
 const EXPIRED_GRACE_MS = 2 * 60 * 60 * 1000;
 
-export type RevisionTokenClaims = {
+export type ConfigPanelTokenClaims = {
   empresaId: number;
   empresaNombre?: string;
-  producto?: string;
-  modulo?: string;
+  producto: string;
+  modulo: string;
   scope: string;
   canal?: string;
   cproductor?: string;
@@ -21,23 +21,17 @@ export type RevisionTokenClaims = {
   metadata?: Record<string, unknown>;
 };
 
-function isRevisionScope(scope: string): boolean {
-  return scope === 'revision-panel';
-}
-
-export function signRevisionToken(claims: RevisionTokenClaims): {
+export function signConfigPanelToken(claims: ConfigPanelTokenClaims): {
   token: string;
   expiresIn: number;
 } {
-  const token = jwt.sign(
-    { ...claims, scope: 'revision-panel' },
-    env.JWT_SECRET,
-    { expiresIn: REVISION_TOKEN_TTL },
-  );
-  return { token, expiresIn: REVISION_TOKEN_EXPIRES_SEC };
+  const token = jwt.sign({ ...claims, scope: 'config-panel' }, env.JWT_SECRET, {
+    expiresIn: CONFIG_TOKEN_TTL,
+  });
+  return { token, expiresIn: CONFIG_TOKEN_EXPIRES_SEC };
 }
 
-export function refreshRevisionToken(current: string): {
+export function refreshConfigPanelToken(current: string): {
   token: string;
   expiresIn: number;
 } {
@@ -49,7 +43,7 @@ export function refreshRevisionToken(current: string): {
       err instanceof jwt.TokenExpiredError ||
       (err instanceof Error && err.name === 'TokenExpiredError');
     if (!expired) {
-      throw new Error('Token de revisión inválido.', { cause: err });
+      throw new Error('Token del parametrizador inválido.', { cause: err });
     }
     payload = jwt.verify(current, env.JWT_SECRET, {
       ignoreExpiration: true,
@@ -57,18 +51,17 @@ export function refreshRevisionToken(current: string): {
     const expMs = Number(payload.exp ?? 0) * 1000;
     if (!expMs || Date.now() - expMs > EXPIRED_GRACE_MS) {
       throw new Error(
-        'Token de revisión expirado. Genera un enlace nuevo desde Nexus.',
+        'Token del parametrizador expirado. Abre de nuevo la URL desde Nexus.',
         { cause: err },
       );
     }
   }
 
-  const scope = String(payload.scope ?? '');
-  if (!isRevisionScope(scope)) {
-    throw new Error('Token inválido: scope distinto de revision-panel.');
+  if (String(payload.scope ?? '') !== 'config-panel') {
+    throw new Error('Token inválido: no es del parametrizador.');
   }
 
-  return signRevisionToken({
+  return signConfigPanelToken({
     empresaId: Number(payload.empresaId),
     empresaNombre:
       typeof payload.empresaNombre === 'string'
@@ -77,7 +70,7 @@ export function refreshRevisionToken(current: string): {
     producto:
       typeof payload.producto === 'string' ? payload.producto : 'funerario',
     modulo: typeof payload.modulo === 'string' ? payload.modulo : 'emision',
-    scope: 'revision-panel',
+    scope: 'config-panel',
     canal: typeof payload.canal === 'string' ? payload.canal : undefined,
     cproductor:
       typeof payload.cproductor === 'string' ? payload.cproductor : undefined,
