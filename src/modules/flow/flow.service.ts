@@ -11,6 +11,7 @@ import logger from '../../utils/logger';
 import {
   appendExelixiFlowToUrl,
   appendProductToUrl,
+  flowChainKey,
   resolveFlowProduct,
   type FlowProduct,
 } from '../../utils/flow-product';
@@ -114,15 +115,9 @@ async function getActiveSlots(
     });
 }
 
-/** Normaliza URL pública para comparar entradas OCR (17 / 33 / 37 → mismo /ocr/). */
-function normalizeModulePublicUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    const path = u.pathname.replace(/\/+$/, '') || '/';
-    return `${u.origin.toLowerCase()}${path.toLowerCase()}`;
-  } catch {
-    return url.trim().toLowerCase().replace(/\/+$/, '');
-  }
+/** Entrada OCR comparable: mismo host/path y mismo producto (rcv ≠ funerario). */
+function normalizeModulePublicUrl(url: string, nombre?: string | null): string {
+  return flowChainKey(url, nombre);
 }
 
 function isOcrEntrySubmodulo(nombre: string, url: string | null): boolean {
@@ -139,25 +134,29 @@ function isChainEntrySubmodulo(
   tokenSubmoduloId: number,
   tokenUrl: string | null,
   rawSlots: SubmoduloSlot[],
+  tokenNombre?: string | null,
 ): boolean {
   if (rawSlots.length === 0) return false;
   if (rawSlots[0].submoduloId === tokenSubmoduloId) return true;
   if (!tokenUrl) return false;
+  const first = rawSlots[0];
   return (
-    normalizeModulePublicUrl(tokenUrl) ===
-    normalizeModulePublicUrl(rawSlots[0].accessUrl)
+    normalizeModulePublicUrl(tokenUrl, tokenNombre) ===
+    normalizeModulePublicUrl(first.accessUrl, first.nombre)
   );
 }
 
 /**
- * Si el token apunta a un OCR huérfano (ej. sub 33 con solo 1 activo en módulo 7),
- * busca otra cadena RCV de la empresa con la misma URL de entrada (prioriza módulo 14 QA).
+ * OCR huérfano (1 slot): busca otra cadena de la MISMA empresa y el MISMO producto.
+ * Nunca une funerario con RCV aunque ambos usen `/ocr/`.
  */
-async function findRcvChainForEntryUrl(
+async function findSameProductChainForEntryUrl(
   empresaId: number,
   entryUrl: string,
+  entryNombre: string,
+  product: FlowProduct,
 ): Promise<{ moduloGroupId: number; rawSlots: SubmoduloSlot[] } | null> {
-  const target = normalizeModulePublicUrl(entryUrl);
+  const target = normalizeModulePublicUrl(entryUrl, entryNombre);
 
   const rows = await prisma.empresaSubmodulo.findMany({
     where: {
@@ -194,9 +193,18 @@ async function findRcvChainForEntryUrl(
 
   for (const [moduloGroupId, slots] of byModulo) {
     if (slots.length < 2) continue;
-    if (normalizeModulePublicUrl(slots[0].accessUrl) !== target) continue;
+    const first = slots[0];
+    const slotProduct = resolveFlowProduct({
+      submoduloUrl: first.accessUrl,
+      submoduloNombre: first.nombre,
+    });
+    if (slotProduct !== product) continue;
+    if (normalizeModulePublicUrl(first.accessUrl, first.nombre) !== target) {
+      continue;
+    }
 
-    const score = (moduloGroupId === 14 ? 1000 : 0) + slots.length;
+    const rcvQaBoost = product === 'rcv' && moduloGroupId === 14 ? 1000 : 0;
+    const score = rcvQaBoost + slots.length;
     if (!best || score > best.score) {
       best = { moduloGroupId, rawSlots: slots, score };
     }
@@ -215,25 +223,45 @@ async function resolveFlowChainFromToken(
     nombre: string;
     url: string | null;
   },
+  product: FlowProduct,
 ): Promise<{ moduloGroupId: number; rawSlots: SubmoduloSlot[] }> {
   const moduloGroupId = submodulo.moduloId;
   const rawSlots = await getActiveSlots(empresaId, moduloGroupId);
 
   if (rawSlots.length >= 2) {
-    return { moduloGroupId, rawSlots };
+    const first = rawSlots[0];
+    const chainProduct = resolveFlowProduct({
+      submoduloUrl: first.accessUrl,
+      submoduloNombre: first.nombre,
+    });
+    if (chainProduct === product) {
+      return { moduloGroupId, rawSlots };
+    }
+    logger.warn(
+      `[flow] group=${moduloGroupId} product mismatch token=${product} chain=${chainProduct} — buscando cadena del mismo producto`,
+    );
   }
 
   if (submodulo.url && isOcrEntrySubmodulo(submodulo.nombre, submodulo.url)) {
-    const fallback = await findRcvChainForEntryUrl(empresaId, submodulo.url);
+    const fallback = await findSameProductChainForEntryUrl(
+      empresaId,
+      submodulo.url,
+      submodulo.nombre,
+      product,
+    );
     if (fallback) {
       logger.info(
-        `[flow] chain-fallback empresa=${empresaId} tokenSub=${submodulo.id} group=${moduloGroupId} -> group=${fallback.moduloGroupId} slots=${fallback.rawSlots.length}`,
+        `[flow] chain-fallback product=${product} empresa=${empresaId} tokenSub=${submodulo.id} group=${moduloGroupId} -> group=${fallback.moduloGroupId} slots=${fallback.rawSlots.length}`,
       );
       return fallback;
     }
   }
 
-  return { moduloGroupId, rawSlots };
+  const ownSlot = rawSlots.filter((s) => s.submoduloId === submodulo.id);
+  return {
+    moduloGroupId,
+    rawSlots: ownSlot.length > 0 ? ownSlot : rawSlots.slice(0, 1),
+  };
 }
 
 /**
@@ -302,6 +330,11 @@ function mergeFlowSessionData(
   ) {
     merged.documents = existing.documents;
   }
+  // Typo histórico OCR (`exelixiCatalog`) — no es el flag de catálogo.
+  delete merged.exelixiCatalog;
+  if (merged.product === 'funerario') {
+    merged.exelixiCatalogFlow = false;
+  }
   return merged;
 }
 
@@ -361,10 +394,13 @@ async function buildFreshSlotUrl(
     base,
     metadata,
   );
-  const product = (sessionData.product as FlowProduct) || 'rcv';
+  const product: FlowProduct =
+    sessionData.product === 'funerario' ? 'funerario' : 'rcv';
+  const catalogFlow = Boolean(sessionData.exelixiCatalogFlow);
   return appendExelixiFlowToUrl(
     appendProductToUrl(`${withToken}&sid=${sid}`, product),
-    Boolean(sessionData.exelixiCatalogFlow),
+    catalogFlow,
+    product === 'funerario' ? 'funerario' : undefined,
   );
 }
 
@@ -556,6 +592,7 @@ export async function startFlowFromToken(
   const { moduloGroupId, rawSlots } = await resolveFlowChainFromToken(
     empresaId,
     submodulo,
+    flowProduct,
   );
 
   // Si solo hay 1 submódulo activo, no hay cadena que armar
@@ -569,7 +606,12 @@ export async function startFlowFromToken(
   // Checkout SSO embebido: Pagos (u otro submódulo) es entrada válida con metadata.checkout
   if (
     isCheckoutSsoMetadata(metadata) &&
-    !isChainEntrySubmodulo(submoduloId, submodulo.url, rawSlots)
+    !isChainEntrySubmodulo(
+      submoduloId,
+      submodulo.url,
+      rawSlots,
+      submodulo.nombre,
+    )
   ) {
     logger.info(
       `[flow] checkout-standalone empresa=${empresaId} submodulo=${submoduloId} (no OCR chain)`,
@@ -582,7 +624,14 @@ export async function startFlowFromToken(
   }
 
   // Solo el primer slot puede iniciar el flujo (o un OCR alterno con la misma URL)
-  if (!isChainEntrySubmodulo(submoduloId, submodulo.url, rawSlots)) {
+  if (
+    !isChainEntrySubmodulo(
+      submoduloId,
+      submodulo.url,
+      rawSlots,
+      submodulo.nombre,
+    )
+  ) {
     return {
       error: `Este submódulo no es el punto de entrada del flujo. El primero es ${rawSlots[0].nombre}.`,
     };
