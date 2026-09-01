@@ -283,4 +283,20 @@ export class FuneralSubmissionService {
     });
     return formatRow(row);
   }
+
+  async recordEmissionByPaymentSid(
+    paymentSid: string,
+    emission: Record<string, unknown>,
+  ) {
+    const sid = String(paymentSid ?? '').trim();
+    if (!sid) return null;
+    const existing = await prisma.funeralSubmission.findFirst({
+      where: { paymentSid: sid },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!existing) return null;
+    return this.recordEmission(existing.id, emission, {
+      empresaId: existing.empresaId,
+    });
+  }
 }

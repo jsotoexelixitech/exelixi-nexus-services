@@ -165,6 +165,53 @@ router.post(
 );
 
 router.post(
+  '/emission-by-sid',
+  apiKeyGuard,
+  async (req: Request, res: Response) => {
+    const body = req.body ?? {};
+    const paymentSid = String(body.paymentSid ?? body.sid ?? '').trim();
+    const cnpoliza = String(body.cnpoliza ?? '').trim();
+    if (!paymentSid || !cnpoliza) {
+      res.status(400).json({
+        success: false,
+        message: 'Se requieren paymentSid y cnpoliza.',
+      });
+      return;
+    }
+    const emission: Record<string, unknown> = {
+      cnpoliza,
+      cnrecibo: body.cnrecibo != null ? String(body.cnrecibo) : undefined,
+      urlpoliza: body.urlpoliza != null ? String(body.urlpoliza) : undefined,
+      url_ingreso_caja:
+        body.url_ingreso_caja != null
+          ? String(body.url_ingreso_caja)
+          : undefined,
+      emittedAt:
+        typeof body.emittedAt === 'string'
+          ? body.emittedAt
+          : new Date().toISOString(),
+      quote:
+        body.quote && typeof body.quote === 'object' ? body.quote : undefined,
+    };
+    try {
+      const data = await svc.recordEmissionByPaymentSid(paymentSid, emission);
+      if (!data) {
+        res.status(404).json({
+          success: false,
+          message: 'Solicitud no encontrada para ese SID.',
+        });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Error al registrar emisión';
+      res.status(400).json({ success: false, message: msg });
+    }
+  },
+);
+
+router.post(
   '/:id/emission',
   apiKeyGuard,
   async (req: Request, res: Response) => {
