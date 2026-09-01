@@ -17,6 +17,7 @@ import { configWriteGuard } from './config-write.guard';
 import type { Producto, Modulo } from './product-config.defaults';
 import { env } from '../../config/env';
 import prisma from '../../config/prisma';
+import { signRevisionToken } from '../funeral-submission/revision-token';
 
 const router = Router();
 
@@ -93,23 +94,36 @@ router.get(
     }
 
     const eid = Number(empresaId);
-    let empresaNombre = pick('empresaNombre') || (await resolveEmpresaNombre(eid)) || undefined;
+    const empresaNombre =
+      pick('empresaNombre') || (await resolveEmpresaNombre(eid)) || undefined;
+    const isRevision = pick('panel') === 'revision';
 
-    const token = jwt.sign(
-      {
-        empresaId: eid,
-        ...(empresaNombre ? { empresaNombre } : {}),
-        producto,
-        modulo,
-        scope: 'config-panel',
+    const claims = {
+      empresaId: eid,
+      ...(empresaNombre ? { empresaNombre } : {}),
+      producto,
+      modulo,
+      scope: isRevision ? 'revision-panel' : 'config-panel',
+      canal,
+      ...(metadata.cproductor ? { cproductor: metadata.cproductor } : {}),
+      ...(metadata.cusuario ? { cusuario: metadata.cusuario } : {}),
+      metadata,
+    };
+
+    if (isRevision) {
+      const signed = signRevisionToken(claims);
+      return res.json({
+        success: true,
+        token: signed.token,
+        expiresIn: signed.expiresIn,
         canal,
-        ...(metadata.cproductor ? { cproductor: metadata.cproductor } : {}),
-        ...(metadata.cusuario ? { cusuario: metadata.cusuario } : {}),
+        empresaId: eid,
+        empresaNombre: empresaNombre || null,
         metadata,
-      },
-      env.JWT_SECRET,
-      { expiresIn: '1h' },
-    );
+      });
+    }
+
+    const token = jwt.sign(claims, env.JWT_SECRET, { expiresIn: '1h' });
     res.json({
       success: true,
       token,

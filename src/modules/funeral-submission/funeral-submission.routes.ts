@@ -11,6 +11,7 @@
 import { Router, Request, Response } from 'express';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import { revisionPanelGuard } from './revision-panel.guard';
+import { refreshRevisionToken } from './revision-token';
 import { FuneralSubmissionService } from './funeral-submission.service';
 
 const router = Router();
@@ -56,6 +57,36 @@ router.post('/', apiKeyGuard, async (req: Request, res: Response) => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Error al crear solicitud';
     res.status(500).json({ success: false, message: msg });
+  }
+});
+
+router.post('/refresh-token', async (req: Request, res: Response) => {
+  const raw =
+    (typeof req.body?.token === 'string' && req.body.token.trim()) ||
+    (typeof req.headers['x-revision-token'] === 'string' &&
+      req.headers['x-revision-token'].trim()) ||
+    (typeof req.headers.authorization === 'string' &&
+      req.headers.authorization.replace(/^Bearer\s+/i, '').trim()) ||
+    '';
+  if (!raw) {
+    res
+      .status(400)
+      .json({ success: false, message: 'Falta token de revisión.' });
+    return;
+  }
+  try {
+    const signed = refreshRevisionToken(raw);
+    res.json({
+      success: true,
+      token: signed.token,
+      expiresIn: signed.expiresIn,
+    });
+  } catch (err: unknown) {
+    const msg =
+      err instanceof Error
+        ? err.message
+        : 'Token de revisión inválido o expirado.';
+    res.status(403).json({ success: false, message: msg });
   }
 });
 
