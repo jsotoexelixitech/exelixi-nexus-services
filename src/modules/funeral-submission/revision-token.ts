@@ -6,8 +6,8 @@ import { env } from '../../config/env';
 
 export const REVISION_TOKEN_TTL = '12h';
 export const REVISION_TOKEN_EXPIRES_SEC = 12 * 60 * 60;
-/** Permite refrescar un token vencido hace poco (pestaña abierta). */
-const EXPIRED_GRACE_MS = 2 * 60 * 60 * 1000;
+/** Permite refrescar un token vencido con la pestaña abierta (todo el día). */
+const EXPIRED_GRACE_MS = 12 * 60 * 60 * 1000;
 
 export type RevisionTokenClaims = {
   empresaId: number;
@@ -21,8 +21,36 @@ export type RevisionTokenClaims = {
   metadata?: Record<string, unknown>;
 };
 
-function isRevisionScope(scope: string): boolean {
-  return scope === 'revision-panel';
+function isPanelScope(scope: string): boolean {
+  return scope === 'revision-panel' || scope === 'config-panel';
+}
+
+/**
+ * Verifica JWT de vista técnica / parametrizador.
+ * Acepta vencido si está dentro de la gracia (pestaña abierta).
+ */
+export function verifyPanelToken(current: string): jwt.JwtPayload {
+  try {
+    return jwt.verify(current, env.JWT_SECRET) as jwt.JwtPayload;
+  } catch (err) {
+    const expired =
+      err instanceof jwt.TokenExpiredError ||
+      (err instanceof Error && err.name === 'TokenExpiredError');
+    if (!expired) {
+      throw new Error('Token de revisión inválido.', { cause: err });
+    }
+    const payload = jwt.verify(current, env.JWT_SECRET, {
+      ignoreExpiration: true,
+    }) as jwt.JwtPayload;
+    const expMs = Number(payload.exp ?? 0) * 1000;
+    if (!expMs || Date.now() - expMs > EXPIRED_GRACE_MS) {
+      throw new Error(
+        'Token de revisión expirado. Genera un enlace nuevo desde Nexus.',
+        { cause: err },
+      );
+    }
+    return payload;
+  }
 }
 
 export function signRevisionToken(claims: RevisionTokenClaims): {
@@ -41,30 +69,9 @@ export function refreshRevisionToken(current: string): {
   token: string;
   expiresIn: number;
 } {
-  let payload: jwt.JwtPayload;
-  try {
-    payload = jwt.verify(current, env.JWT_SECRET) as jwt.JwtPayload;
-  } catch (err) {
-    const expired =
-      err instanceof jwt.TokenExpiredError ||
-      (err instanceof Error && err.name === 'TokenExpiredError');
-    if (!expired) {
-      throw new Error('Token de revisión inválido.', { cause: err });
-    }
-    payload = jwt.verify(current, env.JWT_SECRET, {
-      ignoreExpiration: true,
-    }) as jwt.JwtPayload;
-    const expMs = Number(payload.exp ?? 0) * 1000;
-    if (!expMs || Date.now() - expMs > EXPIRED_GRACE_MS) {
-      throw new Error(
-        'Token de revisión expirado. Genera un enlace nuevo desde Nexus.',
-        { cause: err },
-      );
-    }
-  }
-
+  const payload = verifyPanelToken(current);
   const scope = String(payload.scope ?? '');
-  if (!isRevisionScope(scope)) {
+  if (!isPanelScope(scope)) {
     throw new Error('Token inválido: scope distinto de revision-panel.');
   }
 

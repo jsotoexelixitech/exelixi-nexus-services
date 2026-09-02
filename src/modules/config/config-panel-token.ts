@@ -7,7 +7,7 @@ import { env } from '../../config/env';
 
 export const CONFIG_TOKEN_TTL = '12h';
 export const CONFIG_TOKEN_EXPIRES_SEC = 12 * 60 * 60;
-const EXPIRED_GRACE_MS = 2 * 60 * 60 * 1000;
+const EXPIRED_GRACE_MS = 12 * 60 * 60 * 1000;
 
 export type ConfigPanelTokenClaims = {
   empresaId: number;

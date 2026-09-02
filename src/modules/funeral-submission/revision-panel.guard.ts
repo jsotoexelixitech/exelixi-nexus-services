@@ -4,8 +4,8 @@
  *  - JWT scope=revision-panel | config-panel (misma empresa)
  */
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
+import { verifyPanelToken } from './revision-token';
 
 type RevisionClaims = {
   empresaId?: number;
@@ -50,7 +50,7 @@ export function revisionPanelGuard(
   }
 
   try {
-    const payload = jwt.verify(token, env.JWT_SECRET) as RevisionClaims;
+    const payload = verifyPanelToken(token) as RevisionClaims;
     const scope = String(payload.scope ?? '');
     if (scope !== 'revision-panel' && scope !== 'config-panel') {
       res.status(403).json({
