@@ -11,6 +11,8 @@ export interface FuneralHealthQuestion {
   label: string;
   description?: string;
   required?: boolean;
+  /** false = oculta al cliente y no puntúa */
+  enabled?: boolean;
   /** cplan Sis2000 ("2"…"9") o "*" para todos */
   plans: string[];
   showIf?: { field: string; equals: boolean | string };

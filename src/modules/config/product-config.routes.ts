@@ -130,7 +130,9 @@ router.get(
     const eid = Number(empresaId);
     const empresaNombre =
       pick('empresaNombre') || (await resolveEmpresaNombre(eid)) || undefined;
-    const isRevision = pick('panel') === 'revision';
+    const panelMode = pick('panel');
+    const isRevision = panelMode === 'revision';
+    const isPreguntas = panelMode === 'preguntas';
 
     const claims = {
       empresaId: eid,
@@ -157,21 +159,26 @@ router.get(
       });
     }
 
-    const signed = signConfigPanelToken({
-      empresaId: claims.empresaId,
-      empresaNombre: claims.empresaNombre,
-      producto,
-      modulo,
-      scope: 'config-panel',
-      canal,
-      cproductor: metadata.cproductor,
-      cusuario: metadata.cusuario,
-      metadata,
-    });
+    const signed = signConfigPanelToken(
+      {
+        empresaId: claims.empresaId,
+        empresaNombre: claims.empresaNombre,
+        producto,
+        modulo,
+        scope: 'config-panel',
+        canal,
+        cproductor: metadata.cproductor,
+        cusuario: metadata.cusuario,
+        metadata,
+      },
+      { longLived: isPreguntas },
+    );
     res.json({
       success: true,
       token: signed.token,
       expiresIn: signed.expiresIn,
+      longLived: isPreguntas,
+      panel: isPreguntas ? 'preguntas' : 'config',
       canal,
       empresaId: eid,
       empresaNombre: empresaNombre || null,
