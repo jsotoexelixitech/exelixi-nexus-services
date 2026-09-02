@@ -155,39 +155,83 @@ const SSO_TARGET_NAME: Record<string, string> = {
   pagos: 'Pagos',
 };
 
+function isFuneralSubHint(
+  url?: string | null,
+  nombre?: string | null,
+  moduloNombre?: string | null,
+) {
+  const blob =
+    `${url ?? ''} ${nombre ?? ''} ${moduloNombre ?? ''}`.toLowerCase();
+  return blob.includes('funerar') || blob.includes('product=funerario');
+}
+
 /**
- * Resuelve el subm?dulo destino del SSO: primero por puerto en URL, luego por nombre.
+ * Resuelve el submódulo SSO por puerto/host/nombre.
+ * Si hay empresa: solo entre los que ella tiene activos.
+ * Si product=funerario: prioriza OCR/form/emisión del módulo funerario (no el de RCV).
  */
-async function findSubmoduloForSsoTarget(target: string) {
+async function findSubmoduloForSsoTarget(
+  target: string,
+  opts?: { empresaId?: number; product?: 'rcv' | 'funerario' },
+) {
   const key = target in SSO_TARGET_PORT ? target : 'ocr';
   const puerto = SSO_TARGET_PORT[key];
   const nameHint = SSO_TARGET_NAME[key] ?? SSO_TARGET_NAME.ocr;
-  const select = { id: true, url: true, nombre: true } as const;
-
-  const byPort = await prisma.submodulo.findFirst({
-    where: { url: { contains: puerto }, activo: true },
-    select,
-  });
-  if (byPort) return byPort;
-
   const hostHint = SSO_TARGET_HOST[key];
-  if (hostHint) {
-    const byHost = await prisma.submodulo.findFirst({
-      where: { url: { contains: hostHint }, activo: true },
-      select,
-    });
-    if (byHost) return byHost;
-  }
+  const product = opts?.product === 'funerario' ? 'funerario' : 'rcv';
 
-  return prisma.submodulo.findFirst({
+  const orFilters = [
+    { url: { contains: puerto } },
+    { nombre: { contains: nameHint, mode: 'insensitive' as const } },
+    ...(hostHint ? [{ url: { contains: hostHint } }] : []),
+    ...(key === 'ocr' ? [{ url: { contains: '/ocr' } }] : []),
+    ...(key === 'formulario' ? [{ url: { contains: '/formulario' } }] : []),
+    ...(key === 'emision' ? [{ url: { contains: '/emision' } }] : []),
+    ...(key === 'pagos' ? [{ url: { contains: '/pagos' } }] : []),
+  ];
+
+  const rows = await prisma.submodulo.findMany({
     where: {
       activo: true,
       url: { not: null },
-      nombre: { contains: nameHint, mode: 'insensitive' },
+      OR: orFilters,
+    },
+    select: {
+      id: true,
+      url: true,
+      nombre: true,
+      modulo: { select: { nombre: true } },
     },
     orderBy: { id: 'asc' },
-    select,
   });
+
+  if (rows.length === 0) return null;
+
+  let pool = rows;
+  if (opts?.empresaId) {
+    const links = await prisma.empresaSubmodulo.findMany({
+      where: {
+        empresaId: opts.empresaId,
+        activo: true,
+        submoduloId: { in: rows.map((r) => r.id) },
+      },
+      select: { submoduloId: true },
+    });
+    const assigned = new Set(links.map((l) => l.submoduloId));
+    const onlyAssigned = rows.filter((r) => assigned.has(r.id));
+    if (onlyAssigned.length > 0) pool = onlyAssigned;
+  }
+
+  const ranked = [...pool].sort((a, b) => {
+    const aFun = isFuneralSubHint(a.url, a.nombre, a.modulo?.nombre);
+    const bFun = isFuneralSubHint(b.url, b.nombre, b.modulo?.nombre);
+    const aScore = product === 'funerario' ? (aFun ? 1 : 0) : aFun ? 0 : 1;
+    const bScore = product === 'funerario' ? (bFun ? 1 : 0) : bFun ? 0 : 1;
+    return bScore - aScore;
+  });
+
+  const hit = ranked[0];
+  return hit ? { id: hit.id, url: hit.url, nombre: hit.nombre } : null;
 }
 
 export class AuthController {
@@ -268,8 +312,11 @@ export class AuthController {
         });
       }
 
-      // 2. Resolver subm?dulo por target (puerto en URL o nombre ? soporta dominios sin :5181)
-      const submodulo = await findSubmoduloForSsoTarget(target);
+      const productHint = resolveSsoFlowProduct(metadata);
+      const submodulo = await findSubmoduloForSsoTarget(target, {
+        empresaId: empresa.id,
+        product: productHint,
+      });
 
       if (!submodulo) {
         return res.status(404).json({
