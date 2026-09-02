@@ -6,6 +6,10 @@ import { AuthRequest } from '../../middlewares/auth.middleware';
 import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
 import logger from '../../utils/logger';
+import {
+  appendProductToUrl,
+  resolveSsoFlowProduct,
+} from '../../utils/flow-product';
 
 /** Línea de detalle en checkout Pagos (metadata SSO). */
 const ssoCheckoutLineSchema = z.object({
@@ -75,6 +79,8 @@ const ssoMetadataSchema = z
     ccanalalt_in: z.union([z.string(), z.number()]).optional(),
     cscanalalt_in: z.union([z.string(), z.number()]).optional(),
     cgestor_in: z.string().max(120).optional(),
+    /** rcv (default) | funerario — misma cadena SSO, distinta entrada OCR. */
+    product: z.enum(['rcv', 'funerario']).optional(),
     /** Checkout Pagos — mismo patrón que canal en emisión, vía sso-delegate. */
     checkout: ssoCheckoutSchema.optional(),
     rules: ssoCheckoutRulesSchema,
@@ -95,6 +101,7 @@ const SSO_ROOT_METADATA_KEYS = [
   'ccanalalt_in',
   'cscanalalt_in',
   'cgestor_in',
+  'product',
 ] as const;
 
 /**
@@ -325,8 +332,23 @@ export class AuthController {
       // 5. Generar token din?mico con metadata
       const { generateSsoToken, buildAccessUrl } =
         await import('../../utils/tenant-token');
-      const dynamicToken = generateSsoToken(empresa.id, submodulo.id, metadata);
-      const redirectUrl = buildAccessUrl(submodulo.url!, dynamicToken);
+      const product = resolveSsoFlowProduct(metadata, {
+        submoduloUrl: submodulo.url,
+        submoduloNombre: submodulo.nombre,
+      });
+      const tokenMetadata =
+        product === 'funerario' && metadata.product !== 'funerario'
+          ? { ...metadata, product }
+          : metadata;
+      const dynamicToken = generateSsoToken(
+        empresa.id,
+        submodulo.id,
+        tokenMetadata,
+      );
+      const redirectUrl = appendProductToUrl(
+        buildAccessUrl(submodulo.url!, dynamicToken),
+        product,
+      );
 
       const ssoMsg = 'sse ' + empresa.id + '/' + target + '/' + submodulo.id;
       logger.info('ssoDelegate ' + ssoMsg);

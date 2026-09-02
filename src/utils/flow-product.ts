@@ -7,6 +7,23 @@ const LM_PRODUCTS = new Set<string>(['rcv', 'funerario']);
  * Funerario solo si `?product=funerario` o el nombre contiene "funerar".
  * Nunca infiere funerario desde una URL RCV (mismo path `/ocr/` sin query).
  */
+/** Prioridad: metadata SSO `product` → URL/nombre del submódulo. */
+export function resolveSsoFlowProduct(
+  metadata?: { product?: unknown } | null,
+  hints?: {
+    submoduloUrl?: string | null;
+    submoduloNombre?: string | null;
+    moduloNombre?: string | null;
+  },
+): FlowProduct {
+  const raw =
+    metadata && typeof metadata === 'object'
+      ? String(metadata.product ?? '').trim()
+      : '';
+  if (raw === 'funerario' || raw === 'rcv') return raw;
+  return resolveFlowProduct(hints ?? {});
+}
+
 export function resolveFlowProduct(hints: {
   submoduloUrl?: string | null;
   submoduloNombre?: string | null;

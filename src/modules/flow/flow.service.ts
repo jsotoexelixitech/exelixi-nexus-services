@@ -13,6 +13,7 @@ import {
   appendProductToUrl,
   flowChainKey,
   resolveFlowProduct,
+  resolveSsoFlowProduct,
   type FlowProduct,
 } from '../../utils/flow-product';
 
@@ -583,7 +584,7 @@ export async function startFlowFromToken(
     return { error: 'Submódulo no encontrado.' };
   }
 
-  const flowProduct = resolveFlowProduct({
+  const flowProduct = resolveSsoFlowProduct(metadata, {
     submoduloUrl: submodulo.url,
     submoduloNombre: submodulo.nombre,
     moduloNombre: submodulo.modulo?.nombre,
@@ -659,7 +660,7 @@ export async function startFlowFromToken(
     history: [],
     data: {
       product: flowProduct,
-      ...(metadata ? { metadata } : {}),
+      ...(metadata ? { metadata, metadataCanal: metadata } : {}),
     },
     createdAt: Date.now(),
     updatedAt: Date.now(),

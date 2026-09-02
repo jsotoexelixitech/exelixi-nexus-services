@@ -66,11 +66,11 @@ sequenceDiagram
 
 ### Body
 
-| Campo          | Obligatorio        | Descripción                                                                                                                                                                                     |
-| -------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `target`       | No (default `ocr`) | Primer módulo: `ocr`, `formulario`, `emision`, `pagos`                                                                                                                                          |
-| `metadata`     | Recomendado        | Objeto canal Sis2000 (ver abajo)                                                                                                                                                                |
-| Campos en raíz | Alternativa        | `cproductor`, `cusuario`, `cramo`, `ctipo`, `ccanalalt_in`, `cscanalalt_in`, `cgestor_in` (Angular legacy). **Strings vacíos en raíz se ignoran**; en `metadata` anidado **no** (ver pitfalls). |
+| Campo          | Obligatorio        | Descripción                                                                                                                                                                                                      |
+| -------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target`       | No (default `ocr`) | Primer módulo: `ocr`, `formulario`, `emision`, `pagos`                                                                                                                                                           |
+| `metadata`     | Recomendado        | Objeto canal Sis2000 (ver abajo)                                                                                                                                                                                 |
+| Campos en raíz | Alternativa        | `cproductor`, `cusuario`, `cramo`, `ctipo`, `ccanalalt_in`, `cscanalalt_in`, `cgestor_in`, `product` (`rcv` \| `funerario`). **Strings vacíos en raíz se ignoran**; en `metadata` anidado **no** (ver pitfalls). |
 
 ### Metadata RCV (canal / emisión)
 
@@ -100,6 +100,26 @@ Equivalente con objeto anidado:
   }
 }
 ```
+
+### Metadata funerario (mismo SSO, otro producto)
+
+Mismos campos de canal/gestor que RCV. Enviar **`product: "funerario"`** para que `redirect_url` lleve `?product=funerario` y emisión use ramo 9 + metadata del JWT.
+
+```json
+{
+  "target": "ocr",
+  "product": "funerario",
+  "cproductor": "80080",
+  "cusuario": "7",
+  "cramo": 9,
+  "canal": "web",
+  "ccanalalt_in": "27",
+  "cscanalalt_in": 0,
+  "cgestor_in": "GESTOR-01"
+}
+```
+
+`redirect_url` ejemplo: `…/ocr/?nexus_token=…&product=funerario`
 
 ### Respuesta 200
 
@@ -141,14 +161,15 @@ Ejemplo real de error (empresa 5):
 
 El JWT incluye `empresaId`, `submoduloId` y `metadata`. Cada backend expone `req.nexusMetadata`.
 
-| Módulo      | Uso de metadata                                                                          |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| **Emisión** | `GET /api/catalogo/planes` → `cproductor` + `cusuario` → `valrep/planes/v2`              |
-| **Emisión** | `POST /api/emision` → fusiona metadata en `state.metadataCanal` → emisión Sis2000        |
-| **Pagos**   | `checkout` en metadata → monto, reglas, `notifyUrl`                                      |
-| **Todos**   | Heartbeat `POST /api/access/heartbeat` renueva sesión (preserva metadata en token nuevo) |
+| Módulo                | Uso de metadata                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| **Emisión**           | `GET /api/catalogo/planes` → `cproductor` + `cusuario` → `valrep/planes/v2`              |
+| **Emisión RCV**       | `POST /api/policies/emit` → fusiona metadata en `state.metadataCanal` → Sis2000          |
+| **Emisión funerario** | `POST /api/personas/emision` → misma fusión JWT → `cproductor`, canal, gestor            |
+| **Pagos**             | `checkout` en metadata → monto, reglas, `notifyUrl`                                      |
+| **Todos**             | Heartbeat `POST /api/access/heartbeat` renueva sesión (preserva metadata en token nuevo) |
 
-### Campos metadata → Sis2000 (RCV)
+### Campos metadata → Sis2000 (RCV y funerario)
 
 | Metadata SSO                    | Uso                                                      |
 | ------------------------------- | -------------------------------------------------------- |
@@ -158,6 +179,8 @@ El JWT incluye `empresaId`, `submoduloId` y `metadata`. Cada backend expone `req
 | `ctipo`                         | Tipo vehículo (1=particular, 2=rústico…) → filtro planes |
 | `ccanalalt_in`, `cscanalalt_in` | Canal alterno en póliza                                  |
 | `cgestor_in`                    | Gestor (opcional)                                        |
+| `canal`                         | Bucket parametrizador / preguntas de salud funerario     |
+| `product`                       | `rcv` (default) o `funerario` — define la cadena         |
 
 ---
 

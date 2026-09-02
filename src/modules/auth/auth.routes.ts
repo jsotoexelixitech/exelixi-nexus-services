@@ -171,6 +171,10 @@ router.post('/login', validate(loginSchema), controller.login);
  *                 example: 0
  *               cgestor_in:
  *                 type: string
+ *               product:
+ *                 type: string
+ *                 enum: [rcv, funerario]
+ *                 description: funerario añade ?product=funerario a redirect_url
  *           examples:
  *             rcvQaSys2000:
  *               summary: Entrada flujo RCV (QASys2000)
@@ -181,6 +185,17 @@ router.post('/login', validate(loginSchema), controller.login);
  *                 cramo: 18
  *                 ccanalalt_in: '27'
  *                 cscanalalt_in: 0
+ *             funerarioQaSys2000:
+ *               summary: Entrada flujo funerario (mismo canal/gestor que RCV)
+ *               value:
+ *                 target: ocr
+ *                 product: funerario
+ *                 cproductor: '80080'
+ *                 cusuario: '7'
+ *                 cramo: 9
+ *                 canal: web
+ *                 ccanalalt_in: '27'
+ *                 cgestor_in: GESTOR-01
  *             pagosStandalone:
  *               summary: Pagos solo cobro (webhook)
  *               value:

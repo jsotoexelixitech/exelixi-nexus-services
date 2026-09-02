@@ -4,6 +4,7 @@ import {
   appendProductToUrl,
   flowChainKey,
   resolveFlowProduct,
+  resolveSsoFlowProduct,
 } from './flow-product';
 
 describe('flowChainKey — rcv y funerario no son la misma entrada OCR', () => {
@@ -65,5 +66,25 @@ describe('resolveFlowProduct', () => {
         submoduloUrl: 'https://nexusqa.exelixitech.com/ocr/',
       }),
     ).toBe('rcv');
+  });
+});
+
+describe('resolveSsoFlowProduct', () => {
+  const ocr = {
+    submoduloUrl: 'https://nexusqa.exelixitech.com/ocr/',
+    submoduloNombre: 'OCR Documentos',
+  };
+
+  it('metadata.product=funerario gana sobre URL RCV', () => {
+    expect(resolveSsoFlowProduct({ product: 'funerario' }, ocr)).toBe(
+      'funerario',
+    );
+  });
+
+  it('sin product en metadata sigue infiriendo por URL/nombre', () => {
+    expect(resolveSsoFlowProduct({}, ocr)).toBe('rcv');
+    expect(
+      resolveSsoFlowProduct({}, { ...ocr, submoduloNombre: 'OCR Funerario' }),
+    ).toBe('funerario');
   });
 });
