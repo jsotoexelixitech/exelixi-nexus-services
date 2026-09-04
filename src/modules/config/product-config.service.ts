@@ -14,6 +14,51 @@ import {
 } from './product-config.defaults';
 import logger from '../../utils/logger';
 
+function cloneConfig(obj: object): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(obj)) as Record<string, unknown>;
+}
+
+function isCanalMap(v: unknown): v is Record<string, unknown> {
+  return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+}
+
+function asQuestionList(v: unknown): unknown[] | null {
+  return Array.isArray(v) ? v : null;
+}
+
+/**
+ * Las preguntas guardadas ganan: no reinyectar el catálogo de fábrica
+ * (eso hacía reaparecer una pregunta recién eliminada).
+ */
+function overlayFuneralHealthFromStored(
+  merged: Record<string, unknown>,
+  stored: Record<string, unknown>,
+): void {
+  const storedBy = isCanalMap(stored.healthQuestionsByCanal)
+    ? { ...stored.healthQuestionsByCanal }
+    : null;
+  const hasHq = Object.prototype.hasOwnProperty.call(stored, 'healthQuestions');
+  const storedHq = asQuestionList(stored.healthQuestions);
+
+  if (storedBy && Object.keys(storedBy).length > 0) {
+    merged.healthQuestionsByCanal = storedBy;
+    const byDefault = asQuestionList(storedBy.default);
+    if (byDefault) {
+      merged.healthQuestions = byDefault;
+    } else if (hasHq && storedHq) {
+      merged.healthQuestions = storedHq;
+    } else {
+      merged.healthQuestions = [];
+    }
+    return;
+  }
+
+  if (hasHq && storedHq) {
+    merged.healthQuestions = storedHq;
+    merged.healthQuestionsByCanal = { default: storedHq };
+  }
+}
+
 /**
  * Obtiene la config activa para un producto+módulo de una empresa.
  * Si no existe en BD, retorna el default hardcoded.
@@ -23,7 +68,7 @@ export async function getConfig(
   producto: Producto,
   modulo: Modulo,
 ): Promise<object> {
-  const defaults = (DEFAULT_CONFIGS[producto]?.[modulo] ?? {}) as Record<string, unknown>;
+  const defaults = cloneConfig(DEFAULT_CONFIGS[producto]?.[modulo] ?? {});
   try {
     const record = await prisma.productConfig.findUnique({
       where: { empresaId_producto_modulo: { empresaId, producto, modulo } },
@@ -31,37 +76,8 @@ export async function getConfig(
     if (record) {
       const stored = record.configJson as Record<string, unknown>;
       const merged = { ...defaults, ...stored };
-      // Configs antiguas sin healthQuestions: heredar default funerario
-      if (
-        producto === 'funerario' &&
-        modulo === 'emision' &&
-        !Object.prototype.hasOwnProperty.call(stored, 'healthQuestions')
-      ) {
-        merged.healthQuestions = defaults.healthQuestions;
-      }
-      // Migrar legacy → healthQuestionsByCanal.default
       if (producto === 'funerario' && modulo === 'emision') {
-        const by = merged.healthQuestionsByCanal;
-        const legacy = merged.healthQuestions;
-        if (
-          (!by || typeof by !== 'object' || Array.isArray(by)) &&
-          Array.isArray(legacy) &&
-          legacy.length > 0
-        ) {
-          merged.healthQuestionsByCanal = { default: legacy };
-        } else if (
-          by &&
-          typeof by === 'object' &&
-          !Array.isArray(by) &&
-          !Array.isArray((by as Record<string, unknown>).default) &&
-          Array.isArray(legacy) &&
-          legacy.length > 0
-        ) {
-          merged.healthQuestionsByCanal = {
-            ...(by as Record<string, unknown>),
-            default: legacy,
-          };
-        }
+        overlayFuneralHealthFromStored(merged, stored);
       }
       return merged;
     }
@@ -101,49 +117,43 @@ export async function saveConfig(
 
   const merged: Record<string, unknown> = { ...existing, ...incoming };
 
-  // Funerario: no pisar preguntas con array vacío (carrera / panel sin hidratar)
+  // Funerario: el array enviado por canal es la fuente de verdad (incluye bajas).
+  // No reinyectar healthQuestions viejo del spread del front ({...config, ...patch}).
   if (producto === 'funerario' && modulo === 'emision') {
-    const nextHq = incoming.healthQuestions;
-    const prevHq = existing.healthQuestions;
-    if (
-      Array.isArray(nextHq) &&
-      nextHq.length === 0 &&
-      Array.isArray(prevHq) &&
-      prevHq.length > 0
-    ) {
+    const nextBy = incoming.healthQuestionsByCanal;
+    const prevBy = existing.healthQuestionsByCanal;
+    const nextByEmpty = isCanalMap(nextBy) && Object.keys(nextBy).length === 0;
+    if (nextByEmpty && isCanalMap(prevBy)) {
+      merged.healthQuestionsByCanal = prevBy;
+      logger.warn('[product-config] healthQuestionsByCanal vacío ignorado');
+    } else if (isCanalMap(nextBy)) {
+      merged.healthQuestionsByCanal = {
+        ...(isCanalMap(prevBy) ? prevBy : {}),
+        ...nextBy,
+      };
+    }
+
+    const byMerged = isCanalMap(merged.healthQuestionsByCanal)
+      ? merged.healthQuestionsByCanal
+      : null;
+    const byDefault = byMerged ? asQuestionList(byMerged.default) : null;
+    const nextHq = asQuestionList(incoming.healthQuestions);
+    const prevHq = asQuestionList(existing.healthQuestions);
+    const updatedDefault =
+      isCanalMap(nextBy) &&
+      Object.prototype.hasOwnProperty.call(nextBy, 'default');
+
+    if (updatedDefault && byDefault) {
+      merged.healthQuestions = byDefault;
+    } else if (nextHq && nextHq.length === 0 && prevHq && prevHq.length > 0) {
       merged.healthQuestions = prevHq;
       logger.warn(
         `[product-config] healthQuestions vacío ignorado; se conservan ${prevHq.length} preguntas`,
       );
-    }
-    const nextBy = incoming.healthQuestionsByCanal;
-    const prevBy = existing.healthQuestionsByCanal;
-    const nextByEmpty =
-      nextBy &&
-      typeof nextBy === 'object' &&
-      !Array.isArray(nextBy) &&
-      Object.keys(nextBy as object).length === 0;
-    if (
-      nextByEmpty &&
-      prevBy &&
-      typeof prevBy === 'object' &&
-      !Array.isArray(prevBy)
-    ) {
-      merged.healthQuestionsByCanal = prevBy;
-      logger.warn('[product-config] healthQuestionsByCanal vacío ignorado');
-    } else if (
-      nextBy &&
-      typeof nextBy === 'object' &&
-      !Array.isArray(nextBy) &&
-      prevBy &&
-      typeof prevBy === 'object' &&
-      !Array.isArray(prevBy)
-    ) {
-      // Merge por canal: el integrador puede enviar solo su clave sin borrar las demás
-      merged.healthQuestionsByCanal = {
-        ...(prevBy as Record<string, unknown>),
-        ...(nextBy as Record<string, unknown>),
-      };
+    } else if (updatedDefault && nextHq) {
+      merged.healthQuestions = nextHq;
+    } else if (prevHq) {
+      merged.healthQuestions = prevHq;
     }
   }
 
