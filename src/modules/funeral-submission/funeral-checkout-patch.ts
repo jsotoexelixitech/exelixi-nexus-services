@@ -7,6 +7,8 @@ export function buildFuneralCheckoutPatch(
     planName?: string;
     cplan: string;
     submissionId: string;
+    /** SID OCR original (distinto del SID de checkout). */
+    originSessionId?: string;
     paymentExpiresAt?: Date;
   },
 ): Record<string, unknown> {
@@ -29,6 +31,11 @@ export function buildFuneralCheckoutPatch(
     ).trim() ||
     `Plan ${opts.cplan}`;
 
+  const prevCanal =
+    snapshot.metadataCanal && typeof snapshot.metadataCanal === 'object'
+      ? (snapshot.metadataCanal as Record<string, unknown>)
+      : {};
+
   return {
     product: 'funerario',
     tomador: snapshot.tomador,
@@ -40,8 +47,15 @@ export function buildFuneralCheckoutPatch(
     selectedPlan: snapshot.selectedPlan,
     quote: snapshot.quote,
     quoteState: 'ready',
-    metadataCanal: snapshot.metadataCanal,
+    metadataCanal: {
+      ...prevCanal,
+      funeralSubmissionId: opts.submissionId,
+      ...(opts.originSessionId
+        ? { originSessionId: opts.originSessionId }
+        : {}),
+    },
     funeralSubmissionId: opts.submissionId,
+    originSessionId: opts.originSessionId,
     funeralApprovedCheckout: true,
     checkoutRules: {
       requirePayment: true,

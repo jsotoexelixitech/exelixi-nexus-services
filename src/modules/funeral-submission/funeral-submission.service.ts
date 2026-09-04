@@ -170,6 +170,7 @@ export class FuneralSubmissionService {
 
     const patch = buildFuneralCheckoutPatch(snapshot, {
       submissionId: id,
+      originSessionId: existing.sessionId,
       cplan: existing.cplan,
       planName: existing.planName ?? undefined,
       paymentExpiresAt: expiresAt,
@@ -234,12 +235,12 @@ export class FuneralSubmissionService {
     return formatRow(row);
   }
 
-  async recordEmission(
-    id: string,
-    emission: Record<string, unknown>,
-    opts?: { empresaId?: number },
-  ) {
-    const existing = await this.getById(id, opts?.empresaId);
+  /**
+   * Persiste póliza emitida. El lookup es por id de solicitud — no por empresa.
+   * Así el mismo flujo sirve para La Mundial y cualquier otra tenant.
+   */
+  async recordEmission(id: string, emission: Record<string, unknown>) {
+    const existing = await this.getById(id);
     if (!existing) return null;
 
     const snapshot =
@@ -284,19 +285,61 @@ export class FuneralSubmissionService {
     return formatRow(row);
   }
 
+  /**
+   * Busca la solicitud por cualquiera de las refs del checkout/emisión.
+   * No filtra por empresa: el SID o UUID ya identifican la fila.
+   */
+  async findForEmission(refs: {
+    id?: string;
+    paymentSid?: string;
+    sessionId?: string;
+  }) {
+    const id = String(refs.id ?? '').trim();
+    if (id) {
+      const byId = await prisma.funeralSubmission.findUnique({
+        where: { id },
+      });
+      if (byId) return byId;
+    }
+
+    const paymentSid = String(refs.paymentSid ?? '').trim();
+    if (paymentSid) {
+      const byPay = await prisma.funeralSubmission.findFirst({
+        where: {
+          OR: [{ paymentSid }, { sessionId: paymentSid }],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (byPay) return byPay;
+    }
+
+    const sessionId = String(refs.sessionId ?? '').trim();
+    if (sessionId) {
+      const bySession = await prisma.funeralSubmission.findFirst({
+        where: {
+          OR: [{ sessionId }, { paymentSid: sessionId }],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (bySession) return bySession;
+    }
+
+    return null;
+  }
+
   async recordEmissionByPaymentSid(
     paymentSid: string,
     emission: Record<string, unknown>,
   ) {
-    const sid = String(paymentSid ?? '').trim();
-    if (!sid) return null;
-    const existing = await prisma.funeralSubmission.findFirst({
-      where: { paymentSid: sid },
-      orderBy: { createdAt: 'desc' },
-    });
+    return this.recordEmissionByRefs({ paymentSid }, emission);
+  }
+
+  async recordEmissionByRefs(
+    refs: { id?: string; paymentSid?: string; sessionId?: string },
+    emission: Record<string, unknown>,
+  ) {
+    const existing = await this.findForEmission(refs);
     if (!existing) return null;
-    return this.recordEmission(existing.id, emission, {
-      empresaId: existing.empresaId,
-    });
+    return this.recordEmission(existing.id, emission);
   }
 }

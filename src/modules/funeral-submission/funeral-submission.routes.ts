@@ -6,6 +6,8 @@
  * GET    /api/funeral-submissions/:id          → detalle
  * POST   /api/funeral-submissions/:id/approve  → aprobar (fase 2: email + checkout)
  * POST   /api/funeral-submissions/:id/reject   → rechazar
+ * POST   /api/funeral-submissions/record-emission → registrar póliza (id|sid|session, cualquier empresa)
+ * POST   /api/funeral-submissions/emission-by-sid → idem por SID
  * POST   /api/funeral-submissions/:id/emission → registrar póliza emitida (x-api-key)
  */
 import { Router, Request, Response } from 'express';
@@ -16,6 +18,30 @@ import { FuneralSubmissionService } from './funeral-submission.service';
 
 const router = Router();
 const svc = new FuneralSubmissionService();
+
+function emissionFromBody(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    cnpoliza: String(body.cnpoliza ?? '').trim(),
+    cnrecibo: body.cnrecibo != null ? String(body.cnrecibo) : undefined,
+    urlpoliza: body.urlpoliza != null ? String(body.urlpoliza) : undefined,
+    url_ingreso_caja:
+      body.url_ingreso_caja != null ? String(body.url_ingreso_caja) : undefined,
+    url_conductor_habitual:
+      body.url_conductor_habitual != null
+        ? String(body.url_conductor_habitual)
+        : undefined,
+    url_club_arys:
+      body.url_club_arys != null ? String(body.url_club_arys) : undefined,
+    emittedAt:
+      typeof body.emittedAt === 'string'
+        ? body.emittedAt
+        : new Date().toISOString(),
+    quote:
+      body.quote && typeof body.quote === 'object' ? body.quote : undefined,
+  };
+}
 
 router.post('/', apiKeyGuard, async (req: Request, res: Response) => {
   const body = req.body ?? {};
@@ -165,36 +191,67 @@ router.post(
 );
 
 router.post(
-  '/emission-by-sid',
+  '/record-emission',
   apiKeyGuard,
   async (req: Request, res: Response) => {
-    const body = req.body ?? {};
-    const paymentSid = String(body.paymentSid ?? body.sid ?? '').trim();
+    const body = (req.body ?? {}) as Record<string, unknown>;
     const cnpoliza = String(body.cnpoliza ?? '').trim();
-    if (!paymentSid || !cnpoliza) {
+    const id = String(body.id ?? body.funeralSubmissionId ?? '').trim();
+    const paymentSid = String(body.paymentSid ?? body.sid ?? '').trim();
+    const sessionId = String(
+      body.sessionId ?? body.originSessionId ?? '',
+    ).trim();
+    if (!cnpoliza || (!id && !paymentSid && !sessionId)) {
       res.status(400).json({
         success: false,
-        message: 'Se requieren paymentSid y cnpoliza.',
+        message: 'Se requieren cnpoliza y al menos id, paymentSid o sessionId.',
       });
       return;
     }
-    const emission: Record<string, unknown> = {
-      cnpoliza,
-      cnrecibo: body.cnrecibo != null ? String(body.cnrecibo) : undefined,
-      urlpoliza: body.urlpoliza != null ? String(body.urlpoliza) : undefined,
-      url_ingreso_caja:
-        body.url_ingreso_caja != null
-          ? String(body.url_ingreso_caja)
-          : undefined,
-      emittedAt:
-        typeof body.emittedAt === 'string'
-          ? body.emittedAt
-          : new Date().toISOString(),
-      quote:
-        body.quote && typeof body.quote === 'object' ? body.quote : undefined,
-    };
     try {
-      const data = await svc.recordEmissionByPaymentSid(paymentSid, emission);
+      const data = await svc.recordEmissionByRefs(
+        { id, paymentSid, sessionId },
+        emissionFromBody(body),
+      );
+      if (!data) {
+        res.status(404).json({
+          success: false,
+          message:
+            'Solicitud no encontrada (id / paymentSid / sessionId). No se filtra por empresa.',
+        });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Error al registrar emisión';
+      res.status(400).json({ success: false, message: msg });
+    }
+  },
+);
+
+router.post(
+  '/emission-by-sid',
+  apiKeyGuard,
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const paymentSid = String(body.paymentSid ?? body.sid ?? '').trim();
+    const sessionId = String(
+      body.sessionId ?? body.originSessionId ?? '',
+    ).trim();
+    const cnpoliza = String(body.cnpoliza ?? '').trim();
+    if ((!paymentSid && !sessionId) || !cnpoliza) {
+      res.status(400).json({
+        success: false,
+        message: 'Se requieren paymentSid o sessionId, y cnpoliza.',
+      });
+      return;
+    }
+    try {
+      const data = await svc.recordEmissionByRefs(
+        { paymentSid, sessionId },
+        emissionFromBody(body),
+      );
       if (!data) {
         res.status(404).json({
           success: false,
@@ -225,32 +282,11 @@ router.post(
       return;
     }
 
-    const emission: Record<string, unknown> = {
-      cnpoliza,
-      cnrecibo: body.cnrecibo != null ? String(body.cnrecibo) : undefined,
-      urlpoliza: body.urlpoliza != null ? String(body.urlpoliza) : undefined,
-      url_ingreso_caja:
-        body.url_ingreso_caja != null
-          ? String(body.url_ingreso_caja)
-          : undefined,
-      url_conductor_habitual:
-        body.url_conductor_habitual != null
-          ? String(body.url_conductor_habitual)
-          : undefined,
-      url_club_arys:
-        body.url_club_arys != null ? String(body.url_club_arys) : undefined,
-      emittedAt:
-        typeof body.emittedAt === 'string'
-          ? body.emittedAt
-          : new Date().toISOString(),
-      quote:
-        body.quote && typeof body.quote === 'object' ? body.quote : undefined,
-    };
-
     try {
-      const data = await svc.recordEmission(req.params.id, emission, {
-        empresaId: body.empresaId != null ? Number(body.empresaId) : undefined,
-      });
+      const data = await svc.recordEmission(
+        req.params.id,
+        emissionFromBody(body),
+      );
       if (!data) {
         res
           .status(404)
