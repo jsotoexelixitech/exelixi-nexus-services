@@ -1,14 +1,14 @@
 /**
- * JWT del parametrizador (?token= en /config). 12 h + refresh con la pestaña abierta.
+ * JWT del parametrizador (?token= en /config). 7 días + gracia 7 días.
  * panel=preguntas → 365 días (URL de larga duración para solo cuestionario).
  * Scope distinto de revision-panel: no se intercambian.
  */
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
 
-export const CONFIG_TOKEN_TTL = '12h';
-export const CONFIG_TOKEN_EXPIRES_SEC = 12 * 60 * 60;
-const EXPIRED_GRACE_MS = 12 * 60 * 60 * 1000;
+export const CONFIG_TOKEN_TTL = '7d';
+export const CONFIG_TOKEN_EXPIRES_SEC = 7 * 24 * 60 * 60;
+const EXPIRED_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const CONFIG_PREGUNTAS_TOKEN_TTL = '365d';
 export const CONFIG_PREGUNTAS_TOKEN_EXPIRES_SEC = 365 * 24 * 60 * 60;

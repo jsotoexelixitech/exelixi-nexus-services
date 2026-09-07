@@ -1,13 +1,14 @@
 /**
- * JWT de la vista técnica funerario. 12 h + refresh mientras el tab está abierto.
+ * JWT de la vista técnica funerario. 7 días + gracia 7 días
+ * (cubre fin de semana y PC suspendida; el front sigue renovando con el tab abierto).
  */
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
 
-export const REVISION_TOKEN_TTL = '12h';
-export const REVISION_TOKEN_EXPIRES_SEC = 12 * 60 * 60;
-/** Permite refrescar un token vencido con la pestaña abierta (todo el día). */
-const EXPIRED_GRACE_MS = 12 * 60 * 60 * 1000;
+export const REVISION_TOKEN_TTL = '7d';
+export const REVISION_TOKEN_EXPIRES_SEC = 7 * 24 * 60 * 60;
+/** Acepta vencido para renovar / listar si el enlace se reabre en la semana. */
+const EXPIRED_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type RevisionTokenClaims = {
   empresaId: number;
