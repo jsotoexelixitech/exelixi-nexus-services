@@ -300,6 +300,7 @@ export class AccessService {
     reason?: string;
     access_token?: string;
     expires_in?: number;
+    empresaNombre?: string;
   }> {
     // 1. Verificar firma JWT (local, sin red)
     let payload: ReturnType<typeof verifyTenantToken>;
@@ -394,6 +395,11 @@ export class AccessService {
       `heartbeat: renovado empresa=${empresaId} sub=${submoduloId} expires=${newExpiry.toISOString()}`,
     );
 
-    return { active: true, access_token: newToken, expires_in: 3600 };
+    return {
+      active: true,
+      access_token: newToken,
+      expires_in: 3600,
+      empresaNombre: esm.empresa.nombre,
+    };
   }
 }
