@@ -319,7 +319,7 @@ model FuneralSubmission {
   cplan            String    @map("funeral_submission_cplan") @db.VarChar(16)
   planName         String?   @map("funeral_submission_plan_name") @db.VarChar(256)
   cramo            Int?      @map("funeral_submission_cramo")
-  scoreTotal       Int       @default(0) @map("funeral_submission_score_total")
+  scoreTotal       Float     @default(0) @map("funeral_submission_score_total")
   scoreBreakdown   Json      @default("[]") @map("funeral_submission_score_breakdown") @db.JsonB
   healthAnswers    Json      @default("{}") @map("funeral_submission_health_answers") @db.JsonB
   snapshotJson     Json      @map("funeral_submission_snapshot") @db.JsonB
