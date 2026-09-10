@@ -1,0 +1,319 @@
+/**
+ * flow.routes.ts
+ *
+ * Endpoints del bridge inter-módulo:
+ *   POST /api/flow/start                 → inicia un flujo (requiere API key)
+ *   GET  /api/flow/session/:sid          → rehidratación (público para módulos)
+ *   POST /api/flow/save/:sid             → guarda estado parcial (público)
+ *   POST /api/flow/done/:sid?from=N      → avanza al siguiente módulo (público)
+ */
+
+import { Router, Request, Response } from 'express';
+import {
+  startFlow,
+  startFlowFromToken,
+  startCheckoutLink,
+  getSession,
+  saveSession,
+  advanceSession,
+  navigateSession,
+} from './flow.service';
+import { apiKeyGuard } from '../../middlewares/apikey.middleware';
+import { verifyTenantToken } from '../../utils/tenant-token';
+import logger from '../../utils/logger';
+
+const router = Router();
+
+/**
+ * POST /api/flow/start
+ * Inicia el flujo para una empresa + grupo de módulos.
+ * Requiere x-api-key (llamado desde el admin panel).
+ *
+ * Body: { empresaId: number, moduloGroupId: number }
+ */
+router.post('/start', apiKeyGuard, async (req: Request, res: Response) => {
+  const { empresaId, moduloGroupId } = req.body as {
+    empresaId?: number;
+    moduloGroupId?: number;
+  };
+
+  if (!empresaId || !moduloGroupId) {
+    res.status(400).json({
+      success: false,
+      message: 'Se requiere empresaId y moduloGroupId.',
+    });
+    return;
+  }
+
+  const result = await startFlow(Number(empresaId), Number(moduloGroupId));
+
+  if ('error' in result) {
+    res.status(400).json({ success: false, message: result.error });
+    return;
+  }
+
+  res.json({ success: true, data: result });
+});
+
+/**
+ * POST /api/flow/start-from-token
+ * Auto-arranque del flujo desde un nexus_token existente.
+ * Público — el frontend del primer módulo lo llama cuando recibe
+ * ?nexus_token pero sin ?sid.
+ *
+ * Body: { nexus_token: string }
+ * Respuesta: { sid, firstUrl, totalActive } o error 400/409
+ */
+router.post('/start-from-token', async (req: Request, res: Response) => {
+  const { nexus_token } = req.body as { nexus_token?: string };
+
+  if (!nexus_token) {
+    res
+      .status(400)
+      .json({ success: false, message: 'Se requiere nexus_token.' });
+    return;
+  }
+
+  let payload: { empresaId: number; submoduloId: number; metadata?: any };
+  try {
+    payload = verifyTenantToken(nexus_token) as {
+      empresaId: number;
+      submoduloId: number;
+      metadata?: any;
+    };
+  } catch (err) {
+    logger.warn(
+      `[start-from-token] Token inválido o expirado — IP: ${req.ip} — ${String(err)}`,
+    );
+    res
+      .status(401)
+      .json({ success: false, message: 'Token inválido o expirado.' });
+    return;
+  }
+
+  const result = await startFlowFromToken(
+    payload.empresaId,
+    payload.submoduloId,
+    payload.metadata,
+  );
+
+  if ('standalone' in result && result.standalone) {
+    res.json({ success: true, data: result });
+    return;
+  }
+
+  if ('error' in result) {
+    // 409 = no es punto de entrada o flujo de 1 solo módulo; el módulo continúa standalone
+    res.status(409).json({ success: false, message: result.error });
+    return;
+  }
+
+  res.json({ success: true, data: result });
+});
+
+/**
+ * POST /api/flow/checkout-link
+ * Crea sesión con datos de checkout y devuelve URL directa a Pagos.
+ * Requiere x-api-key (server-to-server).
+ *
+ * Body: {
+ *   empresaId, moduloGroupId,
+ *   checkout: { title, totalVes, lines?, totalUsd?, exchangeRate? },
+ *   rules?: { requirePayment?, methods?, onSuccess? },
+ *   payload?: object,
+ *   payer?: object,
+ *   ...campos legacy wizard (selectedPlan, vehicle, tomador, etc.)
+ * }
+ */
+/**
+ * @openapi
+ * /api/flow/checkout-link:
+ *   post:
+ *     tags:
+ *       - Flow
+ *       - Integración externa
+ *     summary: Crear sesión y URL directa a Pagos
+ *     description: |
+ *       Server-to-server (requiere **x-api-key**). Crea `sid` con datos de checkout
+ *       y devuelve **checkoutUrl** apuntando al submódulo Pagos de la empresa.
+ *
+ *       Alternativa a `sso-delegate` cuando el backend conoce `empresaId` y `moduloGroupId`.
+ *
+ *       Ver `docs/INTEGRACION-SSO-Y-PAGOS.md`.
+ *     security:
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [empresaId, moduloGroupId, checkout]
+ *             properties:
+ *               empresaId:
+ *                 type: integer
+ *                 example: 5
+ *               moduloGroupId:
+ *                 type: integer
+ *                 example: 1
+ *               checkout:
+ *                 $ref: '#/components/schemas/SsoCheckout'
+ *               rules:
+ *                 $ref: '#/components/schemas/SsoCheckoutRules'
+ *               payer:
+ *                 $ref: '#/components/schemas/SsoPayer'
+ *               payload:
+ *                 type: object
+ *                 properties:
+ *                   notifyUrl:
+ *                     type: string
+ *                     format: uri
+ *                 additionalProperties: true
+ *     responses:
+ *       200:
+ *         description: Sesión creada
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     sid: { type: string, example: '316' }
+ *                     checkoutUrl:
+ *                       type: string
+ *                       format: uri
+ *                     pagosModule:
+ *                       type: object
+ *                       properties:
+ *                         order: { type: integer }
+ *                         nombre: { type: string }
+ *       400:
+ *         description: checkout.totalVes inválido o módulo Pagos no activo
+ */
+router.post(
+  '/checkout-link',
+  apiKeyGuard,
+  async (req: Request, res: Response) => {
+    const { empresaId, moduloGroupId } = req.body as {
+      empresaId?: number;
+      moduloGroupId?: number;
+    };
+
+    if (!empresaId || !moduloGroupId) {
+      res.status(400).json({
+        success: false,
+        message: 'Se requiere empresaId y moduloGroupId.',
+      });
+      return;
+    }
+
+    const patch =
+      req.body && typeof req.body === 'object'
+        ? ({ ...req.body } as Record<string, unknown>)
+        : {};
+
+    delete patch.empresaId;
+    delete patch.moduloGroupId;
+
+    const result = await startCheckoutLink(
+      Number(empresaId),
+      Number(moduloGroupId),
+      patch,
+    );
+
+    if ('error' in result) {
+      res.status(400).json({ success: false, message: result.error });
+      return;
+    }
+
+    res.json({ success: true, data: result });
+  },
+);
+
+/**
+ * GET /api/flow/session/:sid
+ * Rehidratación del wizard store al cargar un módulo.
+ * Público (llamado desde los frontends de módulos).
+ */
+router.get('/session/:sid', async (req: Request, res: Response) => {
+  const session = await getSession(req.params.sid);
+  if (!session) {
+    res
+      .status(404)
+      .json({ success: false, message: 'Sesión no encontrada o expirada.' });
+    return;
+  }
+  res.json({ success: true, data: session });
+});
+
+/**
+ * POST /api/flow/save/:sid
+ * Guarda estado parcial del wizard (autosave o save manual).
+ * Público (llamado desde los frontends de módulos).
+ */
+router.post('/save/:sid', async (req: Request, res: Response) => {
+  const patch =
+    req.body && typeof req.body === 'object'
+      ? (req.body as Record<string, unknown>)
+      : {};
+  const result = await saveSession(req.params.sid, patch);
+  if (!result) {
+    res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
+    return;
+  }
+  res.json({ success: true, data: result });
+});
+
+/**
+ * POST /api/flow/done/:sid?from=N
+ * Marca el módulo actual (order=N) como completado y retorna la URL del siguiente.
+ * Público (llamado desde los frontends de módulos).
+ */
+router.post('/done/:sid', async (req: Request, res: Response) => {
+  const fromOrder = Number(req.query.from ?? 0);
+  const patch =
+    req.body && typeof req.body === 'object'
+      ? (req.body as Record<string, unknown>)
+      : {};
+  const result = await advanceSession(req.params.sid, fromOrder, patch);
+  if (!result) {
+    res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
+    return;
+  }
+  res.json({ success: true, data: result });
+});
+
+/**
+ * POST /api/flow/navigate/:sid?to=N
+ * Guarda estado y redirige a un módulo anterior o posterior del flujo.
+ * Público (stepper adelante/atrás en los frontends).
+ */
+router.post('/navigate/:sid', async (req: Request, res: Response) => {
+  const toOrder = Number(req.query.to ?? 0);
+  if (!toOrder || toOrder < 1) {
+    res.status(400).json({
+      success: false,
+      message: 'Se requiere query to=N (orden del módulo).',
+    });
+    return;
+  }
+  const patch =
+    req.body && typeof req.body === 'object'
+      ? (req.body as Record<string, unknown>)
+      : {};
+  const result = await navigateSession(req.params.sid, toOrder, patch);
+  if (!result) {
+    res.status(404).json({ success: false, message: 'Sesión no encontrada.' });
+    return;
+  }
+  if ('error' in result) {
+    res.status(400).json({ success: false, message: result.error });
+    return;
+  }
+  res.json({ success: true, data: result });
+});
+
+export default router;

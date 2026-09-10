@@ -1,0 +1,181 @@
+import jwt from 'jsonwebtoken';
+import { env } from '../config/env';
+
+export interface TenantTokenPayload {
+  type: 'tenant_access';
+  empresaId: number;
+  submoduloId: number;
+  metadata?: any;
+}
+
+/**
+ * Genera un JWT permanente (sin expiración) que identifica la combinación
+ * empresa + submódulo. Es el "pase de acceso" que va en la URL del servicio.
+ * Firmado con TENANT_TOKEN_SECRET — distinto al JWT de sesión de usuarios.
+ */
+export function generateTenantToken(
+  empresaId: number,
+  submoduloId: number,
+): string {
+  const payload: TenantTokenPayload = {
+    type: 'tenant_access',
+    empresaId,
+    submoduloId,
+  };
+  // Sin expiración: el token es una licencia permanente.
+  // La revocación se gestiona desactivando el registro en BD.
+  return jwt.sign(payload, env.TENANT_TOKEN_SECRET);
+}
+
+/**
+ * Genera un JWT de corta duración (Access Token) para el protocolo OAuth.
+ * Este token se usa para las llamadas a los módulos y expira en 1 hora.
+ */
+export function generateAccessToken(
+  empresaId: number,
+  submoduloId: number,
+): string {
+  const payload: TenantTokenPayload = {
+    type: 'tenant_access',
+    empresaId,
+    submoduloId,
+  };
+  return jwt.sign(payload, env.TENANT_TOKEN_SECRET, { expiresIn: '1h' });
+}
+
+/**
+ * Genera un JWT de corta duración dinámico para SSO Delegate,
+ * inyectando la metadata (ej. cproductor, etc.) para que viaje en la URL.
+ * Expira en 1 hora.
+ */
+export function generateSsoToken(
+  empresaId: number,
+  submoduloId: number,
+  metadata?: any,
+): string {
+  const payload: TenantTokenPayload = {
+    type: 'tenant_access',
+    empresaId,
+    submoduloId,
+    ...(metadata && { metadata }),
+  };
+  return jwt.sign(payload, env.TENANT_TOKEN_SECRET, { expiresIn: '1h' });
+}
+
+/**
+ * Verifica la firma del tenant token y retorna el payload.
+ * Lanza un error si la firma es inválida o el tipo no coincide.
+ *
+ * @param options.allowExpired  Si es true, valida la firma pero ignora la
+ *   expiración (`exp`). Se usa en /verify para deslizar la sesión: el token
+ *   de sesión expira en 1 h, pero mientras la empresa siga activa el verify
+ *   (cada 30 s) reemite un token fresco. La firma se sigue verificando.
+ */
+export function verifyTenantToken(
+  token: string,
+  options?: { allowExpired?: boolean },
+): TenantTokenPayload {
+  const decoded = jwt.verify(token, env.TENANT_TOKEN_SECRET, {
+    ignoreExpiration: options?.allowExpired ?? false,
+  }) as TenantTokenPayload;
+
+  if (decoded.type !== 'tenant_access') {
+    throw new Error('Tipo de token inválido');
+  }
+
+  return decoded;
+}
+
+/**
+ * Reescribe el host de submodulo_url según el entorno (QA vs dev).
+ * En srv001qa: NEXUS_PUBLIC_ORIGIN=https://nexusqa.exelixitech.com
+ * Conserva path (/ocr/, /formulario/, …) y query del registro en BD.
+ *
+ * Producción GCIA (subdominio por módulo: ocr.exelixitech.com, …): no reescribe
+ * URLs HTTPS ya públicas ni cuando NEXUS_PUBLIC_ORIGIN apunta al host del API.
+ */
+function isInternalModuleHostname(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h.startsWith('192.168.') ||
+    h.startsWith('10.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+  );
+}
+
+export function rewritePublicModuleUrl(submoduloUrl: string): string {
+  const origin = process.env.NEXUS_PUBLIC_ORIGIN?.trim();
+  if (!origin) return submoduloUrl;
+
+  try {
+    const u = new URL(submoduloUrl);
+    const pub = new URL(origin.includes('://') ? origin : `https://${origin}`);
+
+    // Subdominios producción (*.exelixitech.com por módulo) — respetar BD.
+    if (!isInternalModuleHostname(u.hostname) && u.protocol === 'https:') {
+      return submoduloUrl;
+    }
+
+    // NEXUS_PUBLIC_ORIGIN en host de API (nexus-api.*) no debe pisar fronts.
+    if (pub.hostname.toLowerCase().startsWith('nexus-api.')) {
+      return submoduloUrl;
+    }
+
+    u.protocol = pub.protocol;
+    u.hostname = pub.hostname;
+    u.port = pub.port;
+    return u.toString();
+  } catch {
+    return submoduloUrl;
+  }
+}
+
+/**
+ * Normaliza la URL base del submódulo para redirects con prefijo Apache (/ocr/, etc.).
+ * Paths con segmento reciben barra final; host:puerto sin path (/) no cambia.
+ */
+export function normalizeSubmoduloAccessBase(submoduloUrl: string): string {
+  const trimmed = rewritePublicModuleUrl(submoduloUrl.trim());
+  try {
+    const url = new URL(trimmed);
+    const search = url.search;
+    url.search = '';
+    url.hash = '';
+
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path.length > 0) {
+      url.pathname = `${path}/`;
+    }
+
+    return `${url.origin}${url.pathname}${search}`;
+  } catch {
+    const q = trimmed.indexOf('?');
+    const pathPart = q >= 0 ? trimmed.slice(0, q) : trimmed;
+    const queryPart = q >= 0 ? trimmed.slice(q) : '';
+    const normalized =
+      pathPart.length > 0 && !pathPart.endsWith('/')
+        ? `${pathPart}/`
+        : pathPart;
+    return `${normalized}${queryPart}`;
+  }
+}
+
+/**
+ * Construye la URL de acceso completa para un submódulo:
+ *   {baseUrl}?nexus_token={tenantToken}
+ *
+ * Query-aware: si la URL configurada ya trae query string (ej.
+ * `https://ocr.app/?product=funerario`), agrega el token con `&` en vez de `?`
+ * para no romper la URL. Así el admin puede definir el identificador de producto
+ * (rcv | funerario) directamente en la URL del submódulo.
+ */
+export function buildAccessUrl(
+  submoduloUrl: string,
+  tenantToken: string,
+): string {
+  const base = normalizeSubmoduloAccessBase(submoduloUrl);
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}nexus_token=${tenantToken}`;
+}

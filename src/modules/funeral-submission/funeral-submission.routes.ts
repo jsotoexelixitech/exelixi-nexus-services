@@ -1,0 +1,339 @@
+/**
+ * Solicitudes funerario — revisión técnica (scoring).
+ *
+ * POST   /api/funeral-submissions              → crear (x-api-key, emision-api)
+ * GET    /api/funeral-submissions              → listar (revision-panel token)
+ * GET    /api/funeral-submissions/:id          → detalle
+ * POST   /api/funeral-submissions/:id/approve  → aprobar (fase 2: email + checkout)
+ * POST   /api/funeral-submissions/:id/reject   → rechazar
+ * POST   /api/funeral-submissions/record-emission → registrar póliza (id|sid|session, cualquier empresa)
+ * POST   /api/funeral-submissions/emission-by-sid → idem por SID
+ * POST   /api/funeral-submissions/:id/emission → registrar póliza emitida (x-api-key)
+ */
+import { Router, Request, Response } from 'express';
+import { apiKeyGuard } from '../../middlewares/apikey.middleware';
+import { revisionPanelGuard } from './revision-panel.guard';
+import { refreshRevisionToken } from './revision-token';
+import { FuneralSubmissionService } from './funeral-submission.service';
+
+const router = Router();
+const svc = new FuneralSubmissionService();
+
+function emissionFromBody(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    cnpoliza: String(body.cnpoliza ?? '').trim(),
+    cnrecibo: body.cnrecibo != null ? String(body.cnrecibo) : undefined,
+    urlpoliza: body.urlpoliza != null ? String(body.urlpoliza) : undefined,
+    url_ingreso_caja:
+      body.url_ingreso_caja != null ? String(body.url_ingreso_caja) : undefined,
+    url_conductor_habitual:
+      body.url_conductor_habitual != null
+        ? String(body.url_conductor_habitual)
+        : undefined,
+    url_club_arys:
+      body.url_club_arys != null ? String(body.url_club_arys) : undefined,
+    emittedAt:
+      typeof body.emittedAt === 'string'
+        ? body.emittedAt
+        : new Date().toISOString(),
+    quote:
+      body.quote && typeof body.quote === 'object' ? body.quote : undefined,
+  };
+}
+
+router.post('/', apiKeyGuard, async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const empresaId = Number(body.empresaId);
+  const sessionId = String(body.sessionId ?? '').trim();
+  const cplan = String(body.cplan ?? '').trim();
+
+  if (!empresaId || !sessionId || !cplan) {
+    res.status(400).json({
+      success: false,
+      message: 'Se requieren empresaId, sessionId y cplan.',
+    });
+    return;
+  }
+
+  try {
+    const created = await svc.create({
+      empresaId,
+      sessionId,
+      canal: body.canal,
+      tomadorRif: body.tomadorRif,
+      tomadorNombre: body.tomadorNombre,
+      tomadorEmail: body.tomadorEmail,
+      cplan,
+      planName: body.planName,
+      cramo: body.cramo != null ? Number(body.cramo) : undefined,
+      scoreTotal: Number(body.scoreTotal) || 0,
+      scoreBreakdown: Array.isArray(body.scoreBreakdown)
+        ? body.scoreBreakdown
+        : [],
+      healthAnswers:
+        body.healthAnswers && typeof body.healthAnswers === 'object'
+          ? body.healthAnswers
+          : {},
+      snapshot:
+        body.snapshot && typeof body.snapshot === 'object' ? body.snapshot : {},
+    });
+    res.status(201).json({ success: true, data: created });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Error al crear solicitud';
+    res.status(500).json({ success: false, message: msg });
+  }
+});
+
+router.post('/refresh-token', async (req: Request, res: Response) => {
+  const raw =
+    (typeof req.body?.token === 'string' && req.body.token.trim()) ||
+    (typeof req.headers['x-revision-token'] === 'string' &&
+      req.headers['x-revision-token'].trim()) ||
+    (typeof req.headers.authorization === 'string' &&
+      req.headers.authorization.replace(/^Bearer\s+/i, '').trim()) ||
+    '';
+  if (!raw) {
+    res
+      .status(400)
+      .json({ success: false, message: 'Falta token de revisión.' });
+    return;
+  }
+  try {
+    const signed = refreshRevisionToken(raw);
+    res.json({
+      success: true,
+      token: signed.token,
+      expiresIn: signed.expiresIn,
+    });
+  } catch (err: unknown) {
+    const msg =
+      err instanceof Error
+        ? err.message
+        : 'Token de revisión inválido o expirado.';
+    res.status(403).json({ success: false, message: msg });
+  }
+});
+
+router.get('/', revisionPanelGuard, async (req: Request, res: Response) => {
+  const empresaId = Number(req.query.empresaId ?? req.query.empresa);
+  if (!empresaId) {
+    res.status(400).json({
+      success: false,
+      message: 'Se requiere empresaId en query.',
+    });
+    return;
+  }
+
+  const estado =
+    typeof req.query.estado === 'string' ? req.query.estado.trim() : undefined;
+
+  try {
+    const data = await svc.listByEmpresa(empresaId, { estado });
+    res.json({ success: true, data, count: data.length });
+  } catch (err: unknown) {
+    const msg =
+      err instanceof Error ? err.message : 'Error al listar solicitudes';
+    res.status(500).json({ success: false, message: msg });
+  }
+});
+
+router.get('/:id', revisionPanelGuard, async (req: Request, res: Response) => {
+  const empresaId = req.query.empresaId
+    ? Number(req.query.empresaId)
+    : undefined;
+  try {
+    const data = await svc.getById(req.params.id, empresaId);
+    if (!data) {
+      res
+        .status(404)
+        .json({ success: false, message: 'Solicitud no encontrada.' });
+      return;
+    }
+    res.json({ success: true, data });
+  } catch (err: unknown) {
+    const msg =
+      err instanceof Error ? err.message : 'Error al obtener solicitud';
+    res.status(500).json({ success: false, message: msg });
+  }
+});
+
+router.post(
+  '/:id/approve',
+  revisionPanelGuard,
+  async (req: Request, res: Response) => {
+    const claims = (
+      req as Request & { revisionClaims?: { empresaId?: number } }
+    ).revisionClaims;
+    const reviewedBy =
+      typeof req.body?.reviewedBy === 'string'
+        ? req.body.reviewedBy.trim()
+        : 'tecnico';
+
+    try {
+      const data = await svc.approve(req.params.id, {
+        reviewedBy,
+        empresaId: claims?.empresaId,
+      });
+      if (!data) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada.' });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al aprobar';
+      res.status(400).json({ success: false, message: msg });
+    }
+  },
+);
+
+router.post(
+  '/record-emission',
+  apiKeyGuard,
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const cnpoliza = String(body.cnpoliza ?? '').trim();
+    const id = String(body.id ?? body.funeralSubmissionId ?? '').trim();
+    const paymentSid = String(body.paymentSid ?? body.sid ?? '').trim();
+    const sessionId = String(
+      body.sessionId ?? body.originSessionId ?? '',
+    ).trim();
+    if (!cnpoliza || (!id && !paymentSid && !sessionId)) {
+      res.status(400).json({
+        success: false,
+        message: 'Se requieren cnpoliza y al menos id, paymentSid o sessionId.',
+      });
+      return;
+    }
+    try {
+      const data = await svc.recordEmissionByRefs(
+        { id, paymentSid, sessionId },
+        emissionFromBody(body),
+      );
+      if (!data) {
+        res.status(404).json({
+          success: false,
+          message:
+            'Solicitud no encontrada (id / paymentSid / sessionId). No se filtra por empresa.',
+        });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Error al registrar emisión';
+      res.status(400).json({ success: false, message: msg });
+    }
+  },
+);
+
+router.post(
+  '/emission-by-sid',
+  apiKeyGuard,
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const paymentSid = String(body.paymentSid ?? body.sid ?? '').trim();
+    const sessionId = String(
+      body.sessionId ?? body.originSessionId ?? '',
+    ).trim();
+    const cnpoliza = String(body.cnpoliza ?? '').trim();
+    if ((!paymentSid && !sessionId) || !cnpoliza) {
+      res.status(400).json({
+        success: false,
+        message: 'Se requieren paymentSid o sessionId, y cnpoliza.',
+      });
+      return;
+    }
+    try {
+      const data = await svc.recordEmissionByRefs(
+        { paymentSid, sessionId },
+        emissionFromBody(body),
+      );
+      if (!data) {
+        res.status(404).json({
+          success: false,
+          message: 'Solicitud no encontrada para ese SID.',
+        });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Error al registrar emisión';
+      res.status(400).json({ success: false, message: msg });
+    }
+  },
+);
+
+router.post(
+  '/:id/emission',
+  apiKeyGuard,
+  async (req: Request, res: Response) => {
+    const body = req.body ?? {};
+    const cnpoliza = String(body.cnpoliza ?? '').trim();
+    if (!cnpoliza) {
+      res.status(400).json({
+        success: false,
+        message: 'Se requiere cnpoliza en el body.',
+      });
+      return;
+    }
+
+    try {
+      const data = await svc.recordEmission(
+        req.params.id,
+        emissionFromBody(body),
+      );
+      if (!data) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada.' });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Error al registrar emisión';
+      res.status(400).json({ success: false, message: msg });
+    }
+  },
+);
+
+router.post(
+  '/:id/reject',
+  revisionPanelGuard,
+  async (req: Request, res: Response) => {
+    const claims = (
+      req as Request & { revisionClaims?: { empresaId?: number } }
+    ).revisionClaims;
+    const reviewedBy =
+      typeof req.body?.reviewedBy === 'string'
+        ? req.body.reviewedBy.trim()
+        : 'tecnico';
+    const reason =
+      typeof req.body?.reason === 'string' ? req.body.reason : undefined;
+
+    try {
+      const data = await svc.reject(req.params.id, {
+        reviewedBy,
+        reason,
+        empresaId: claims?.empresaId,
+      });
+      if (!data) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada.' });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al rechazar';
+      res.status(400).json({ success: false, message: msg });
+    }
+  },
+);
+
+export default router;

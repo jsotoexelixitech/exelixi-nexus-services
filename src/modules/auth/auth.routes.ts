@@ -3,6 +3,25 @@ import { AuthController } from './auth.controller';
 import { authenticate } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import { loginSchema } from './auth.schema';
+import rateLimit from 'express-rate-limit';
+import logger from '../../utils/logger';
+
+/** Rate limiter para el endpoint SSO: 30 peticiones por minuto por IP */
+const ssoDelegateLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minuto
+  max: 30, // máximo 30 peticiones por ventana
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message:
+      'Demasiadas peticiones. Por favor espere un momento antes de reintentar.',
+  },
+  handler: (req, res, _next, options) => {
+    logger.warn(`[sso-delegate] rate limit excedido — IP: ${req.ip}`);
+    res.status(429).json(options.message);
+  },
+});
 
 const router = Router();
 const controller = new AuthController();
@@ -87,6 +106,132 @@ const controller = new AuthController();
  *                   message: "Su cuenta ha sido desactivada. Por favor, contacte con soporte técnico."
  */
 router.post('/login', validate(loginSchema), controller.login);
+
+/**
+ * @openapi
+ * /api/auth/sso-delegate:
+ *   post:
+ *     tags:
+ *       - Auth
+ *       - Integración externa
+ *     summary: Delegar sesión SSO (RCV, Pagos, OCR…)
+ *     description: |
+ *       **Integración segura server-to-server** para apps externas (QASys2000, Angular La Mundial).
+ *
+ *       1. Valida **`x-api-key`** → identifica la empresa tenant.
+ *       2. Sanitiza **`metadata`** (Zod; campos desconocidos descartados).
+ *       3. Genera JWT **`nexus_token`** (1 h) con `empresaId`, `submoduloId` y metadata.
+ *       4. Devuelve **`redirect_url`** para abrir en el navegador del usuario.
+ *
+ *       ### Flujo RCV
+ *       `target: "ocr"` (default) + metadata canal: **`cproductor`** (≥1, obligatorio), `cusuario`, `cramo`, canal alterno.
+ *
+ *       ### Pagos standalone
+ *       `target: "pagos"` + `metadata.checkout.totalVes` + `metadata.payload.notifyUrl`.
+ *
+ *       Guía: `docs/INTEGRACION-SSO-Y-PAGOS.md`
+ *
+ *       **Rate limit:** 30 peticiones/minuto por IP.
+ *     security:
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               target:
+ *                 type: string
+ *                 enum: [ocr, formulario, emision, pagos]
+ *                 default: ocr
+ *                 description: Primer submódulo al que entra el usuario
+ *               metadata:
+ *                 oneOf:
+ *                   - $ref: '#/components/schemas/SsoMetadataCanal'
+ *                   - $ref: '#/components/schemas/SsoMetadataPagos'
+ *               cproductor:
+ *                 type: string
+ *                 example: '80080'
+ *                 description: Alternativa legacy en raíz (strings vacíos se ignoran)
+ *               cusuario:
+ *                 type: string
+ *                 example: '7'
+ *               cramo:
+ *                 type: integer
+ *                 example: 18
+ *               ctipo:
+ *                 type: integer
+ *                 example: 1
+ *               ccanalalt_in:
+ *                 type: string
+ *                 example: '27'
+ *               cscanalalt_in:
+ *                 type: integer
+ *                 example: 0
+ *               cgestor_in:
+ *                 type: string
+ *               product:
+ *                 type: string
+ *                 enum: [rcv, funerario]
+ *                 description: funerario añade ?product=funerario a redirect_url
+ *           examples:
+ *             rcvQaSys2000:
+ *               summary: Entrada flujo RCV (QASys2000)
+ *               value:
+ *                 target: ocr
+ *                 cproductor: '80080'
+ *                 cusuario: '7'
+ *                 cramo: 18
+ *                 ccanalalt_in: '27'
+ *                 cscanalalt_in: 0
+ *             funerarioQaSys2000:
+ *               summary: Entrada flujo funerario (mismo canal/gestor que RCV)
+ *               value:
+ *                 target: ocr
+ *                 product: funerario
+ *                 cproductor: '80080'
+ *                 cusuario: '7'
+ *                 cramo: 9
+ *                 canal: web
+ *                 ccanalalt_in: '27'
+ *                 cgestor_in: GESTOR-01
+ *             pagosStandalone:
+ *               summary: Pagos solo cobro (webhook)
+ *               value:
+ *                 target: pagos
+ *                 metadata:
+ *                   checkout:
+ *                     title: Pago póliza RCV
+ *                     totalVes: 125000.5
+ *                   rules:
+ *                     methods: [mobile, otp]
+ *                   payload:
+ *                     notifyUrl: https://tu-app.com/api/pago-callback
+ *                     polizaId: POL-2026-001
+ *     responses:
+ *       200:
+ *         description: URL de redirección con nexus_token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SsoDelegateResponse'
+ *       400:
+ *         description: Falta x-api-key o metadata inválida
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: API Key inválida
+ *       403:
+ *         description: Empresa inactiva o submódulo no activado
+ *       404:
+ *         description: Submódulo destino no encontrado
+ *       429:
+ *         description: Rate limit excedido
+ */
+router.post('/sso-delegate', ssoDelegateLimiter, controller.ssoDelegate);
 
 /**
  * @openapi

@@ -23,6 +23,7 @@ export const updateCompanySchema = z.object({
       .optional(),
     tipo: z.string().optional(),
     activo: z.boolean().optional(),
+    feeTransaccion: z.coerce.number().min(0).max(100).optional(),
   }),
 });
 

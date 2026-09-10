@@ -29,7 +29,13 @@ const logger = winston.createLogger({
   ],
 });
 
-if (process.env.NODE_ENV !== 'production') {
+// Consola activa en desarrollo, o forzada con LOG_CONSOLE=true (útil en
+// servidores prod-like donde se quiere ver logs en stdout/pm2 sin relajar
+// el resto del comportamiento de producción).
+const enableConsole =
+  process.env.NODE_ENV !== 'production' || process.env.LOG_CONSOLE === 'true';
+
+if (enableConsole) {
   logger.add(
     new winston.transports.Console({
       format: winston.format.combine(

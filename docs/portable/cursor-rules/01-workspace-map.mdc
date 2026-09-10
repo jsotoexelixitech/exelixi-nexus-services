@@ -1,0 +1,27 @@
+---
+description: Mapa estático de proyectos + índices de navegación disponibles
+alwaysApply: true
+---
+
+# Workspace Map — all-projects
+Ruta base: `c:\Users\javier.soto\Desktop\all-projects\`
+
+## Índices disponibles (usar antes de leer archivos)
+| Índice | Archivo/Herramienta | Qué provee |
+|--------|---------------------|-----------|
+| **ctags** | `tags` (raíz) | 52,000+ símbolos: funciones, clases, endpoints con ruta+línea |
+| **code-rag** | MCP `code_search()` | Búsqueda semántica en 219 archivos / 736 fragmentos |
+
+## Proyectos
+| Proyecto | Stack | Carpetas clave | Agentes |
+|----------|-------|----------------|---------|
+| `auto-casa-inspeccion` | React + NestJS (backend/) | `src/` `backend/` | front · back · db · orchestrator |
+| `backend-api-sys` | Express + Sequelize | `src/` `nest-api/` | front · back · db |
+| `BDLaMundialSeguros` | SQL puro | `schemas/` `utils/` | db |
+| `exelixi-api` | React (frontend/) + Express (backend/) | `frontend/` `backend/` | front · back · db |
+| `exelixi-modulos` | Node multi-módulo | `modulo-emision/` `modulo-formulario/` `modulo-ocr/` `modulo-pagos/` | front · back · db |
+| `exelixi-nexus` | React 18 + Vite + TypeScript + Tailwind | `src/` | front · back · db |
+| `exelixi-nexus-services` | Express + Prisma + PostgreSQL | `src/` `prisma/` | front · back · db |
+| `SysIP-backend` | Express + Sequelize | `src/` | back · db |
+
+**Agentes en:** `<proyecto>/.antigravity/<tipo>_agent.md`

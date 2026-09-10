@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import { CompanyService } from './company.service';
 import { getErrorMessage } from '../../utils/error-handler';
 import { AppError } from '../../utils/app-error';
@@ -110,6 +111,51 @@ export class CompanyController {
       });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async generateApiKey(req: Request, res: Response) {
+    try {
+      const empresaId = Number(req.params.id);
+      if (isNaN(empresaId)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'ID de empresa inválido' });
+      }
+
+      // Generar llave de 64 caracteres (32 bytes hex)
+      const newApiKey = crypto.randomBytes(32).toString('hex');
+
+      const company = await companyService.updateCompany(empresaId, {
+        apiKey: newApiKey,
+      } as any);
+
+      res.json({
+        success: true,
+        message: 'API Key generada exitosamente',
+        apiKey: newApiKey,
+        data: company,
+      });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  /**
+   * GET /api/companies/:id/connection-tokens
+   * Devuelve los tokens de conexión de todos los submódulos de una empresa.
+   * Solo accesible desde el admin (requiere authenticate via router).
+   */
+  async getConnectionTokens(req: Request, res: Response) {
+    try {
+      const empresaId = Number(req.params.id);
+      const data = await companyService.getConnectionTokens(empresaId);
+      res.json({ success: true, data });
+    } catch (error: unknown) {
+      const statusCode = error instanceof AppError ? error.statusCode : 500;
+      res
+        .status(statusCode)
+        .json({ success: false, message: getErrorMessage(error) });
     }
   }
 }

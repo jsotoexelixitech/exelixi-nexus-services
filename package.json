@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc && tsc-alias",
+    "build": "prisma generate && tsc && tsc-alias",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -16,7 +16,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "prepare": "husky"
+    "prepare": "husky",
+    "register-modulo": "tsx scripts/register-modulo.ts"
   },
   "lint-staged": {
     "*.{js,ts}": [
