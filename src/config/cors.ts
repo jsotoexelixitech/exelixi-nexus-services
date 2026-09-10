@@ -107,6 +107,8 @@ export const CORS_ALLOWED_HEADERS: string[] = [
   'X-Requested-With',
   'Accept',
   'Origin',
+  'Cache-Control',
+  'Pragma',
 ];
 
 export const CORS_ALLOWED_METHODS: string[] = [
