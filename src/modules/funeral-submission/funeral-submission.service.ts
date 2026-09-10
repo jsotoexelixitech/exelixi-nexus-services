@@ -3,6 +3,7 @@ import prisma from '../../config/prisma';
 import { startCheckoutLink, inferModuloGroupId } from '../flow/flow.service';
 import { buildFuneralCheckoutPatch } from './funeral-checkout-patch';
 import { sendFuneralPaymentLinkEmail } from './funeral-approval-mail';
+import { sendFuneralReviewAlertEmail } from './funeral-review-mail';
 
 export type FuneralSubmissionStatus =
   | 'pending'
@@ -25,6 +26,10 @@ export interface CreateFuneralSubmissionInput {
   scoreBreakdown: unknown[];
   healthAnswers: Record<string, unknown>;
   snapshot: Record<string, unknown>;
+  verdict?: string;
+  reviewerEmails?: string[];
+  notifyReviewers?: boolean;
+  autoApprove?: boolean;
 }
 
 const PAYMENT_LINK_TTL_HOURS = Number(
@@ -111,7 +116,34 @@ export class FuneralSubmissionService {
         snapshotJson: input.snapshot as Prisma.InputJsonValue,
       },
     });
-    return formatRow(row);
+    const formatted = formatRow(row);
+
+    if (input.notifyReviewers && Array.isArray(input.reviewerEmails)) {
+      for (const to of input.reviewerEmails) {
+        if (!to) continue;
+        await sendFuneralReviewAlertEmail({
+          to,
+          tomadorNombre: input.tomadorNombre,
+          planName: input.planName,
+          scoreTotal: String(input.scoreTotal ?? ''),
+        });
+      }
+    }
+
+    if (input.autoApprove && input.verdict === 'emit') {
+      try {
+        const approved = await this.approve(row.id, {
+          reviewedBy: 'auto-score',
+          empresaId: input.empresaId,
+        });
+        if (approved) return approved;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[funeral-submission] autoApprove omitido: ${msg}`);
+      }
+    }
+
+    return formatted;
   }
 
   async listByEmpresa(

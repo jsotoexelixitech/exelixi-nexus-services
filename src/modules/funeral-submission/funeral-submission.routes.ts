@@ -78,6 +78,14 @@ router.post('/', apiKeyGuard, async (req: Request, res: Response) => {
           : {},
       snapshot:
         body.snapshot && typeof body.snapshot === 'object' ? body.snapshot : {},
+      verdict: typeof body.verdict === 'string' ? body.verdict : undefined,
+      reviewerEmails: Array.isArray(body.reviewerEmails)
+        ? body.reviewerEmails
+            .map((e: unknown) => String(e).trim())
+            .filter(Boolean)
+        : [],
+      notifyReviewers: body.notifyReviewers === true,
+      autoApprove: body.autoApprove === true,
     });
     res.status(201).json({ success: true, data: created });
   } catch (err: unknown) {
