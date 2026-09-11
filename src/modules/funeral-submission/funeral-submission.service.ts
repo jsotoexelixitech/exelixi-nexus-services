@@ -36,6 +36,17 @@ const PAYMENT_LINK_TTL_HOURS = Number(
   process.env.FUNERAL_PAYMENT_LINK_TTL_HOURS || 72,
 );
 
+function asSnapshot(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
+}
+
+function clipReviewedBy(value?: string): string {
+  const t = String(value || '').trim();
+  return (t || 'tecnico').slice(0, 128);
+}
+
 function formatRow(row: {
   id: string;
   empresaId: number;
@@ -118,16 +129,45 @@ export class FuneralSubmissionService {
     });
     const formatted = formatRow(row);
 
-    if (input.notifyReviewers && Array.isArray(input.reviewerEmails)) {
-      for (const to of input.reviewerEmails) {
-        if (!to) continue;
-        await sendFuneralReviewAlertEmail({
+    if (input.notifyReviewers) {
+      const emails = [
+        ...new Set(
+          (Array.isArray(input.reviewerEmails) ? input.reviewerEmails : [])
+            .map((e) =>
+              String(e || '')
+                .trim()
+                .toLowerCase(),
+            )
+            .filter((e) => e.includes('@')),
+        ),
+      ];
+      const results: Array<{ to: string; sent: boolean; error?: string }> = [];
+      for (const to of emails) {
+        const mail = await sendFuneralReviewAlertEmail({
           to,
           tomadorNombre: input.tomadorNombre,
           planName: input.planName,
           scoreTotal: String(input.scoreTotal ?? ''),
         });
+        results.push({ to, sent: mail.sent, error: mail.error });
       }
+      const withAlerts = {
+        ...asSnapshot(formatted.snapshot),
+        reviewAlerts: {
+          emails,
+          notifiedAt: new Date().toISOString(),
+          results,
+          warning:
+            emails.length === 0
+              ? 'Lista de correos vacía: no se envió alerta.'
+              : undefined,
+        },
+      };
+      const updated = await prisma.funeralSubmission.update({
+        where: { id: row.id },
+        data: { snapshotJson: withAlerts as Prisma.InputJsonValue },
+      });
+      return formatRow(updated);
     }
 
     if (input.autoApprove && input.verdict === 'emit') {
@@ -184,10 +224,7 @@ export class FuneralSubmissionService {
       );
     }
 
-    const snapshot =
-      existing.snapshot && typeof existing.snapshot === 'object'
-        ? (existing.snapshot as Record<string, unknown>)
-        : {};
+    const snapshot = asSnapshot(existing.snapshot);
 
     const moduloGroupId = await inferModuloGroupId(existing.empresaId);
     if (!moduloGroupId) {
@@ -225,16 +262,29 @@ export class FuneralSubmissionService {
       expiresAt,
     });
 
+    const reviewedBy = clipReviewedBy(opts.reviewedBy);
+    const reviewedAt = new Date();
     const row = await prisma.funeralSubmission.update({
       where: { id },
       data: {
         estado: 'approved',
-        reviewedBy: opts.reviewedBy ?? 'tecnico',
-        reviewedAt: new Date(),
+        reviewedBy,
+        reviewedAt,
         rejectReason: null,
         paymentUrl: linkResult.checkoutUrl,
         paymentSid: linkResult.sid,
         paymentExpiresAt: expiresAt,
+        snapshotJson: {
+          ...snapshot,
+          reviewDecision: {
+            action: 'approved',
+            reviewedBy,
+            reviewedAt: reviewedAt.toISOString(),
+            paymentEmailTo: existing.tomadorEmail,
+            paymentEmailSent: mail.sent,
+            paymentEmailError: mail.error,
+          },
+        } as Prisma.InputJsonValue,
       },
     });
 
@@ -255,13 +305,25 @@ export class FuneralSubmissionService {
       throw new Error(`La solicitud ya está en estado "${existing.estado}".`);
     }
 
+    const reviewedBy = clipReviewedBy(opts.reviewedBy);
+    const reviewedAt = new Date();
+    const rejectReason = opts.reason?.trim() || 'Rechazada por el técnico.';
     const row = await prisma.funeralSubmission.update({
       where: { id },
       data: {
         estado: 'rejected',
-        reviewedBy: opts.reviewedBy ?? 'tecnico',
-        reviewedAt: new Date(),
-        rejectReason: opts.reason?.trim() || 'Rechazada por el técnico.',
+        reviewedBy,
+        reviewedAt,
+        rejectReason,
+        snapshotJson: {
+          ...asSnapshot(existing.snapshot),
+          reviewDecision: {
+            action: 'rejected',
+            reviewedBy,
+            reviewedAt: reviewedAt.toISOString(),
+            reason: rejectReason,
+          },
+        } as Prisma.InputJsonValue,
       },
     });
     return formatRow(row);

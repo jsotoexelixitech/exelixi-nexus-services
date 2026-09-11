@@ -117,6 +117,23 @@ export async function saveConfig(
 
   const merged: Record<string, unknown> = { ...existing, ...incoming };
 
+  if (
+    incoming.healthScoringRules &&
+    typeof incoming.healthScoringRules === 'object' &&
+    !Array.isArray(incoming.healthScoringRules)
+  ) {
+    const prevRules =
+      existing.healthScoringRules &&
+      typeof existing.healthScoringRules === 'object' &&
+      !Array.isArray(existing.healthScoringRules)
+        ? (existing.healthScoringRules as Record<string, unknown>)
+        : {};
+    merged.healthScoringRules = {
+      ...prevRules,
+      ...(incoming.healthScoringRules as Record<string, unknown>),
+    };
+  }
+
   // Funerario: el array enviado por canal es la fuente de verdad (incluye bajas).
   // No reinyectar healthQuestions viejo del spread del front ({...config, ...patch}).
   if (producto === 'funerario' && modulo === 'emision') {

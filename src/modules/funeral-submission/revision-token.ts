@@ -19,6 +19,8 @@ export type RevisionTokenClaims = {
   canal?: string;
   cproductor?: string;
   cusuario?: string;
+  reviewerEmail?: string;
+  reviewerNombre?: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -91,6 +93,14 @@ export function refreshRevisionToken(current: string): {
       typeof payload.cproductor === 'string' ? payload.cproductor : undefined,
     cusuario:
       typeof payload.cusuario === 'string' ? payload.cusuario : undefined,
+    reviewerEmail:
+      typeof payload.reviewerEmail === 'string'
+        ? payload.reviewerEmail
+        : undefined,
+    reviewerNombre:
+      typeof payload.reviewerNombre === 'string'
+        ? payload.reviewerNombre
+        : undefined,
     metadata:
       payload.metadata && typeof payload.metadata === 'object'
         ? (payload.metadata as Record<string, unknown>)

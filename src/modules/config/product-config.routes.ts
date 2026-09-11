@@ -11,16 +11,50 @@
  */
 
 import { Router, Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import { getConfig, saveConfig, resetConfig } from './product-config.service';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import { configWriteGuard } from './config-write.guard';
 import type { Producto, Modulo } from './product-config.defaults';
 import prisma from '../../config/prisma';
+import { env } from '../../config/env';
+import { decrypt } from '../../utils/crypto';
 import { signRevisionToken } from '../funeral-submission/revision-token';
 import {
   refreshConfigPanelToken,
   signConfigPanelToken,
 } from './config-panel-token';
+
+function reviewerFromAuthHeader(req: Request): {
+  reviewerEmail?: string;
+  reviewerNombre?: string;
+} {
+  const auth = req.headers.authorization;
+  if (!auth || typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
+    return {};
+  }
+  const raw = auth.slice(7).trim();
+  if (!raw) return {};
+  try {
+    const jwtStr = raw.includes(':') ? decrypt(raw) : raw;
+    const decoded = jwt.verify(jwtStr, env.JWT_SECRET) as {
+      email?: string;
+      nombre?: string;
+    };
+    const email =
+      typeof decoded.email === 'string'
+        ? decoded.email.trim().toLowerCase()
+        : '';
+    const nombre =
+      typeof decoded.nombre === 'string' ? decoded.nombre.trim() : '';
+    return {
+      ...(email.includes('@') ? { reviewerEmail: email } : {}),
+      ...(nombre ? { reviewerNombre: nombre } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
 
 const router = Router();
 
@@ -133,6 +167,10 @@ router.get(
     const panelMode = pick('panel');
     const isRevision = panelMode === 'revision';
     const isPreguntas = panelMode === 'preguntas';
+    const fromQueryEmail = pick('reviewerEmail');
+    const fromAuth = reviewerFromAuthHeader(req);
+    const reviewerEmail = fromQueryEmail || fromAuth.reviewerEmail;
+    const reviewerNombre = pick('reviewerNombre') || fromAuth.reviewerNombre;
 
     const claims = {
       empresaId: eid,
@@ -143,6 +181,8 @@ router.get(
       canal,
       ...(metadata.cproductor ? { cproductor: metadata.cproductor } : {}),
       ...(metadata.cusuario ? { cusuario: metadata.cusuario } : {}),
+      ...(reviewerEmail ? { reviewerEmail } : {}),
+      ...(reviewerNombre ? { reviewerNombre } : {}),
       metadata,
     };
 
@@ -222,13 +262,33 @@ router.put(
     const { empresaId, producto, modulo } = req.params;
     if (!validateParams(res, producto, modulo)) return;
 
-    const configJson = req.body;
+    const writer = (req as Request & { configWriter?: string }).configWriter;
+    let configJson = req.body as Record<string, unknown>;
     if (!configJson || typeof configJson !== 'object') {
       res.status(400).json({
         success: false,
         message: 'El body debe ser un objeto JSON con la configuración.',
       });
       return;
+    }
+
+    if (writer === 'revision-panel') {
+      const rules =
+        configJson.healthScoringRules &&
+        typeof configJson.healthScoringRules === 'object' &&
+        !Array.isArray(configJson.healthScoringRules)
+          ? (configJson.healthScoringRules as Record<string, unknown>)
+          : {};
+      const emails = Array.isArray(rules.reviewerEmails)
+        ? rules.reviewerEmails
+            .map((e) =>
+              String(e || '')
+                .trim()
+                .toLowerCase(),
+            )
+            .filter((e) => e.includes('@'))
+        : [];
+      configJson = { healthScoringRules: { reviewerEmails: emails } };
     }
 
     const saved = await saveConfig(
@@ -249,6 +309,14 @@ router.post(
   '/:empresaId/:producto/:modulo/reset',
   configWriteGuard,
   async (req: Request, res: Response) => {
+    const writer = (req as Request & { configWriter?: string }).configWriter;
+    if (writer === 'revision-panel') {
+      res.status(403).json({
+        success: false,
+        message: 'La mesa técnica no puede restaurar la configuración.',
+      });
+      return;
+    }
     const { empresaId, producto, modulo } = req.params;
     if (!validateParams(res, producto, modulo)) return;
 

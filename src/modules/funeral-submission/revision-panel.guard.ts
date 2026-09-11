@@ -11,6 +11,10 @@ type RevisionClaims = {
   empresaId?: number;
   producto?: string;
   scope?: string;
+  reviewerEmail?: string;
+  reviewerNombre?: string;
+  cusuario?: string;
+  empresaNombre?: string;
 };
 
 function extractToken(req: Request): string | null {

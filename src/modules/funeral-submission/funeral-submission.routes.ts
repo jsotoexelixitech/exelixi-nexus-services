@@ -16,6 +16,30 @@ import { revisionPanelGuard } from './revision-panel.guard';
 import { refreshRevisionToken } from './revision-token';
 import { FuneralSubmissionService } from './funeral-submission.service';
 
+type RevisionActorClaims = {
+  empresaId?: number;
+  reviewerEmail?: string;
+  reviewerNombre?: string;
+  cusuario?: string;
+  empresaNombre?: string;
+};
+
+function reviewedByFromRequest(req: Request, fallback = 'tecnico'): string {
+  const claims = (req as Request & { revisionClaims?: RevisionActorClaims })
+    .revisionClaims;
+  const body =
+    typeof req.body?.reviewedBy === 'string' ? req.body.reviewedBy.trim() : '';
+  const fromClaims = [
+    claims?.reviewerEmail,
+    claims?.reviewerNombre,
+    claims?.cusuario,
+    claims?.empresaNombre,
+  ]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .find(Boolean);
+  return (fromClaims || body || fallback).slice(0, 128);
+}
+
 const router = Router();
 const svc = new FuneralSubmissionService();
 
@@ -171,13 +195,9 @@ router.post(
   '/:id/approve',
   revisionPanelGuard,
   async (req: Request, res: Response) => {
-    const claims = (
-      req as Request & { revisionClaims?: { empresaId?: number } }
-    ).revisionClaims;
-    const reviewedBy =
-      typeof req.body?.reviewedBy === 'string'
-        ? req.body.reviewedBy.trim()
-        : 'tecnico';
+    const claims = (req as Request & { revisionClaims?: RevisionActorClaims })
+      .revisionClaims;
+    const reviewedBy = reviewedByFromRequest(req);
 
     try {
       const data = await svc.approve(req.params.id, {
@@ -314,13 +334,9 @@ router.post(
   '/:id/reject',
   revisionPanelGuard,
   async (req: Request, res: Response) => {
-    const claims = (
-      req as Request & { revisionClaims?: { empresaId?: number } }
-    ).revisionClaims;
-    const reviewedBy =
-      typeof req.body?.reviewedBy === 'string'
-        ? req.body.reviewedBy.trim()
-        : 'tecnico';
+    const claims = (req as Request & { revisionClaims?: RevisionActorClaims })
+      .revisionClaims;
+    const reviewedBy = reviewedByFromRequest(req);
     const reason =
       typeof req.body?.reason === 'string' ? req.body.reason : undefined;
 
