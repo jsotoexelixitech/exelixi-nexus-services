@@ -65,20 +65,34 @@ const ssoPayerSchema = z
   })
   .optional();
 
+const ssoActorCode = z.union([z.string(), z.number()]);
+
 /** Schema de metadata permitida en el token SSO.
- *  Campos desconocidos se eliminan con strip(). */
+ *  Campos desconocidos se eliminan con strip() — no quitar actor Sis2000. */
 const ssoMetadataSchema = z
   .object({
-    cproductor: z.union([z.string(), z.number()]).optional(),
+    cproductor: ssoActorCode.optional(),
     canal: z.string().max(50).optional(),
     /** Tipo de canal emisión RCV (mismo metadata que metadataCanal). */
-    ctipocanal: z.union([z.string(), z.number()]).optional(),
-    cramo: z.number().int().positive().optional(),
-    cusuario: z.union([z.string(), z.number()]).optional(),
-    ctipo: z.number().int().nonnegative().optional(),
-    ccanalalt_in: z.union([z.string(), z.number()]).optional(),
-    cscanalalt_in: z.union([z.string(), z.number()]).optional(),
+    ctipocanal: ssoActorCode.optional(),
+    cramo: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : Number(v)),
+      z.number().int().positive().optional(),
+    ),
+    cusuario: ssoActorCode.optional(),
+    ctipo: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : Number(v)),
+      z.number().int().nonnegative().optional(),
+    ),
+    ccanalalt_in: ssoActorCode.optional(),
+    cscanalalt_in: ssoActorCode.optional(),
+    ccanalalt: ssoActorCode.optional(),
+    cscanalalt: ssoActorCode.optional(),
     cgestor_in: z.string().max(120).optional(),
+    cgestor: z.string().max(80).optional(),
+    centidad: z.string().max(4).optional(),
+    citem: ssoActorCode.optional(),
+    cproducto: ssoActorCode.optional(),
     /** rcv (default) | funerario — misma cadena SSO, distinta entrada OCR. */
     product: z.enum(['rcv', 'funerario']).optional(),
     /** Checkout Pagos — mismo patrón que canal en emisión, vía sso-delegate. */
@@ -100,7 +114,13 @@ const SSO_ROOT_METADATA_KEYS = [
   'ctipocanal',
   'ccanalalt_in',
   'cscanalalt_in',
+  'ccanalalt',
+  'cscanalalt',
   'cgestor_in',
+  'cgestor',
+  'centidad',
+  'citem',
+  'cproducto',
   'product',
 ] as const;
 
