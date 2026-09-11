@@ -186,16 +186,17 @@ router.post('/login', validate(loginSchema), controller.login);
  *                 ccanalalt_in: '27'
  *                 cscanalalt_in: 0
  *             funerarioQaSys2000:
- *               summary: Entrada flujo funerario (mismo canal/gestor que RCV)
+ *               summary: Funerario marketplace (C / 27 / producto 250)
  *               value:
  *                 target: ocr
  *                 product: funerario
  *                 cproductor: '80080'
  *                 cusuario: '7'
  *                 cramo: 9
- *                 canal: web
+ *                 centidad: C
+ *                 citem: '27'
  *                 ccanalalt_in: '27'
- *                 cgestor_in: GESTOR-01
+ *                 cproducto: '250'
  *             pagosStandalone:
  *               summary: Pagos solo cobro (webhook)
  *               value:

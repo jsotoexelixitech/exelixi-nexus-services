@@ -112,12 +112,15 @@ Mismos campos de canal/gestor que RCV. Enviar **`product: "funerario"`** para qu
   "cproductor": "80080",
   "cusuario": "7",
   "cramo": 9,
-  "canal": "web",
+  "centidad": "C",
+  "citem": "27",
   "ccanalalt_in": "27",
-  "cscanalalt_in": 0,
-  "cgestor_in": "GESTOR-01"
+  "cproducto": "250"
 }
 ```
+
+Eso es el marketplace QA (`emission-iframe?cramo=9&citem=27&centidad=C&cproducto=250`).  
+**`canal: "web"` no es el canal Sis2000** — es solo el medio (web/iframe). El número de canal es `citem` / `ccanalalt_in` (**27**).
 
 `redirect_url` ejemplo: `…/ocr/?nexus_token=…&product=funerario`
 
