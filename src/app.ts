@@ -78,7 +78,7 @@ app.use(
 );
 app.use(compression());
 app.use(cookieParser());
-app.use(express.json({ limit: '10kb' }));
+app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
 // Rate Limiting

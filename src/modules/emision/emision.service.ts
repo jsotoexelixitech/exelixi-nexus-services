@@ -26,6 +26,17 @@ export class EmisionService {
       `[EmisionService] Registrando emisión empresa=${dto.empresaId} producto=${dto.producto} poliza=${dto.polizaNumero}`,
     );
 
+    const yaRegistrada = await prisma.emision.findFirst({
+      where: { empresaId: dto.empresaId, polizaNumero: dto.polizaNumero },
+      include: { empresa: { select: { id: true, nombre: true } } },
+    });
+    if (yaRegistrada) {
+      logger.info(
+        `[EmisionService] Emisión ya existía id=${yaRegistrada.id} poliza=${dto.polizaNumero}`,
+      );
+      return yaRegistrada;
+    }
+
     // Buscar o crear una cotización base para enlazar la emisión
     // Si el módulo no envía cotizacionId, creamos una cotización "huella" con el JSON completo
     const cotizacion = await prisma.cotizacion.create({
@@ -84,7 +95,9 @@ export class EmisionService {
       where,
       orderBy: { createdAt: 'desc' },
       include: {
-        empresa: { select: { id: true, nombre: true, rif: true, feeTransaccion: true } },
+        empresa: {
+          select: { id: true, nombre: true, rif: true, feeTransaccion: true },
+        },
       },
     });
 
@@ -109,7 +122,9 @@ export class EmisionService {
           empresaId: eId,
           empresaNombre: e.empresa.nombre,
           empresaRif: e.empresa.rif,
-          feeTransaccion: e.empresa.feeTransaccion ? Number(e.empresa.feeTransaccion) : 0,
+          feeTransaccion: e.empresa.feeTransaccion
+            ? Number(e.empresa.feeTransaccion)
+            : 0,
           total: 0,
           porProducto: {},
           polizas: [],

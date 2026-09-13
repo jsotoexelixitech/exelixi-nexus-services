@@ -884,6 +884,9 @@ export async function advanceSession(
     logger.info(
       `[flow] advance sid=${sid} from=${fromOrder} → next=${nextSlot.order} (${nextSlot.nombre})`,
     );
+    syncSessionToDb(sid).catch((e) =>
+      logger.error(`Error sync DB: ${e.message}`),
+    );
     const nextUrl = await buildFreshSlotUrl(s.empresaId, nextSlot, s.data, sid);
     return {
       finished: false,
@@ -963,8 +966,11 @@ async function syncSessionToDb(sid: string) {
   const empresaId = s.empresaId;
   const data = s.data as Record<string, any>;
 
+  const policyNumber = String(
+    data.policy?.number || data.policy?.cnpoliza || '',
+  ).trim();
   let estado = 'borrador';
-  if (data.policy?.number) estado = 'emitida';
+  if (policyNumber) estado = 'emitida';
   else if (data.paymentVerified) estado = 'pagada';
   else if (data.ocrDone) estado = 'documentos_validados';
 
@@ -1033,20 +1039,28 @@ async function syncSessionToDb(sid: string) {
   }
 
   // 4. Extraer y guardar Emisión
-  if (data.policy?.number) {
+  if (policyNumber) {
     const existEmision = await prisma.emision.findFirst({
-      where: { cotizacionId },
+      where: {
+        OR: [{ cotizacionId }, { empresaId, polizaNumero: policyNumber }],
+      },
     });
     if (!existEmision) {
       const pago = await prisma.pago.findFirst({ where: { cotizacionId } });
+      const producto = typeof data.product === 'string' ? data.product : 'rcv';
       await prisma.emision.create({
         data: {
           empresaId,
           cotizacionId,
           pagoId: pago?.id,
-          polizaNumero: data.policy.number,
+          polizaNumero: policyNumber,
           estado: 'emitida',
-          jsonData: data.policy,
+          jsonData: {
+            producto,
+            ...(data.policy && typeof data.policy === 'object'
+              ? data.policy
+              : {}),
+          },
         },
       });
     }
