@@ -2,6 +2,7 @@
  * Envía correo de link de pago funerario vía nest-api (SMTP).
  */
 import logger from '../../utils/logger';
+import { nestMailAccepted } from './nest-mail-result';
 
 function nestBaseUrl(): string {
   return (process.env.NEST_API_URL || 'http://127.0.0.1:3002').replace(
@@ -44,15 +45,11 @@ export async function sendFuneralPaymentLinkEmail(params: {
       }),
       signal: AbortSignal.timeout(20000),
     });
-    const body = (await res.json().catch(() => ({}))) as {
-      sent?: boolean;
-      error?: string;
-      message?: string;
-    };
-    if (!res.ok || !body.sent) {
-      const err = body.error || body.message || `HTTP ${res.status}`;
-      logger.warn(`[funeral-mail] fallo envío a ${params.to}: ${err}`);
-      return { sent: false, error: err };
+    const body = await res.json().catch(() => ({}));
+    const parsed = nestMailAccepted(res, body);
+    if (!parsed.sent) {
+      logger.warn(`[funeral-mail] fallo envío a ${params.to}: ${parsed.error}`);
+      return parsed;
     }
     logger.info(`[funeral-mail] link pago enviado a ${params.to}`);
     return { sent: true };
