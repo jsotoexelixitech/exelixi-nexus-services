@@ -1,14 +1,14 @@
 /**
- * JWT de la vista técnica funerario. 7 días + gracia 7 días
- * (cubre fin de semana y PC suspendida; el front sigue renovando con el tab abierto).
+ * JWT de la vista técnica funerario.
+ * Vigencia larga (365 d). Si la firma es válida, se acepta aunque `exp` ya pasó
+ * para que refresh-token y el listado no corten la mesa técnica.
  */
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
+import { decrypt } from '../../utils/crypto';
 
-export const REVISION_TOKEN_TTL = '7d';
-export const REVISION_TOKEN_EXPIRES_SEC = 7 * 24 * 60 * 60;
-/** Acepta vencido para renovar / listar si el enlace se reabre en la semana. */
-const EXPIRED_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+export const REVISION_TOKEN_TTL = '365d';
+export const REVISION_TOKEN_EXPIRES_SEC = 365 * 24 * 60 * 60;
 
 export type RevisionTokenClaims = {
   empresaId: number;
@@ -28,31 +28,51 @@ function isPanelScope(scope: string): boolean {
   return scope === 'revision-panel' || scope === 'config-panel';
 }
 
+/** Quita Bearer, espacios y desencripta el JWT de login Nexus si vino cifrado. */
+export function normalizePanelToken(raw: string): string {
+  let t = String(raw || '')
+    .replace(/^Bearer\s+/i, '')
+    .replace(/\s+/g, '')
+    .trim();
+  if (!t) return '';
+  try {
+    if (/%[0-9A-Fa-f]{2}/.test(t) && t.split('.').length < 3) {
+      t = decodeURIComponent(t);
+    }
+  } catch {
+    /* ignore */
+  }
+  if (t.includes(':') && t.split('.').length < 3) {
+    try {
+      t = decrypt(t);
+    } catch {
+      /* token plano inválido: lo verifica jwt.verify */
+    }
+  }
+  return t;
+}
+
 /**
  * Verifica JWT de vista técnica / parametrizador.
- * Acepta vencido si está dentro de la gracia (pestaña abierta).
+ * Firma válida ⇒ se acepta aunque esté vencido (la mesa no debe caerse).
  */
 export function verifyPanelToken(current: string): jwt.JwtPayload {
+  const token = normalizePanelToken(current);
+  if (!token) {
+    throw new Error('Token de revisión inválido o expirado.');
+  }
+  const opts: jwt.VerifyOptions = { clockTolerance: 86400 };
   try {
-    return jwt.verify(current, env.JWT_SECRET) as jwt.JwtPayload;
+    return jwt.verify(token, env.JWT_SECRET, opts) as jwt.JwtPayload;
   } catch (err) {
-    const expired =
-      err instanceof jwt.TokenExpiredError ||
-      (err instanceof Error && err.name === 'TokenExpiredError');
-    if (!expired) {
-      throw new Error('Token de revisión inválido.', { cause: err });
+    try {
+      return jwt.verify(token, env.JWT_SECRET, {
+        ...opts,
+        ignoreExpiration: true,
+      }) as jwt.JwtPayload;
+    } catch {
+      throw new Error('Token de revisión inválido o expirado.', { cause: err });
     }
-    const payload = jwt.verify(current, env.JWT_SECRET, {
-      ignoreExpiration: true,
-    }) as jwt.JwtPayload;
-    const expMs = Number(payload.exp ?? 0) * 1000;
-    if (!expMs || Date.now() - expMs > EXPIRED_GRACE_MS) {
-      throw new Error(
-        'Token de revisión expirado. Genera un enlace nuevo desde Nexus.',
-        { cause: err },
-      );
-    }
-    return payload;
   }
 }
 

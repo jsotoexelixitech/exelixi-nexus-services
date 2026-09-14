@@ -1,18 +1,17 @@
 /**
- * JWT del parametrizador (?token= en /config). 7 días + gracia 7 días.
- * panel=preguntas → 365 días (URL de larga duración para solo cuestionario).
+ * JWT del parametrizador (?token= en /config).
+ * panel=preguntas → 365 días. Refresh acepta vencido si la firma es válida.
  * Scope distinto de revision-panel: no se intercambian.
  */
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
+import { verifyPanelToken } from '../funeral-submission/revision-token';
 
 export const CONFIG_TOKEN_TTL = '7d';
 export const CONFIG_TOKEN_EXPIRES_SEC = 7 * 24 * 60 * 60;
-const EXPIRED_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const CONFIG_PREGUNTAS_TOKEN_TTL = '365d';
 export const CONFIG_PREGUNTAS_TOKEN_EXPIRES_SEC = 365 * 24 * 60 * 60;
-const PREGUNTAS_EXPIRED_GRACE_MS = 90 * 24 * 60 * 60 * 1000;
 
 export type ConfigPanelTokenClaims = {
   empresaId: number;
@@ -59,31 +58,7 @@ export function refreshConfigPanelToken(current: string): {
   token: string;
   expiresIn: number;
 } {
-  let payload: jwt.JwtPayload;
-  try {
-    payload = jwt.verify(current, env.JWT_SECRET) as jwt.JwtPayload;
-  } catch (err) {
-    const expired =
-      err instanceof jwt.TokenExpiredError ||
-      (err instanceof Error && err.name === 'TokenExpiredError');
-    if (!expired) {
-      throw new Error('Token del parametrizador inválido.', { cause: err });
-    }
-    payload = jwt.verify(current, env.JWT_SECRET, {
-      ignoreExpiration: true,
-    }) as jwt.JwtPayload;
-    const longLived = payload.longLived === true;
-    const graceMs = longLived ? PREGUNTAS_EXPIRED_GRACE_MS : EXPIRED_GRACE_MS;
-    const expMs = Number(payload.exp ?? 0) * 1000;
-    if (!expMs || Date.now() - expMs > graceMs) {
-      throw new Error(
-        longLived
-          ? 'Token del parametrizador (preguntas) expirado. Genera una nueva URL desde Nexus.'
-          : 'Token del parametrizador expirado. Abre de nuevo la URL desde Nexus.',
-        { cause: err },
-      );
-    }
-  }
+  const payload = verifyPanelToken(current);
 
   if (String(payload.scope ?? '') !== 'config-panel') {
     throw new Error('Token inválido: no es del parametrizador.');

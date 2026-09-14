@@ -104,6 +104,8 @@ export const CORS_ALLOWED_HEADERS: string[] = [
   'Content-Type',
   'Authorization',
   'x-api-key',
+  'x-revision-token',
+  'x-config-token',
   'X-Requested-With',
   'Accept',
   'Origin',
