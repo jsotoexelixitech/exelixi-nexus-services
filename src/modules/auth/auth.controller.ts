@@ -93,8 +93,8 @@ const ssoMetadataSchema = z
     centidad: z.string().max(4).optional(),
     citem: ssoActorCode.optional(),
     cproducto: ssoActorCode.optional(),
-    /** rcv (default) | funerario — misma cadena SSO, distinta entrada OCR. */
-    product: z.enum(['rcv', 'funerario']).optional(),
+    /** rcv (default) | funerario | patrimoniales — misma cadena SSO, distinta entrada OCR. */
+    product: z.enum(['rcv', 'funerario', 'patrimoniales']).optional(),
     /** Checkout Pagos — mismo patrón que canal en emisión, vía sso-delegate. */
     checkout: ssoCheckoutSchema.optional(),
     rules: ssoCheckoutRulesSchema,
@@ -185,20 +185,49 @@ function isFuneralSubHint(
   return blob.includes('funerar') || blob.includes('product=funerario');
 }
 
+function isPatrimonialSubHint(
+  url?: string | null,
+  nombre?: string | null,
+  moduloNombre?: string | null,
+) {
+  const blob =
+    `${url ?? ''} ${nombre ?? ''} ${moduloNombre ?? ''}`.toLowerCase();
+  return blob.includes('patrimonial') || blob.includes('product=patrimoniales');
+}
+
+function ssoSubHintScore(
+  product: 'rcv' | 'funerario' | 'patrimoniales',
+  url?: string | null,
+  nombre?: string | null,
+  moduloNombre?: string | null,
+) {
+  const fun = isFuneralSubHint(url, nombre, moduloNombre);
+  const pat = isPatrimonialSubHint(url, nombre, moduloNombre);
+  if (product === 'funerario') return fun ? 2 : pat ? -1 : 0;
+  if (product === 'patrimoniales') return pat ? 2 : fun ? -1 : 0;
+  return fun || pat ? 0 : 1;
+}
+
 /**
  * Resuelve el submódulo SSO por puerto/host/nombre.
  * Si hay empresa: solo entre los que ella tiene activos.
- * Si product=funerario: prioriza OCR/form/emisión del módulo funerario (no el de RCV).
+ * Si product=funerario/patrimoniales: prioriza esa cadena (no la de RCV).
  */
 async function findSubmoduloForSsoTarget(
   target: string,
-  opts?: { empresaId?: number; product?: 'rcv' | 'funerario' },
+  opts?: {
+    empresaId?: number;
+    product?: 'rcv' | 'funerario' | 'patrimoniales';
+  },
 ) {
   const key = target in SSO_TARGET_PORT ? target : 'ocr';
   const puerto = SSO_TARGET_PORT[key];
   const nameHint = SSO_TARGET_NAME[key] ?? SSO_TARGET_NAME.ocr;
   const hostHint = SSO_TARGET_HOST[key];
-  const product = opts?.product === 'funerario' ? 'funerario' : 'rcv';
+  const product =
+    opts?.product === 'funerario' || opts?.product === 'patrimoniales'
+      ? opts.product
+      : 'rcv';
 
   const orFilters = [
     { url: { contains: puerto } },
@@ -243,10 +272,8 @@ async function findSubmoduloForSsoTarget(
   }
 
   const ranked = [...pool].sort((a, b) => {
-    const aFun = isFuneralSubHint(a.url, a.nombre, a.modulo?.nombre);
-    const bFun = isFuneralSubHint(b.url, b.nombre, b.modulo?.nombre);
-    const aScore = product === 'funerario' ? (aFun ? 1 : 0) : aFun ? 0 : 1;
-    const bScore = product === 'funerario' ? (bFun ? 1 : 0) : bFun ? 0 : 1;
+    const aScore = ssoSubHintScore(product, a.url, a.nombre, a.modulo?.nombre);
+    const bScore = ssoSubHintScore(product, b.url, b.nombre, b.modulo?.nombre);
     return bScore - aScore;
   });
 
@@ -404,7 +431,7 @@ export class AuthController {
         submoduloNombre: submodulo.nombre,
       });
       const tokenMetadata =
-        product === 'funerario' && metadata.product !== 'funerario'
+        product !== 'rcv' && metadata.product !== product
           ? { ...metadata, product }
           : metadata;
       const dynamicToken = generateSsoToken(

@@ -1,11 +1,16 @@
-export type FlowProduct = 'rcv' | 'funerario';
+export type FlowProduct = 'rcv' | 'funerario' | 'patrimoniales';
 
-const LM_PRODUCTS = new Set<string>(['rcv', 'funerario']);
+const LM_PRODUCTS = new Set<string>(['rcv', 'funerario', 'patrimoniales']);
+
+function isFlowProduct(value: string): value is FlowProduct {
+  return value === 'rcv' || value === 'funerario' || value === 'patrimoniales';
+}
 
 /**
  * Infiere el producto del flujo desde URL del submódulo o nombres (módulo/submódulo).
  * Funerario solo si `?product=funerario` o el nombre contiene "funerar".
- * Nunca infiere funerario desde una URL RCV (mismo path `/ocr/` sin query).
+ * Patrimoniales si `?product=patrimoniales` o el nombre contiene "patrimonial".
+ * Nunca infiere funerario/patrimoniales desde una URL RCV (mismo path `/ocr/` sin query).
  */
 /** Prioridad: metadata SSO `product` → URL/nombre del submódulo. */
 export function resolveSsoFlowProduct(
@@ -20,7 +25,7 @@ export function resolveSsoFlowProduct(
     metadata && typeof metadata === 'object'
       ? String(metadata.product ?? '').trim()
       : '';
-  if (raw === 'funerario' || raw === 'rcv') return raw;
+  if (isFlowProduct(raw)) return raw;
   return resolveFlowProduct(hints ?? {});
 }
 
@@ -35,7 +40,7 @@ export function resolveFlowProduct(hints: {
         hints.submoduloUrl,
         'https://cierrelmds.exelixitech.com',
       ).searchParams.get('product');
-      if (fromUrl === 'funerario' || fromUrl === 'rcv') return fromUrl;
+      if (fromUrl && isFlowProduct(fromUrl)) return fromUrl;
     } catch {
       /* ignore */
     }
@@ -43,6 +48,7 @@ export function resolveFlowProduct(hints: {
   const label =
     `${hints.submoduloNombre ?? ''} ${hints.moduloNombre ?? ''}`.toLowerCase();
   if (label.includes('funerar')) return 'funerario';
+  if (label.includes('patrimonial')) return 'patrimoniales';
   return 'rcv';
 }
 
@@ -71,46 +77,53 @@ export function flowChainKey(
 function isLaMundialProduct(
   product?: FlowProduct | string | null,
 ): product is FlowProduct {
-  return product === 'rcv' || product === 'funerario';
+  return isFlowProduct(String(product ?? ''));
+}
+
+function stripLmProductQuery(url: string): string {
+  return url
+    .replace(
+      /([?&])product=(funerario|patrimoniales)(&)?/g,
+      (_m, q, _p, amp) => (amp ? String(q) : ''),
+    )
+    .replace(/[?&]$/, '');
 }
 
 /**
- * Funerario: fuerza `?product=funerario` (pisa un `rcv` erróneo).
- * RCV: no añade query; si la URL trae `funerario`, lo quita.
+ * Funerario / patrimoniales: fuerza `?product=` (pisa un `rcv` erróneo).
+ * RCV: no añade query; si la URL trae funerario o patrimoniales, lo quita.
  */
 export function appendProductToUrl(url: string, product: FlowProduct): string {
   if (!url) return url;
   try {
     const u = new URL(url);
     const current = u.searchParams.get('product');
-    if (product === 'funerario') {
-      if (current === 'funerario') return url;
-      u.searchParams.set('product', 'funerario');
+    if (product === 'funerario' || product === 'patrimoniales') {
+      if (current === product) return url;
+      u.searchParams.set('product', product);
       return u.toString();
     }
-    if (current === 'funerario') {
+    if (current === 'funerario' || current === 'patrimoniales') {
       u.searchParams.delete('product');
       return u.toString();
     }
     return url;
   } catch {
-    if (product === 'funerario') {
-      if (url.includes('product=funerario')) return url;
-      const stripped = url
+    if (product === 'funerario' || product === 'patrimoniales') {
+      if (url.includes(`product=${product}`)) return url;
+      const stripped = stripLmProductQuery(url)
         .replace(/([?&])product=[^&]*/g, '$1')
         .replace(/[?&]$/, '');
       const sep = stripped.includes('?') ? '&' : '?';
-      return `${stripped}${sep}product=funerario`;
+      return `${stripped}${sep}product=${product}`;
     }
-    return url.replace(/([?&])product=funerario(&)?/g, (_, q, amp) =>
-      amp ? String(q) : '',
-    );
+    return stripLmProductQuery(url);
   }
 }
 
 /**
  * Propaga `?flow=exelixi-catalog` solo en el flujo catálogo.
- * Nunca en RCV ni funerario La Mundial (aunque el flag venga sucio en sesión).
+ * Nunca en RCV, funerario ni patrimoniales La Mundial.
  */
 export function appendExelixiFlowToUrl(
   url: string,
@@ -129,7 +142,7 @@ export function appendExelixiFlowToUrl(
     return u.toString();
   } catch {
     if (url.includes('flow=exelixi-catalog')) return url;
-    if (/[?&]product=(rcv|funerario)(&|$)/.test(url)) return url;
+    if (/[?&]product=(rcv|funerario|patrimoniales)(&|$)/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
     return `${url}${sep}flow=exelixi-catalog`;
   }

@@ -24,6 +24,15 @@ describe('flowChainKey — rcv y funerario no son la misma entrada OCR', () => {
     expect(flowChainKey(origin, 'OCR Funerario')).toContain('#funerario');
     expect(flowChainKey(origin, 'OCR Documentos')).toContain('#rcv');
   });
+
+  it('distingue product=patrimoniales de RCV y funerario', () => {
+    expect(flowChainKey(`${origin}?product=patrimoniales`)).not.toBe(
+      flowChainKey(`${origin}?product=rcv`),
+    );
+    expect(flowChainKey(`${origin}?product=patrimoniales`)).not.toBe(
+      flowChainKey(`${origin}?product=funerario`),
+    );
+  });
 });
 
 describe('appendProductToUrl', () => {
@@ -42,6 +51,16 @@ describe('appendProductToUrl', () => {
     expect(
       appendProductToUrl(`${form}&product=funerario`, 'rcv'),
     ).not.toContain('funerario');
+  });
+
+  it('patrimoniales pisa un product=rcv erróneo', () => {
+    const mixed = `${form}&product=rcv`;
+    expect(appendProductToUrl(mixed, 'patrimoniales')).toContain(
+      'product=patrimoniales',
+    );
+    expect(appendProductToUrl(mixed, 'patrimoniales')).not.toContain(
+      'product=rcv',
+    );
   });
 });
 
@@ -86,5 +105,11 @@ describe('resolveSsoFlowProduct', () => {
     expect(
       resolveSsoFlowProduct({}, { ...ocr, submoduloNombre: 'OCR Funerario' }),
     ).toBe('funerario');
+  });
+
+  it('metadata.product=patrimoniales gana sobre URL RCV', () => {
+    expect(resolveSsoFlowProduct({ product: 'patrimoniales' }, ocr)).toBe(
+      'patrimoniales',
+    );
   });
 });

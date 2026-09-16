@@ -333,7 +333,7 @@ function mergeFlowSessionData(
   }
   // Typo histórico OCR (`exelixiCatalog`) — no es el flag de catálogo.
   delete merged.exelixiCatalog;
-  if (merged.product === 'funerario') {
+  if (merged.product === 'funerario' || merged.product === 'patrimoniales') {
     merged.exelixiCatalogFlow = false;
   }
   return merged;
@@ -395,13 +395,14 @@ async function buildFreshSlotUrl(
     base,
     metadata,
   );
-  const product: FlowProduct =
-    sessionData.product === 'funerario' ? 'funerario' : 'rcv';
+  const product: FlowProduct = resolveSsoFlowProduct({
+    product: sessionData.product,
+  });
   const catalogFlow = Boolean(sessionData.exelixiCatalogFlow);
   return appendExelixiFlowToUrl(
     appendProductToUrl(`${withToken}&sid=${sid}`, product),
     catalogFlow,
-    product === 'funerario' ? 'funerario' : undefined,
+    product === 'rcv' ? undefined : product,
   );
 }
 
