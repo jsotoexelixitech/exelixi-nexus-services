@@ -39,7 +39,7 @@ type EmpresaSubmoduloDelegate = {
   }): Promise<EmpresaSubmoduloRow>;
   update(args: {
     where: { id: number };
-    data: { activo: boolean };
+    data: { activo?: boolean; tenantToken?: string };
   }): Promise<EmpresaSubmoduloRow>;
 };
 
@@ -163,7 +163,7 @@ export class CompanyService {
                   }>
                 ).map(async (sm) => {
                   let esm = bySubmoduloId.get(sm.id);
-                  if (!esm && sm.url) {
+                  if (sm.url && (!esm || !esm.tenantToken)) {
                     const ensured = await this.ensureEmpresaSubmoduloToken(
                       id,
                       sm.id,
@@ -468,9 +468,18 @@ export class CompanyService {
     const existing = await esCm.findFirst({
       where: { empresaId, submoduloId },
     });
-    if (existing) return existing;
+    if (existing?.tenantToken) return existing;
 
     const tenantToken = generateTenantToken(empresaId, submoduloId);
+    if (existing) {
+      logger.info(
+        `Token rellenado empresa=${empresaId} submodulo=${submoduloId}`,
+      );
+      return esCm.update({
+        where: { id: existing.id },
+        data: { tenantToken },
+      });
+    }
     logger.info(
       `Token provisionado empresa=${empresaId} submodulo=${submoduloId}`,
     );
