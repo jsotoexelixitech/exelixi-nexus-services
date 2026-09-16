@@ -108,6 +108,52 @@ function formatRow(row: {
 }
 
 export class FuneralSubmissionService {
+  /** Correos a mesa técnica; si la lista está vacía deja aviso en el snapshot. */
+  private async notifyReviewers(
+    id: string,
+    snapshot: Record<string, unknown>,
+    input: CreateFuneralSubmissionInput,
+  ) {
+    const emails = [
+      ...new Set(
+        (Array.isArray(input.reviewerEmails) ? input.reviewerEmails : [])
+          .map((e) =>
+            String(e || '')
+              .trim()
+              .toLowerCase(),
+          )
+          .filter((e) => e.includes('@')),
+      ),
+    ];
+    const results: Array<{ to: string; sent: boolean; error?: string }> = [];
+    for (const to of emails) {
+      const mail = await sendFuneralReviewAlertEmail({
+        to,
+        tomadorNombre: input.tomadorNombre,
+        planName: input.planName,
+        scoreTotal: String(input.scoreTotal ?? ''),
+      });
+      results.push({ to, sent: mail.sent, error: mail.error });
+    }
+    const withAlerts = {
+      ...asSnapshot(snapshot),
+      reviewAlerts: {
+        emails,
+        notifiedAt: new Date().toISOString(),
+        results,
+        warning:
+          emails.length === 0
+            ? 'Lista de correos vacía: no se envió alerta.'
+            : undefined,
+      },
+    };
+    const updated = await prisma.funeralSubmission.update({
+      where: { id },
+      data: { snapshotJson: withAlerts as Prisma.InputJsonValue },
+    });
+    return formatRow(updated);
+  }
+
   async create(input: CreateFuneralSubmissionInput) {
     const row = await prisma.funeralSubmission.create({
       data: {
@@ -130,44 +176,7 @@ export class FuneralSubmissionService {
     const formatted = formatRow(row);
 
     if (input.notifyReviewers) {
-      const emails = [
-        ...new Set(
-          (Array.isArray(input.reviewerEmails) ? input.reviewerEmails : [])
-            .map((e) =>
-              String(e || '')
-                .trim()
-                .toLowerCase(),
-            )
-            .filter((e) => e.includes('@')),
-        ),
-      ];
-      const results: Array<{ to: string; sent: boolean; error?: string }> = [];
-      for (const to of emails) {
-        const mail = await sendFuneralReviewAlertEmail({
-          to,
-          tomadorNombre: input.tomadorNombre,
-          planName: input.planName,
-          scoreTotal: String(input.scoreTotal ?? ''),
-        });
-        results.push({ to, sent: mail.sent, error: mail.error });
-      }
-      const withAlerts = {
-        ...asSnapshot(formatted.snapshot),
-        reviewAlerts: {
-          emails,
-          notifiedAt: new Date().toISOString(),
-          results,
-          warning:
-            emails.length === 0
-              ? 'Lista de correos vacía: no se envió alerta.'
-              : undefined,
-        },
-      };
-      const updated = await prisma.funeralSubmission.update({
-        where: { id: row.id },
-        data: { snapshotJson: withAlerts as Prisma.InputJsonValue },
-      });
-      return formatRow(updated);
+      return this.notifyReviewers(row.id, formatted.snapshot, input);
     }
 
     if (input.autoApprove && input.verdict === 'emit') {
@@ -179,8 +188,11 @@ export class FuneralSubmissionService {
         if (approved) return approved;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[funeral-submission] autoApprove omitido: ${msg}`);
+        console.warn(
+          `[funeral-submission] autoApprove omitido, pasa a mesa: ${msg}`,
+        );
       }
+      return this.notifyReviewers(row.id, formatted.snapshot, input);
     }
 
     return formatted;
