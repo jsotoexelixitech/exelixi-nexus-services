@@ -125,16 +125,17 @@ export class FuneralSubmissionService {
           .filter((e) => e.includes('@')),
       ),
     ];
-    const results: Array<{ to: string; sent: boolean; error?: string }> = [];
-    for (const to of emails) {
-      const mail = await sendFuneralReviewAlertEmail({
-        to,
-        tomadorNombre: input.tomadorNombre,
-        planName: input.planName,
-        scoreTotal: String(input.scoreTotal ?? ''),
-      });
-      results.push({ to, sent: mail.sent, error: mail.error });
-    }
+    const results = await Promise.all(
+      emails.map(async (to) => {
+        const mail = await sendFuneralReviewAlertEmail({
+          to,
+          tomadorNombre: input.tomadorNombre,
+          planName: input.planName,
+          scoreTotal: String(input.scoreTotal ?? ''),
+        });
+        return { to, sent: mail.sent, error: mail.error };
+      }),
+    );
     const withAlerts = {
       ...asSnapshot(snapshot),
       reviewAlerts: {
