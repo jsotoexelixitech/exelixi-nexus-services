@@ -295,7 +295,7 @@ model Emision {
 model ProductConfig {
   id         Int      @id @default(autoincrement()) @map("product_config_id")
   empresaId  Int      @map("product_config_empresa_id")
-  producto   String   @map("product_config_producto") @db.VarChar  // "rcv" | "funerario"
+  producto   String   @map("product_config_producto") @db.VarChar  // "rcv" | "funerario" | "patrimoniales"
   modulo     String   @map("product_config_modulo") @db.VarChar    // "ocr" | "formulario" | "pagos"
   configJson Json     @map("product_config_json") @db.JsonB
   createdAt  DateTime @default(now()) @map("product_config_created_at") @db.Timestamp(6)

@@ -8,7 +8,7 @@
 
 import { FUNERAL_HEALTH_QUESTIONS_DEFAULT } from './funeral-health-questions.default';
 
-export type Producto = 'rcv' | 'funerario';
+export type Producto = 'rcv' | 'funerario' | 'patrimoniales';
 export type Modulo = 'ocr' | 'formulario' | 'pagos' | 'emision';
 
 const RCV_DOCS_DDS = [
@@ -227,6 +227,38 @@ const EMISION_DEFAULT_FUNERARIO = {
   ],
 };
 
+const FORMULARIO_DEFAULT_PATRIMONIALES = {
+  campos: {
+    nombre: { activo: true, obligatorio: true, label: 'Nombre' },
+    apellido: { activo: true, obligatorio: true, label: 'Apellido' },
+    identificacion: {
+      activo: true,
+      obligatorio: true,
+      label: 'Cédula / Pasaporte',
+    },
+    sexo: { activo: true, obligatorio: true, label: 'Sexo' },
+    estadoCivil: { activo: true, obligatorio: true, label: 'Estado Civil' },
+    telefono: { activo: true, obligatorio: true, label: 'Teléfono' },
+    email: { activo: true, obligatorio: true, label: 'Correo electrónico' },
+    email2: { activo: true, obligatorio: true, label: 'Confirmar correo' },
+    fechaNac: { activo: true, obligatorio: true, label: 'Fecha de Nacimiento' },
+    estado: { activo: true, obligatorio: true, label: 'Estado' },
+    ciudad: { activo: true, obligatorio: true, label: 'Ciudad' },
+    direccion: { activo: true, obligatorio: true, label: 'Dirección' },
+  },
+  secciones: {
+    bien: { activo: true, label: 'Bien asegurado' },
+  },
+};
+
+const EMISION_DEFAULT_PATRIMONIALES = {
+  permitirEstimado: true,
+  apiMap: [
+    { internalKey: 'plan_code', externalKey: 'plan', transform: 'none' },
+    { internalKey: 'frecuencia', externalKey: 'frecuencia', transform: 'none' },
+  ],
+};
+
 // ─── Mapa de defaults ─────────────────────────────────────────────────────────
 
 export const DEFAULT_CONFIGS: Record<Producto, Record<Modulo, object>> = {
@@ -241,5 +273,11 @@ export const DEFAULT_CONFIGS: Record<Producto, Record<Modulo, object>> = {
     formulario: FORMULARIO_DEFAULT_FUNERARIO,
     pagos: PAGOS_DEFAULT_FUNERARIO,
     emision: EMISION_DEFAULT_FUNERARIO,
+  },
+  patrimoniales: {
+    ocr: OCR_DEFAULT_FUNERARIO,
+    formulario: FORMULARIO_DEFAULT_PATRIMONIALES,
+    pagos: PAGOS_DEFAULT_FUNERARIO,
+    emision: EMISION_DEFAULT_PATRIMONIALES,
   },
 };

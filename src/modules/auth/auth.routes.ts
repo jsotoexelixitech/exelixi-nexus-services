@@ -173,8 +173,8 @@ router.post('/login', validate(loginSchema), controller.login);
  *                 type: string
  *               product:
  *                 type: string
- *                 enum: [rcv, funerario]
- *                 description: funerario añade ?product=funerario a redirect_url
+ *                 enum: [rcv, funerario, patrimoniales]
+ *                 description: rcv | funerario | patrimoniales; añade ?product= al redirect
  *           examples:
  *             rcvQaSys2000:
  *               summary: Entrada flujo RCV (QASys2000)

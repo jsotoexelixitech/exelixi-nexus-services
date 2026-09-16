@@ -89,7 +89,7 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
   }
 });
 
-const VALID_PRODUCTOS: Producto[] = ['rcv', 'funerario'];
+const VALID_PRODUCTOS: Producto[] = ['rcv', 'funerario', 'patrimoniales'];
 const VALID_MODULOS: Modulo[] = ['ocr', 'formulario', 'pagos', 'emision'];
 
 function validateParams(
@@ -100,7 +100,7 @@ function validateParams(
   if (!VALID_PRODUCTOS.includes(producto as Producto)) {
     res.status(400).json({
       success: false,
-      message: `Producto inválido: ${producto}. Válidos: rcv, funerario`,
+      message: `Producto inválido: ${producto}. Válidos: rcv, funerario, patrimoniales`,
     });
     return false;
   }
