@@ -4,6 +4,7 @@ import { startCheckoutLink, inferModuloGroupId } from '../flow/flow.service';
 import { buildFuneralCheckoutPatch } from './funeral-checkout-patch';
 import { sendFuneralPaymentLinkEmail } from './funeral-approval-mail';
 import { sendFuneralReviewAlertEmail } from './funeral-review-mail';
+import { sendFuneralRejectedEmail } from './funeral-rejected-mail';
 
 export type FuneralSubmissionStatus =
   | 'pending'
@@ -321,6 +322,18 @@ export class FuneralSubmissionService {
     const reviewedBy = clipReviewedBy(opts.reviewedBy);
     const reviewedAt = new Date();
     const rejectReason = opts.reason?.trim() || 'Rechazada por el técnico.';
+
+    let clientMail: { sent: boolean; error?: string } | undefined;
+    const to = existing.tomadorEmail?.trim();
+    if (to) {
+      clientMail = await sendFuneralRejectedEmail({
+        to,
+        tomadorNombre: existing.tomadorNombre ?? undefined,
+        planName: existing.planName ?? undefined,
+        reason: rejectReason,
+      });
+    }
+
     const row = await prisma.funeralSubmission.update({
       where: { id },
       data: {
@@ -335,11 +348,18 @@ export class FuneralSubmissionService {
             reviewedBy,
             reviewedAt: reviewedAt.toISOString(),
             reason: rejectReason,
+            clientEmailTo: to || undefined,
+            clientEmailSent: clientMail?.sent ?? false,
+            clientEmailError: clientMail?.error,
           },
         } as Prisma.InputJsonValue,
       },
     });
-    return formatRow(row);
+    return {
+      ...formatRow(row),
+      emailSent: clientMail?.sent ?? false,
+      emailError: clientMail?.error,
+    };
   }
 
   /**
