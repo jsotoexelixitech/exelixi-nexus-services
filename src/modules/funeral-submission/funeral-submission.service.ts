@@ -111,7 +111,7 @@ export class FuneralSubmissionService {
   /** Correos a mesa técnica; si la lista está vacía deja aviso en el snapshot. */
   private async notifyReviewers(
     id: string,
-    snapshot: Record<string, unknown>,
+    snapshot: unknown,
     input: CreateFuneralSubmissionInput,
   ) {
     const emails = [
