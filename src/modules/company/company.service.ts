@@ -3,6 +3,10 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
 import { generateTenantToken, buildAccessUrl } from '../../utils/tenant-token';
 import { filterModulosForAdminCatalog } from '../../utils/submodulo-environment';
+import {
+  appendProductToUrl,
+  resolveFlowProduct,
+} from '../../utils/flow-product';
 
 type TxClient = Omit<
   typeof prisma,
@@ -172,7 +176,14 @@ export class CompanyService {
                   const tenantToken = esm?.tenantToken ?? null;
                   const accessUrl =
                     tenantToken && sm.url
-                      ? buildAccessUrl(sm.url, tenantToken)
+                      ? appendProductToUrl(
+                          buildAccessUrl(sm.url, tenantToken),
+                          resolveFlowProduct({
+                            submoduloUrl: sm.url,
+                            submoduloNombre: sm.nombre,
+                            moduloNombre: m.nombre,
+                          }),
+                        )
                       : null;
                   return {
                     ...sm,
