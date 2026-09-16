@@ -180,8 +180,8 @@ export class CompanyService {
                           buildAccessUrl(sm.url, tenantToken),
                           resolveFlowProduct({
                             submoduloUrl: sm.url,
-                            submoduloNombre: sm.nombre,
-                            moduloNombre: m.nombre,
+                            submoduloNombre: String(sm.nombre ?? ''),
+                            moduloNombre: String(m.nombre ?? ''),
                           }),
                         )
                       : null;
