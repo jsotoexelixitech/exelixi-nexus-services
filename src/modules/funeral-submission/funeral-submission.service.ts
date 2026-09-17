@@ -48,6 +48,51 @@ function clipReviewedBy(value?: string): string {
   return (t || 'tecnico').slice(0, 128);
 }
 
+function emailFromPerson(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const e = (value as Record<string, unknown>).email;
+  return typeof e === 'string' ? e.trim() : '';
+}
+
+function resolveTomadorEmail(
+  column: string | null | undefined,
+  snapshot: unknown,
+): string {
+  const fromCol = String(column || '').trim();
+  if (fromCol.includes('@')) return fromCol;
+  return emailFromPerson(asSnapshot(snapshot).tomador);
+}
+
+function mailFlagsFromSnapshot(snapshot: unknown): {
+  emailSent?: boolean;
+  emailError?: string;
+} {
+  const decision = asSnapshot(snapshot).reviewDecision;
+  if (!decision || typeof decision !== 'object' || Array.isArray(decision)) {
+    return {};
+  }
+  const d = decision as Record<string, unknown>;
+  if (d.action === 'rejected') {
+    return {
+      emailSent: d.clientEmailSent === true,
+      emailError:
+        typeof d.clientEmailError === 'string' && d.clientEmailError.trim()
+          ? d.clientEmailError
+          : undefined,
+    };
+  }
+  if (d.action === 'approved') {
+    return {
+      emailSent: d.paymentEmailSent === true,
+      emailError:
+        typeof d.paymentEmailError === 'string' && d.paymentEmailError.trim()
+          ? d.paymentEmailError
+          : undefined,
+    };
+  }
+  return {};
+}
+
 function formatRow(row: {
   id: string;
   empresaId: number;
@@ -105,6 +150,7 @@ function formatRow(row: {
     emittedAt: row.emittedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    ...mailFlagsFromSnapshot(row.snapshotJson),
   };
 }
 
@@ -323,15 +369,23 @@ export class FuneralSubmissionService {
     const reviewedAt = new Date();
     const rejectReason = opts.reason?.trim() || 'Rechazada por el técnico.';
 
-    let clientMail: { sent: boolean; error?: string } | undefined;
-    const to = existing.tomadorEmail?.trim();
-    if (to) {
+    const to = resolveTomadorEmail(existing.tomadorEmail, existing.snapshot);
+    let clientMail: { sent: boolean; error?: string };
+    if (!to) {
+      clientMail = { sent: false, error: 'Sin correo del tomador' };
+      console.warn(`[funeral-submission] reject ${id}: sin tomadorEmail`);
+    } else {
       clientMail = await sendFuneralRejectedEmail({
         to,
         tomadorNombre: existing.tomadorNombre ?? undefined,
         planName: existing.planName ?? undefined,
         reason: rejectReason,
       });
+      if (!clientMail.sent) {
+        console.warn(
+          `[funeral-submission] reject ${id} mail a ${to}: ${clientMail.error}`,
+        );
+      }
     }
 
     const row = await prisma.funeralSubmission.update({
