@@ -18,6 +18,7 @@ const STATIC_ALLOWED_ORIGINS: string[] = [
   'http://192.168.8.120:5182', // Formulario
   'http://192.168.8.120:5183', // Emisión
   'http://192.168.8.120:5184', // Pagos
+  'http://192.168.8.120:5190', // Portal La Mundial
   'http://192.168.8.120:5200', // Nexus Admin
   'http://192.168.8.120:3092', // Nexus API (self)
 
