@@ -7,6 +7,7 @@ import {
   updateCompanySchema,
   toggleModuleSchema,
   toggleSubmoduleSchema,
+  empresaPortalConfigSchema,
 } from './company.schema';
 
 const router = Router();
@@ -375,5 +376,12 @@ router.post('/:id/generate-api-key', controller.generateApiKey);
  *         description: Lista de tokens de conexión
  */
 router.get('/:id/connection-tokens', controller.getConnectionTokens);
+
+router.get('/:id/portal-config', controller.getPortalConfig);
+router.put(
+  '/:id/portal-config',
+  validate(empresaPortalConfigSchema),
+  controller.putPortalConfig,
+);
 
 export default router;

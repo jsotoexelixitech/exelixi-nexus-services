@@ -7,6 +7,8 @@ import {
   appendProductToUrl,
   resolveFlowProduct,
 } from '../../utils/flow-product';
+import { upsertEmpresaPortalConfig } from '../portal/portal-channel.service';
+import type { EmpresaPortalConfigInput } from '../portal/portal-perfil.schema';
 
 type TxClient = Omit<
   typeof prisma,
@@ -113,6 +115,7 @@ export class CompanyService {
   async getCompanyById(id: number) {
     const company = await prisma.empresa.findUnique({
       where: { id },
+      include: { portalConfig: true },
     });
 
     if (!company) {
@@ -519,5 +522,22 @@ export class CompanyService {
     await Promise.all(
       subs.map((s) => this.ensureEmpresaSubmoduloToken(empresaId, s.id)),
     );
+  }
+
+  async getPortalConfig(empresaId: number) {
+    const company = await prisma.empresa.findUnique({
+      where: { id: empresaId },
+      include: { portalConfig: true },
+    });
+    if (!company) throw new AppError('Empresa no encontrada.', 404);
+    return company.portalConfig;
+  }
+
+  async savePortalConfig(empresaId: number, input: EmpresaPortalConfigInput) {
+    const company = await prisma.empresa.findUnique({
+      where: { id: empresaId },
+    });
+    if (!company) throw new AppError('Empresa no encontrada.', 404);
+    return upsertEmpresaPortalConfig(empresaId, input);
   }
 }

@@ -3,6 +3,8 @@ import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
+import { upsertUsuarioPortalPerfil } from '../portal/portal-channel.service';
+import type { PortalPerfilInput } from '../portal/portal-perfil.schema';
 
 export class UserService {
   private generateTemporaryPassword(length: number = 10) {
@@ -26,6 +28,7 @@ export class UserService {
       email: string;
       password?: string;
       roleId: number;
+      portalPerfil?: PortalPerfilInput;
     },
   ) {
     try {
@@ -52,14 +55,19 @@ export class UserService {
       const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
       // 3. Crear usuario
+      const { portalPerfil, ...userFields } = data;
       const user = await prisma.usuario.create({
         data: {
-          ...data,
+          ...userFields,
           password: hashedPassword,
           empresaId: eid,
           activo: true,
         },
       });
+
+      if (portalPerfil) {
+        await upsertUsuarioPortalPerfil(user.id, portalPerfil);
+      }
 
       const generated = !data.password;
       return { user, temporaryPassword: generated ? plainPassword : null };
@@ -93,6 +101,7 @@ export class UserService {
       password?: string;
       roleId?: number;
       activo?: boolean;
+      portalPerfil?: PortalPerfilInput;
     },
   ) {
     try {
@@ -100,14 +109,21 @@ export class UserService {
       const eid = Number(empresaId);
       logger.info(`Actualizando usuario ${uid}`);
 
-      if (data.password) {
-        data.password = await bcrypt.hash(data.password, 10);
+      const { portalPerfil, ...userFields } = data;
+      if (userFields.password) {
+        userFields.password = await bcrypt.hash(userFields.password, 10);
       }
 
-      return await prisma.usuario.update({
+      const user = await prisma.usuario.update({
         where: { id: uid, empresaId: eid },
-        data,
+        data: userFields,
       });
+
+      if (portalPerfil !== undefined) {
+        await upsertUsuarioPortalPerfil(uid, portalPerfil ?? null);
+      }
+
+      return user;
     } catch (error: unknown) {
       logger.error(`Error al actualizar usuario: ${getErrorMessage(error)}`);
       throw new AppError(
@@ -186,7 +202,7 @@ export class UserService {
           where: { empresaId: eid },
           skip,
           take,
-          include: { role: true },
+          include: { role: true, portalPerfil: true },
         }),
         prisma.usuario.count({ where: { empresaId: eid } }),
       ]);
@@ -196,5 +212,16 @@ export class UserService {
       logger.error(`Error al listar usuarios: ${getErrorMessage(error)}`);
       throw new AppError('Error al recuperar el listado de usuarios.', 500);
     }
+  }
+
+  async getUserById(id: string | number, empresaId: string | number) {
+    const uid = Number(id);
+    const eid = Number(empresaId);
+    const user = await prisma.usuario.findFirst({
+      where: { id: uid, empresaId: eid },
+      include: { role: true, portalPerfil: true },
+    });
+    if (!user) throw new AppError('Usuario no encontrado en su empresa.', 404);
+    return user;
   }
 }

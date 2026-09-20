@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { UserService } from './user.service';
 import { AuthRequest } from '../../middlewares/auth.middleware';
 import { getErrorMessage } from '../../utils/error-handler';
+import { AppError } from '../../utils/app-error';
 
 const userService = new UserService();
 
@@ -77,6 +78,28 @@ export class UserController {
     }
   }
 
+  async getById(req: AuthRequest, res: Response) {
+    try {
+      const empresaId = req.user?.empresaId;
+      if (!empresaId)
+        return res.status(403).json({ message: 'Empresa no identificada' });
+
+      const user = await userService.getUserById(req.params.id, empresaId);
+      res.json({
+        id: user.id,
+        nombre: user.nombre,
+        email: user.email,
+        roleId: user.roleId,
+        role: user.role.nombre,
+        activo: user.activo,
+        portalPerfil: user.portalPerfil,
+      });
+    } catch (error: unknown) {
+      const status = error instanceof AppError ? error.statusCode : 400;
+      res.status(status).json({ message: getErrorMessage(error) });
+    }
+  }
+
   async list(req: AuthRequest, res: Response) {
     try {
       const empresaId = req.user?.empresaId;
@@ -102,7 +125,9 @@ export class UserController {
           nombre: u.nombre,
           email: u.email,
           role: u.role.nombre,
+          roleId: u.roleId,
           activo: u.activo,
+          portalPerfil: u.portalPerfil,
         })),
       });
     } catch (error: unknown) {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { empresaPortalConfigBodySchema } from '../portal/portal-perfil.schema';
 
 export const createCompanySchema = z.object({
   body: z.object({
@@ -41,4 +42,8 @@ export const toggleSubmoduleSchema = z.object({
     submoduloId: z.number({ required_error: 'ID de submódulo es requerido' }),
     active: z.boolean(),
   }),
+});
+
+export const empresaPortalConfigSchema = z.object({
+  body: empresaPortalConfigBodySchema,
 });

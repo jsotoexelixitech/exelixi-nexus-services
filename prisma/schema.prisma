@@ -31,6 +31,7 @@ model Empresa {
   funeralSubmissions FuneralSubmission[]
   feeTransaccion Decimal?         @default(0) @map("empresa_fee_transaccion") @db.Decimal(10, 2)
   apiKey         String?          @unique @map("empresa_api_key") @db.VarChar(128)
+  portalConfig   EmpresaPortalConfig?
 
   @@map("empresa")
 }
@@ -167,8 +168,44 @@ model Usuario {
   empresa        Empresa         @relation(fields: [empresaId], references: [id])
   role           Role            @relation(fields: [roleId], references: [id])
   portalSessions PortalSession[]
+  portalPerfil   UsuarioPortalPerfil?
 
   @@map("usuario")
+}
+
+/// Defaults Sis2000 / marketplace por empresa (fallback si el usuario no tiene perfil).
+model EmpresaPortalConfig {
+  empresaId              Int     @id @map("epc_empresa_id")
+  centidad               String  @default("P") @map("epc_centidad") @db.Char(1)
+  citem                  String  @default("80080") @map("epc_citem") @db.VarChar(20)
+  cproductor             String? @map("epc_cproductor") @db.VarChar(20)
+  cusuario               String? @map("epc_cusuario") @db.VarChar(20)
+  resolverGestorPorEmail Boolean @default(true) @map("epc_resolver_gestor_email")
+  ccanalaltIn            String? @map("epc_ccanalalt_in") @db.VarChar(20)
+  cscanalaltIn           String? @map("epc_cscanalalt_in") @db.VarChar(20)
+  updatedAt              DateTime @updatedAt @map("epc_updated_at")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@map("empresa_portal_config")
+}
+
+/// Canal marketplace / Sis2000 por operador del portal (Admin).
+model UsuarioPortalPerfil {
+  usuarioId              Int     @id @map("upp_usuario_id")
+  resolverGestorPorEmail Boolean @default(true) @map("upp_resolver_gestor_email")
+  centidad               String? @map("upp_centidad") @db.Char(1)
+  citem                  String? @map("upp_citem") @db.VarChar(20)
+  cproductor             String? @map("upp_cproductor") @db.VarChar(20)
+  cusuario               String? @map("upp_cusuario") @db.VarChar(20)
+  cgestor                String? @map("upp_cgestor") @db.VarChar(50)
+  ccanalaltIn            String? @map("upp_ccanalalt_in") @db.VarChar(20)
+  cscanalaltIn           String? @map("upp_cscanalalt_in") @db.VarChar(20)
+  updatedAt              DateTime @updatedAt @map("upp_updated_at")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@map("usuario_portal_perfil")
 }
 
 model migrations {

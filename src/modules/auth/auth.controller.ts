@@ -93,6 +93,9 @@ const ssoMetadataSchema = z
     centidad: z.string().max(4).optional(),
     citem: ssoActorCode.optional(),
     cproducto: ssoActorCode.optional(),
+    /** Formulario Sis2000 / marketplace (automobile, rcv-external, …). */
+    xform: z.string().max(80).optional(),
+    xproducto: z.string().max(200).optional(),
     /** rcv (default) | funerario | patrimoniales — misma cadena SSO, distinta entrada OCR. */
     product: z.enum(['rcv', 'funerario', 'patrimoniales']).optional(),
     /** Checkout Pagos — mismo patrón que canal en emisión, vía sso-delegate. */
@@ -121,6 +124,8 @@ const SSO_ROOT_METADATA_KEYS = [
   'centidad',
   'citem',
   'cproducto',
+  'xform',
+  'xproducto',
   'product',
 ] as const;
 

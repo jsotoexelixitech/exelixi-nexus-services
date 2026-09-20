@@ -158,4 +158,34 @@ export class CompanyController {
         .json({ success: false, message: getErrorMessage(error) });
     }
   }
+
+  async getPortalConfig(req: Request, res: Response) {
+    try {
+      const empresaId = Number(req.params.id);
+      const data = await companyService.getPortalConfig(empresaId);
+      res.json({ success: true, data });
+    } catch (error: unknown) {
+      const statusCode = error instanceof AppError ? error.statusCode : 500;
+      res
+        .status(statusCode)
+        .json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async putPortalConfig(req: Request, res: Response) {
+    try {
+      const empresaId = Number(req.params.id);
+      const data = await companyService.savePortalConfig(empresaId, req.body);
+      res.json({
+        success: true,
+        message: 'Configuración portal guardada',
+        data,
+      });
+    } catch (error: unknown) {
+      const statusCode = error instanceof AppError ? error.statusCode : 500;
+      res
+        .status(statusCode)
+        .json({ success: false, message: getErrorMessage(error) });
+    }
+  }
 }

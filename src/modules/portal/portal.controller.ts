@@ -30,6 +30,7 @@ export class PortalController {
         return;
       }
       const user = await portalService.getSessionContext(userId);
+      const canal = await portalService.getResolvedCanal(userId);
       res.json({
         success: true,
         data: {
@@ -43,6 +44,9 @@ export class PortalController {
             id: user.empresa.id,
             nombre: user.empresa.nombre,
           },
+          canal,
+          portalPerfil: user.portalPerfil,
+          empresaPortalConfig: user.empresa.portalConfig,
         },
       });
     } catch (error: unknown) {

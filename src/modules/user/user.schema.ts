@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { portalPerfilBodySchema } from '../portal/portal-perfil.schema';
 
 export const createUserSchema = z.object({
   body: z.object({
@@ -9,6 +10,7 @@ export const createUserSchema = z.object({
       .min(6, 'La contraseña debe tener al menos 6 caracteres')
       .optional(),
     roleId: z.number({ required_error: 'ID de rol es obligatorio' }),
+    portalPerfil: portalPerfilBodySchema,
   }),
 });
 
@@ -19,6 +21,7 @@ export const updateUserSchema = z.object({
     password: z.string().min(6).optional(),
     roleId: z.number().optional(),
     activo: z.boolean().optional(),
+    portalPerfil: portalPerfilBodySchema,
   }),
 });
 
