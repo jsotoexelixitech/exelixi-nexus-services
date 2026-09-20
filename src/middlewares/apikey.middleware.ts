@@ -18,6 +18,8 @@ export const apiKeyGuard = (
     '/api/api-docs',
     '/api/auth/sso-delegate',
     '/api/auth/login',
+    // Portal operadores: JWT Bearer en cada ruta (authenticate), sin x-api-key global.
+    '/api/portal',
   ];
   if (publicPaths.some((path) => req.originalUrl.startsWith(path))) {
     return next();
