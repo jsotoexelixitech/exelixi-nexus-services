@@ -4,7 +4,16 @@ import logger from '../../utils/logger';
 import prisma from '../../config/prisma';
 import { AuthRequest } from '../../middlewares/auth.middleware';
 import { PortalService } from './portal.service';
+import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
+
+function portalErrorStatus(error: unknown): number {
+  if (error instanceof AppError) return error.statusCode;
+  const msg = getErrorMessage(error);
+  if (msg.includes('inactiv')) return 403;
+  if (msg.includes('no encontrado')) return 404;
+  return 500;
+}
 
 const portalService = new PortalService();
 
@@ -38,8 +47,9 @@ export class PortalController {
       });
     } catch (error: unknown) {
       const msg = getErrorMessage(error);
-      const status = msg.includes('inactiv') ? 403 : 500;
-      res.status(status).json({ success: false, message: msg });
+      res
+        .status(portalErrorStatus(error))
+        .json({ success: false, message: msg });
     }
   };
 
@@ -58,8 +68,9 @@ export class PortalController {
       res.json({ success: true, data: products });
     } catch (error: unknown) {
       const msg = getErrorMessage(error);
-      const status = msg.includes('inactiv') ? 403 : 500;
-      res.status(status).json({ success: false, message: msg });
+      res
+        .status(portalErrorStatus(error))
+        .json({ success: false, message: msg });
     }
   };
 

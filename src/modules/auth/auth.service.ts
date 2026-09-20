@@ -46,6 +46,16 @@ export class AuthService {
         );
       }
 
+      if (!user.empresa.activo) {
+        logger.warn(
+          `Login bloqueado: Empresa inactiva (${user.empresa.nombre})`,
+        );
+        throw new AppError(
+          'La empresa asociada a su cuenta está inactiva. Contacte con soporte técnico.',
+          403,
+        );
+      }
+
       // Verificar contraseña
       const isPasswordValid = await bcrypt.compare(password, user.password);
 

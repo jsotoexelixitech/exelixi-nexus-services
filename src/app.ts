@@ -113,6 +113,9 @@ app.use('/api/config', productConfigRoutes);
 // Solicitudes funerario (revisión técnica) — guards propios en el router
 app.use('/api/funeral-submissions', funeralSubmissionRoutes);
 
+// Portal operadores La Mundial — solo JWT Bearer (authenticate en el router)
+app.use('/api/portal', portalRoutes);
+
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);
 app.use('/api', (_req, res, next) => {
@@ -135,7 +138,6 @@ app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/modules', moduleRoutes);
 app.use('/api/emisiones', emisionRoutes);
-app.use('/api/portal', portalRoutes);
 
 // --- 404 Handler ---
 app.use((req, res) => {

@@ -21,7 +21,17 @@ export const apiKeyGuard = (
     // Portal operadores: JWT Bearer en cada ruta (authenticate), sin x-api-key global.
     '/api/portal',
   ];
-  if (publicPaths.some((path) => req.originalUrl.startsWith(path))) {
+  const originalPath = req.originalUrl.split('?')[0] ?? '';
+  // Tras app.use('/api', guard), req.url suele ser relativo (ej. /portal/products).
+  const mountedPath = (req.url ?? '').split('?')[0] ?? '';
+
+  const isPublic =
+    publicPaths.some((path) => originalPath.startsWith(path)) ||
+    mountedPath.startsWith('/portal') ||
+    mountedPath.startsWith('/auth/login') ||
+    mountedPath.startsWith('/auth/sso-delegate');
+
+  if (isPublic) {
     return next();
   }
 
