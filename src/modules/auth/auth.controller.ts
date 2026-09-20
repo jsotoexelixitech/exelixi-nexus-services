@@ -313,11 +313,54 @@ export class AuthController {
       const apiKey = req.headers['x-api-key'];
       const mergedRaw = mergeSsoMetadata(req.body as Record<string, unknown>);
 
-      if (!apiKey) {
+      let empresaId: number;
+      let empresaNombre: string;
+
+      if (apiKey) {
+        const empresa = await prisma.empresa.findUnique({
+          where: { apiKey: apiKey as string },
+          select: { id: true, nombre: true, activo: true },
+        });
+        if (!empresa) {
+          return res.status(401).json({
+            success: false,
+            message: 'API Key inválida o no registrada.',
+          });
+        }
+        if (!empresa.activo) {
+          return res
+            .status(403)
+            .json({ success: false, message: 'La empresa está inactiva.' });
+        }
+        empresaId = empresa.id;
+        empresaNombre = empresa.nombre;
+      } else if (req.headers.authorization?.startsWith('Bearer ')) {
+        const { decrypt } = await import('../../utils/crypto');
+        const jwt = await import('jsonwebtoken');
+        const encryptedToken = req.headers.authorization.split(' ')[1];
+        try {
+          const token = decrypt(encryptedToken);
+          const decoded = jwt.verify(
+            token,
+            process.env.JWT_SECRET || 'secret',
+          ) as { empresaId: number };
+          const empresa = await prisma.empresa.findUnique({
+            where: { id: decoded.empresaId },
+            select: { id: true, nombre: true, activo: true },
+          });
+          if (!empresa || !empresa.activo) throw new Error('Empresa inactiva');
+          empresaId = empresa.id;
+          empresaNombre = empresa.nombre;
+        } catch (_err) {
+          return res
+            .status(401)
+            .json({ success: false, message: 'Token de sesión inválido.' });
+        }
+      } else {
         return res.status(400).json({
           success: false,
           error: 'invalid_request',
-          message: 'Falta el header x-api-key.',
+          message: 'Falta el header x-api-key o un Bearer token.',
         });
       }
 
@@ -339,29 +382,11 @@ export class AuthController {
         );
       }
 
-      // 1. Buscar la empresa por apiKey
-      const empresa = await prisma.empresa.findUnique({
-        where: { apiKey: apiKey as string },
-        select: { id: true, nombre: true, activo: true },
-      });
-
-      if (!empresa) {
-        return res.status(401).json({
-          success: false,
-          message: 'Acceso denegado: API Key inv?lida o no registrada.',
-        });
-      }
-
-      if (!empresa.activo) {
-        return res.status(403).json({
-          success: false,
-          message: 'Acceso denegado: La empresa est? inactiva.',
-        });
-      }
+      // No need to query empresa again, we already have empresaId and empresaNombre
 
       const productHint = resolveSsoFlowProduct(metadata);
       const submodulo = await findSubmoduloForSsoTarget(target, {
-        empresaId: empresa.id,
+        empresaId,
         product: productHint,
       });
 
@@ -386,7 +411,7 @@ export class AuthController {
           };
         }
       ).empresaSubmodulo.findFirst({
-        where: { empresaId: empresa.id, submoduloId: submodulo.id },
+        where: { empresaId, submoduloId: submodulo.id },
         select: { tenantToken: true, activo: true },
       });
 
@@ -416,7 +441,7 @@ export class AuthController {
       ).empresaSubmodulo.update({
         where: {
           empresaId_submoduloId: {
-            empresaId: empresa.id,
+            empresaId,
             submoduloId: submodulo.id,
           },
         },
@@ -435,7 +460,7 @@ export class AuthController {
           ? { ...metadata, product }
           : metadata;
       const dynamicToken = generateSsoToken(
-        empresa.id,
+        empresaId,
         submodulo.id,
         tokenMetadata,
       );
@@ -444,14 +469,14 @@ export class AuthController {
         product,
       );
 
-      const ssoMsg = 'sse ' + empresa.id + '/' + target + '/' + submodulo.id;
+      const ssoMsg = 'sse ' + empresaId + '/' + target + '/' + submodulo.id;
       logger.info('ssoDelegate ' + ssoMsg);
       logger.info('sso-body ' + JSON.stringify(mergedRaw));
 
       return res.json({
         success: true,
         redirect_url: redirectUrl,
-        empresa: empresa.nombre,
+        empresa: empresaNombre,
         modulo: submodulo.nombre,
       });
     } catch (error: unknown) {
