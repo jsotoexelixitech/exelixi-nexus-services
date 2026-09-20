@@ -1,7 +1,6 @@
-feat(portal): tablas portal_session y portal_audit_log
+feat(db): migracion portal_session y portal_audit_log
 
-- Agrega modelos PortalSession y PortalAuditLog al schema Prisma
-- Relacion portalSessions en modelo Usuario
-- Nuevo modulo src/modules/portal/ con controller y routes
-- Endpoints: POST /api/portal/audit y GET /api/portal/audit
-- Requiere migracion Prisma: npx prisma migrate deploy
+Crea tablas para auditar accesos del portal La Mundial:
+- portal_session: registro de cada login (usuario, IP, token, expira)
+- portal_audit_log: cada accion SSO (producto lanzado, parametros)
+FK con cascada: usuario -> portal_session -> portal_audit_log
