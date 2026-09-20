@@ -39,6 +39,9 @@ const controller = new PortalController();
  *       401:
  *         description: No autorizado
  */
+router.get('/me', authenticate, controller.getMe);
+router.get('/products', authenticate, controller.getProducts);
+
 router.post('/audit', authenticate, controller.registerAudit);
 
 /**

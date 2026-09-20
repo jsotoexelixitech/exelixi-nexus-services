@@ -1,10 +1,68 @@
+import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import logger from '../../utils/logger';
+import prisma from '../../config/prisma';
+import { AuthRequest } from '../../middlewares/auth.middleware';
+import { PortalService } from './portal.service';
+import { getErrorMessage } from '../../utils/error-handler';
 
-const prisma = new PrismaClient();
+const portalService = new PortalService();
 
 export class PortalController {
+  /**
+   * GET /api/portal/me
+   * Contexto de sesión (usuario + empresa) para el portal.
+   */
+  getMe = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'No autorizado.' });
+        return;
+      }
+      const user = await portalService.getSessionContext(userId);
+      res.json({
+        success: true,
+        data: {
+          user: {
+            id: user.id,
+            nombre: user.nombre,
+            email: user.email,
+            role: user.role.nombre,
+          },
+          empresa: {
+            id: user.empresa.id,
+            nombre: user.empresa.nombre,
+          },
+        },
+      });
+    } catch (error: unknown) {
+      const msg = getErrorMessage(error);
+      const status = msg.includes('inactiv') ? 403 : 500;
+      res.status(status).json({ success: false, message: msg });
+    }
+  };
+
+  /**
+   * GET /api/portal/products
+   * Flujos / emisiones disponibles según empresa y permisos (sin API Key en portal).
+   */
+  getProducts = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'No autorizado.' });
+        return;
+      }
+      const products = await portalService.getAvailableProducts(userId);
+      res.json({ success: true, data: products });
+    } catch (error: unknown) {
+      const msg = getErrorMessage(error);
+      const status = msg.includes('inactiv') ? 403 : 500;
+      res.status(status).json({ success: false, message: msg });
+    }
+  };
+
   /**
    * POST /api/portal/audit
    * Registra una acción del portal (launch de producto SSO).
@@ -56,7 +114,7 @@ export class PortalController {
           sessionId: session.id,
           accion,
           producto: producto ?? null,
-          detalle: detalle ? (detalle as any) : undefined,
+          detalle: detalle ? (detalle as Prisma.InputJsonValue) : undefined,
         },
       });
 
