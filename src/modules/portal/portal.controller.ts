@@ -56,7 +56,7 @@ export class PortalController {
           sessionId: session.id,
           accion,
           producto: producto ?? null,
-          detalle: detalle ?? null,
+          detalle: detalle ? (detalle as any) : undefined,
         },
       });
 
