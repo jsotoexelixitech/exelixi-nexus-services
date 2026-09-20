@@ -164,8 +164,9 @@ model Usuario {
   activo    Boolean  @default(true) @map("usuario_estatus")
   createdAt DateTime @default(now()) @map("created_at")
 
-  empresa Empresa @relation(fields: [empresaId], references: [id])
-  role    Role    @relation(fields: [roleId], references: [id])
+  empresa        Empresa         @relation(fields: [empresaId], references: [id])
+  role           Role            @relation(fields: [roleId], references: [id])
+  portalSessions PortalSession[]
 
   @@map("usuario")
 }
@@ -340,4 +341,37 @@ model FuneralSubmission {
   @@index([empresaId, estado], map: "idx_funeral_submission_empresa_estado")
   @@index([sessionId], map: "idx_funeral_submission_session")
   @@map("funeral_submission")
+}
+
+// ─── Portal La Mundial — Auditoría de accesos ────────────────────────────
+// Registra logins y acciones del portal (launcher SSO).
+
+model PortalSession {
+  id        Int      @id @default(autoincrement()) @map("psess_id")
+  usuarioId Int      @map("psess_usuario_id")
+  ipAddress String   @default("") @map("psess_ip") @db.VarChar(64)
+  userAgent String?  @map("psess_user_agent") @db.Text
+  token     String   @map("psess_token") @db.Text
+  expiresAt DateTime @map("psess_expires_at") @db.Timestamp(6)
+  createdAt DateTime @default(now()) @map("psess_created_at") @db.Timestamp(6)
+
+  usuario   Usuario          @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  auditLogs PortalAuditLog[]
+
+  @@index([usuarioId], map: "idx_portal_session_usuario")
+  @@map("portal_session")
+}
+
+model PortalAuditLog {
+  id        Int      @id @default(autoincrement()) @map("paudit_id")
+  sessionId Int      @map("paudit_session_id")
+  accion    String   @map("paudit_accion") @db.VarChar(64)
+  producto  String?  @map("paudit_producto") @db.VarChar(32)
+  detalle   Json?    @map("paudit_detalle") @db.JsonB
+  createdAt DateTime @default(now()) @map("paudit_created_at") @db.Timestamp(6)
+
+  session PortalSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId], map: "idx_portal_audit_session")
+  @@map("portal_audit_log")
 }

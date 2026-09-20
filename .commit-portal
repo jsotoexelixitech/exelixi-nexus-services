@@ -1,0 +1,7 @@
+feat(portal): tablas portal_session y portal_audit_log
+
+- Agrega modelos PortalSession y PortalAuditLog al schema Prisma
+- Relacion portalSessions en modelo Usuario
+- Nuevo modulo src/modules/portal/ con controller y routes
+- Endpoints: POST /api/portal/audit y GET /api/portal/audit
+- Requiere migracion Prisma: npx prisma migrate deploy

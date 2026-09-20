@@ -29,6 +29,7 @@ import flowRoutes from './modules/flow/flow.routes';
 import productConfigRoutes from './modules/config/product-config.routes';
 import emisionRoutes from './modules/emision/emision.routes';
 import funeralSubmissionRoutes from './modules/funeral-submission/funeral-submission.routes';
+import portalRoutes from './modules/portal/portal.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -134,6 +135,7 @@ app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/modules', moduleRoutes);
 app.use('/api/emisiones', emisionRoutes);
+app.use('/api/portal', portalRoutes);
 
 // --- 404 Handler ---
 app.use((req, res) => {
