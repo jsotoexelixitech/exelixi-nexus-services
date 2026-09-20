@@ -17,6 +17,7 @@ export const apiKeyGuard = (
     '/api-docs',
     '/api/api-docs',
     '/api/auth/sso-delegate',
+    '/api/auth/login',
   ];
   if (publicPaths.some((path) => req.originalUrl.startsWith(path))) {
     return next();
