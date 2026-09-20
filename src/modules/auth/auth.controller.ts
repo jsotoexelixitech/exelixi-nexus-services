@@ -343,14 +343,22 @@ export class AuthController {
           const decoded = jwt.verify(
             token,
             process.env.JWT_SECRET || 'secret',
-          ) as { empresaId: number };
+          ) as { empresaId: number; roleId: number };
           const empresa = await prisma.empresa.findUnique({
             where: { id: decoded.empresaId },
             select: { id: true, nombre: true, activo: true },
           });
-          if (!empresa || !empresa.activo) throw new Error('Empresa inactiva');
-          empresaId = empresa.id;
-          empresaNombre = empresa.nombre;
+          // Allow roleId 1 (admin) to pass even if empresa is inactive or missing, for debugging purposes
+          if (!empresa && decoded.roleId !== 1)
+            throw new Error('Empresa inactiva');
+          if (empresa && !empresa.activo && decoded.roleId !== 1)
+            throw new Error('Empresa inactiva');
+
+          empresaId = decoded.empresaId;
+          empresaNombre = empresa ? empresa.nombre : 'Admin Bypass';
+
+          // Inject roleId into req for later checks
+          (req as any).userRole = decoded.roleId;
         } catch (_err) {
           return res
             .status(401)
@@ -415,38 +423,44 @@ export class AuthController {
         select: { tenantToken: true, activo: true },
       });
 
+      const isAdmin = (req as any).userRole === 1;
+
       if (!empresaSubmodulo || !empresaSubmodulo.activo) {
-        return res.status(403).json({
-          success: false,
-          message: `El servicio "${target}" no est? activado para esta empresa.`,
-        });
+        if (!isAdmin) {
+          return res.status(403).json({
+            success: false,
+            message: `El servicio "${target}" no está activado para esta empresa.`,
+          });
+        }
       }
 
-      // Renovar ventana de sesi?n al entrar desde app externa (evita "expirada por inactividad")
-      const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
-      await (
-        prisma as unknown as {
-          empresaSubmodulo: {
-            update: (args: {
-              where: {
-                empresaId_submoduloId: {
-                  empresaId: number;
-                  submoduloId: number;
+      // Renovar ventana de sesión al entrar desde app externa (evita "expirada por inactividad")
+      if (empresaSubmodulo) {
+        const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
+        await (
+          prisma as unknown as {
+            empresaSubmodulo: {
+              update: (args: {
+                where: {
+                  empresaId_submoduloId: {
+                    empresaId: number;
+                    submoduloId: number;
+                  };
                 };
-              };
-              data: { tokenExpiresAt: Date };
-            }) => Promise<unknown>;
-          };
-        }
-      ).empresaSubmodulo.update({
-        where: {
-          empresaId_submoduloId: {
-            empresaId,
-            submoduloId: submodulo.id,
+                data: { tokenExpiresAt: Date };
+              }) => Promise<unknown>;
+            };
+          }
+        ).empresaSubmodulo.update({
+          where: {
+            empresaId_submoduloId: {
+              empresaId,
+              submoduloId: submodulo.id,
+            },
           },
-        },
-        data: { tokenExpiresAt: new Date(Date.now() + TOKEN_TTL_MS) },
-      });
+          data: { tokenExpiresAt: new Date(Date.now() + TOKEN_TTL_MS) },
+        });
+      }
 
       // 5. Generar token din?mico con metadata
       const { generateSsoToken, buildAccessUrl } =
