@@ -2,7 +2,10 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
 import { findSubmoduloForSsoTarget } from './portal-sso-resolver';
 import { PortalChannelService } from './portal-channel.service';
-import { fetchValrepProductos } from './nest-valrep.client';
+import {
+  fetchValrepProductos,
+  fetchValrepProductosMarketplace,
+} from './nest-valrep.client';
 import { mapSisProductRow } from './portal-sis-product.mapper';
 import logger from '../../utils/logger';
 
@@ -26,6 +29,45 @@ export interface PortalProductDto {
   citem?: string;
   ccanalaltIn?: string;
   cscanalaltIn?: string;
+  mmontoInicial?: string;
+  xfraccionamiento?: string;
+  xurlPresentacion?: string;
+  marketplaceUrl?: string;
+  marketplaceQr?: string;
+}
+
+function marketplaceEmissionUrlPrefix(): string | undefined {
+  const raw =
+    process.env.PORTAL_MARKETPLACE_EMISSION_URL?.trim() ||
+    process.env.PORTAL_MARKETPLACE_URL?.trim();
+  return raw || undefined;
+}
+
+function useMarketplaceCatalog(): boolean {
+  return process.env.PORTAL_USE_LEGACY_PRODUCTOS !== 'true';
+}
+
+async function loadSisProductRows(
+  valrepBody: Parameters<typeof fetchValrepProductos>[0],
+): Promise<Record<string, unknown>[]> {
+  if (!useMarketplaceCatalog()) {
+    return fetchValrepProductos(valrepBody);
+  }
+  const urlPrefix = marketplaceEmissionUrlPrefix();
+  try {
+    const { productos } = await fetchValrepProductosMarketplace({
+      ...valrepBody,
+      ...(urlPrefix ? { url: urlPrefix } : {}),
+    });
+    if (productos.length > 0) return productos;
+    logger.warn('[portal] marketplace vacío; fallback valrep/productos (SP)');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      `[portal] marketplace falló (${msg}); fallback valrep/productos`,
+    );
+  }
+  return fetchValrepProductos(valrepBody);
 }
 
 const channelService = new PortalChannelService();
@@ -65,7 +107,7 @@ export class PortalService {
 
     let rows: Record<string, unknown>[];
     try {
-      rows = await fetchValrepProductos(valrepBody);
+      rows = await loadSisProductRows(valrepBody);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error(`[portal] catálogo Sis2000: ${msg}`);
@@ -140,6 +182,11 @@ export class PortalService {
         citem: canal.citem,
         ccanalaltIn: canal.ccanalaltIn,
         cscanalaltIn: canal.cscanalaltIn,
+        mmontoInicial: mapped.mmontoInicial,
+        xfraccionamiento: mapped.xfraccionamiento,
+        xurlPresentacion: mapped.xurlPresentacion,
+        marketplaceUrl: mapped.marketplaceUrl,
+        marketplaceQr: mapped.marketplaceQr,
       });
     }
 

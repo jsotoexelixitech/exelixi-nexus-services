@@ -58,6 +58,52 @@ export type ValrepProductosRequest = {
   cproductor?: string;
 };
 
+export type ValrepMarketplaceRequest = ValrepProductosRequest & {
+  url?: string;
+  csub?: string;
+};
+
+export type ValrepMarketplaceResult = {
+  productos: Record<string, unknown>[];
+  cantidad: number;
+};
+
+export async function fetchValrepProductosMarketplace(
+  body: ValrepMarketplaceRequest,
+): Promise<ValrepMarketplaceResult> {
+  const bearer = await getNestBearer();
+  const url = `${nestBaseUrl()}/api/v1/valrep/productos/marketplace`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${bearer}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(45_000),
+  });
+  const raw = (await res.json().catch(() => ({}))) as NestEnvelope<{
+    productos?: Record<string, unknown>[];
+    cantidad?: number;
+  }>;
+  if (!res.ok) {
+    const msg =
+      typeof (raw as { message?: string }).message === 'string'
+        ? (raw as { message: string }).message
+        : `valrep/productos/marketplace HTTP ${res.status}`;
+    logger.warn(`[portal] marketplace productos: ${msg}`);
+    throw new Error(msg);
+  }
+  const data = raw.data ?? {};
+  const productos = Array.isArray(data.productos) ? data.productos : [];
+  const cantidad =
+    typeof data.cantidad === 'number'
+      ? data.cantidad
+      : Number(data.cantidad ?? 0);
+  return { productos, cantidad: Number.isFinite(cantidad) ? cantidad : 0 };
+}
+
 export async function fetchValrepProductos(
   body: ValrepProductosRequest,
 ): Promise<Record<string, unknown>[]> {

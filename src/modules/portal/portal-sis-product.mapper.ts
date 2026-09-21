@@ -15,6 +15,11 @@ export interface MappedSisProduct {
   cramo: number;
   xform?: string;
   xlogo?: string;
+  mmontoInicial?: string;
+  xfraccionamiento?: string;
+  xurlPresentacion?: string;
+  marketplaceUrl?: string;
+  marketplaceQr?: string;
   canal: ResolvedPortalCanal;
 }
 
@@ -92,20 +97,36 @@ export function mapSisProductRow(
   const label =
     strField(row, 'xdescripcion_l', 'xproducto', 'XPRODUCTO') ||
     `Producto ${cproducto}`;
-  const xlogo = strField(row, 'xlogo', 'XLOGO');
+  const xlogo = strField(row, 'xlogo', 'xdescripcion_c', 'XLOGO');
+  const descLong = strField(
+    row,
+    'xdescripcion_prod',
+    'xdescripcion_l',
+    'xproducto',
+  );
+  const mmontoInicial = strField(row, 'mmonto_inicial', 'MMONTO_INICIAL');
+  const xfraccionamiento = strField(row, 'xfraccionamiento');
+  const xurlPresentacion = strField(row, 'xurl_presentacion');
+  const marketplaceUrl = strField(row, 'url');
+  const marketplaceQr = strField(row, 'qr');
 
   const flow = inferFlow(xform, cramo, cproducto);
 
   return {
     key: `p-${cproducto}`,
     label,
-    description: label,
+    description: descLong || label,
     ...flow,
     defaultCramo: cramo,
     cproducto,
     cramo,
     xform: xform || undefined,
     xlogo: xlogo || undefined,
+    mmontoInicial: mmontoInicial || undefined,
+    xfraccionamiento: xfraccionamiento || undefined,
+    xurlPresentacion: xurlPresentacion || undefined,
+    marketplaceUrl: marketplaceUrl || undefined,
+    marketplaceQr: marketplaceQr || undefined,
     canal,
   };
 }
