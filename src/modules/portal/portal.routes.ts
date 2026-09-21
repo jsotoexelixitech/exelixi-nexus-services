@@ -1,9 +1,14 @@
 import { Router } from 'express';
 import { authenticate } from '../../middlewares/auth.middleware';
+import { validate } from '../../middlewares/validate.middleware';
 import { PortalController } from './portal.controller';
+import { PortalUsersController } from './portal-users.controller';
+import { requirePortalAdmin } from './portal-admin.middleware';
+import { createUserSchema, updateUserSchema } from '../user/user.schema';
 
 const router = Router();
 const controller = new PortalController();
+const portalUsers = new PortalUsersController();
 
 /**
  * @openapi
@@ -62,5 +67,28 @@ router.post('/audit', authenticate, controller.registerAudit);
  *         description: No autorizado
  */
 router.get('/audit', authenticate, controller.getAuditLogs);
+
+router.get('/roles', authenticate, requirePortalAdmin, portalUsers.listRoles);
+router.get('/users', authenticate, requirePortalAdmin, portalUsers.listUsers);
+router.post(
+  '/users',
+  authenticate,
+  requirePortalAdmin,
+  validate(createUserSchema),
+  portalUsers.createUser,
+);
+router.put(
+  '/users/:id',
+  authenticate,
+  requirePortalAdmin,
+  validate(updateUserSchema),
+  portalUsers.updateUser,
+);
+router.patch(
+  '/users/:id/status',
+  authenticate,
+  requirePortalAdmin,
+  portalUsers.toggleStatus,
+);
 
 export default router;
