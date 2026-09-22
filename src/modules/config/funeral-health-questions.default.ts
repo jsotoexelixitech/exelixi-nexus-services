@@ -1,9 +1,12 @@
 /**
- * Preguntas de salud funerario — default del parametrizador (emisión).
- * Misma forma que modulo-emision/server/src/config/funeralHealthQuestions.js
+ * Preguntas de salud funerario — alineadas a Sis2000 cproducto 57 · matriz v4.
  */
 
-export type FuneralHealthQuestionType = 'boolean' | 'text' | 'select';
+export type FuneralHealthQuestionType =
+  | 'boolean'
+  | 'text'
+  | 'select'
+  | 'multi_select';
 
 export interface FuneralHealthQuestion {
   id: string;
@@ -11,29 +14,21 @@ export interface FuneralHealthQuestion {
   label: string;
   description?: string;
   required?: boolean;
-  /** false = oculta al cliente y no puntúa */
   enabled?: boolean;
-  /** cplan Sis2000 ("2"…"9") o "*" para todos */
   plans: string[];
   showIf?: { field: string; equals: boolean | string };
   options?: { value: string; label: string }[];
-  /** Puntos si responde Sí (boolean) */
   scoreIfTrue?: number;
-  /** Puntos si responde No (boolean) */
   scoreIfFalse?: number;
-  /** Puntos si el texto tiene contenido */
   scoreIfFilled?: number;
-  /** Puntos por valor en select: { "valor": puntos } */
   optionScores?: Record<string, number>;
-  /** Bloqueo automático (sigue a revisión técnica) */
+  optionActions?: Record<string, 'reject' | 'refer' | 'score'>;
   blockIfTrue?: boolean;
   blockIfFalse?: boolean;
   blockReason?: string;
 }
 
 const TODOS = ['2', '3', '4', '5', '6', '7', '8', '9'];
-const INTERMEDIO_ALTO = ['5', '6', '7', '8', '9'];
-const ALTO = ['7', '8', '9'];
 
 export const FUNERAL_HEALTH_QUESTIONS_DEFAULT: FuneralHealthQuestion[] = [
   {
@@ -43,27 +38,70 @@ export const FUNERAL_HEALTH_QUESTIONS_DEFAULT: FuneralHealthQuestion[] = [
     description: 'Incluye cigarrillos, tabaco, puros o vapeo.',
     required: true,
     plans: [...TODOS],
-    scoreIfTrue: 15,
+    scoreIfTrue: 0,
+    scoreIfFalse: 0,
   },
   {
-    id: 'diagnosticoEnfermedad',
+    id: 'cigarrillosPorDia',
+    type: 'select',
+    label: '¿Cuántos cigarrillos se fuma al día?',
+    required: true,
+    plans: [...TODOS],
+    showIf: { field: 'fuma', equals: true },
+    options: [
+      { value: 'Bajo', label: '1 a 5' },
+      { value: 'Medio', label: '5 a 10' },
+      { value: 'fumador violento', label: '10 a 15' },
+      { value: 'Alto', label: 'Más de 20' },
+    ],
+    optionScores: {
+      Bajo: 2,
+      Medio: 5,
+      'fumador violento': 15,
+      Alto: 20,
+    },
+    optionActions: { Alto: 'reject' },
+    blockReason:
+      'Se han detectado varios factores de riesgo inhabilitantes, no es posible continuar con el proceso.',
+  },
+  {
+    id: 'enfermedadCardiovascular',
     type: 'boolean',
-    label: '¿Ha sido diagnosticado con alguna enfermedad grave?',
-    description: 'Cáncer, diabetes, hipertensión, cardiopatías, VIH, etc.',
+    label: '¿Ha padecido enfermedades cardiovasculares?',
     required: true,
     plans: [...TODOS],
-    scoreIfTrue: 40,
+    scoreIfTrue: 0,
+    scoreIfFalse: 0,
   },
   {
-    id: 'descripcionEnfermedad',
-    type: 'text',
-    label: 'Describa la enfermedad diagnosticada',
-    description:
-      'Indique enfermedad, tratamiento y fecha aproximada del diagnóstico.',
+    id: 'indiqueEnfermedades',
+    type: 'multi_select',
+    label: 'Indique',
+    description: 'Seleccione las condiciones que apliquen.',
     required: true,
     plans: [...TODOS],
-    showIf: { field: 'diagnosticoEnfermedad', equals: true },
-    scoreIfFilled: 5,
+    showIf: { field: 'enfermedadCardiovascular', equals: true },
+    options: [
+      { value: 'HIPCON', label: 'Hipertensión controlada' },
+      { value: 'SI', label: 'Diabetes' },
+      { value: 'inf', label: 'Infarto antiguo' },
+      { value: 'diabe01', label: 'Diabetes controlada' },
+    ],
+    optionScores: {
+      HIPCON: 8,
+      SI: 12,
+      inf: 10,
+      diabe01: 15,
+    },
+  },
+  {
+    id: 'soyVidente',
+    type: 'boolean',
+    label: 'Soy vidente',
+    required: true,
+    plans: [...TODOS],
+    scoreIfTrue: 5,
+    scoreIfFalse: 0,
   },
   {
     id: 'aceptaTerminos',
@@ -73,61 +111,37 @@ export const FUNERAL_HEALTH_QUESTIONS_DEFAULT: FuneralHealthQuestion[] = [
       'Declaro que la información suministrada es verídica y acepto las condiciones de la póliza.',
     required: true,
     plans: [...TODOS],
-    scoreIfFalse: 100,
+    scoreIfFalse: 0,
     blockIfFalse: true,
     blockReason: 'Debe aceptar los términos y condiciones.',
   },
-  {
-    id: 'consumeAlcohol',
-    type: 'boolean',
-    label: '¿Consume alcohol de forma habitual?',
-    description: 'Más de 2 copas por semana de forma regular.',
-    required: true,
-    plans: [...INTERMEDIO_ALTO],
-    scoreIfTrue: 10,
-  },
-  {
-    id: 'hospitalizacionReciente',
-    type: 'boolean',
-    label: '¿Ha sido hospitalizado en los últimos 24 meses?',
-    required: true,
-    plans: [...INTERMEDIO_ALTO],
-    scoreIfTrue: 25,
-  },
-  {
-    id: 'motivoHospitalizacion',
-    type: 'text',
-    label: 'Motivo de la hospitalización',
-    required: true,
-    plans: [...INTERMEDIO_ALTO],
-    showIf: { field: 'hospitalizacionReciente', equals: true },
-    scoreIfFilled: 5,
-  },
-  {
-    id: 'medicacionCronica',
-    type: 'boolean',
-    label: '¿Toma medicación de forma crónica?',
-    description: 'Medicamentos prescritos de forma continua.',
-    required: true,
-    plans: [...ALTO],
-    scoreIfTrue: 20,
-  },
-  {
-    id: 'detalleMedicacion',
-    type: 'text',
-    label: 'Indique los medicamentos',
-    required: true,
-    plans: [...ALTO],
-    showIf: { field: 'medicacionCronica', equals: true },
-    scoreIfFilled: 5,
-  },
-  {
-    id: 'deporteRiesgo',
-    type: 'boolean',
-    label: '¿Practica deportes de alto riesgo?',
-    description: 'Paracaidismo, montañismo, buceo, carreras, etc.',
-    required: true,
-    plans: ['9'],
-    scoreIfTrue: 30,
-  },
 ];
+
+export const FUNERAL_HEALTH_SCORING_RULES_DEFAULT = {
+  rangesEnabled: true,
+  ranges: {
+    emit: {
+      min: 0,
+      max: 25,
+      message: 'Puede emitir sin inconvenientes.',
+    },
+    referred: {
+      min: 26,
+      max: 39,
+      message: 'Comunicarse con el corredor de seguro.',
+    },
+    reject: {
+      min: 40,
+      max: 1000,
+      message:
+        'Se han detectado varios factores de riesgo inhabilitantes, no es posible continuar con el proceso.',
+    },
+  },
+  concurrence: {
+    enabled: false,
+    minYesCount: 2,
+    extraPoints: 10,
+    questionIds: [] as string[],
+  },
+  reviewerEmails: [] as string[],
+};

@@ -6,7 +6,10 @@
  * Si no hay config en BD para una empresa, se retorna este default.
  */
 
-import { FUNERAL_HEALTH_QUESTIONS_DEFAULT } from './funeral-health-questions.default';
+import {
+  FUNERAL_HEALTH_QUESTIONS_DEFAULT,
+  FUNERAL_HEALTH_SCORING_RULES_DEFAULT,
+} from './funeral-health-questions.default';
 
 export type Producto = 'rcv' | 'funerario' | 'patrimoniales';
 export type Modulo = 'ocr' | 'formulario' | 'pagos' | 'emision';
@@ -221,6 +224,8 @@ const EMISION_DEFAULT_FUNERARIO = {
   healthQuestionsByCanal: {
     default: FUNERAL_HEALTH_QUESTIONS_DEFAULT,
   },
+  /** Bandas Sis2000 cproducto 57 · matriz v4 */
+  healthScoringRules: FUNERAL_HEALTH_SCORING_RULES_DEFAULT,
   apiMap: [
     { internalKey: 'plan_code', externalKey: 'plan', transform: 'none' },
     { internalKey: 'frecuencia', externalKey: 'frecuencia', transform: 'none' },
