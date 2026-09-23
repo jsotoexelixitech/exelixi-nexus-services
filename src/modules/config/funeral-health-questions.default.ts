@@ -1,5 +1,5 @@
 /**
- * Preguntas de salud funerario — alineadas a Sis2000 cproducto 57 · matriz v4.
+ * Preguntas de salud funerario — alineadas a Sis2000 producción cproducto 57 · matriz v4.
  */
 
 export type FuneralHealthQuestionType =
@@ -28,23 +28,22 @@ export interface FuneralHealthQuestion {
   blockReason?: string;
 }
 
-const TODOS = ['2', '3', '4', '5', '6', '7', '8', '9'];
+const TODOS = ['*'];
 
 export const FUNERAL_HEALTH_QUESTIONS_DEFAULT: FuneralHealthQuestion[] = [
   {
     id: 'fuma',
     type: 'boolean',
-    label: '¿Fuma o ha fumado en los últimos 12 meses?',
-    description: 'Incluye cigarrillos, tabaco, puros o vapeo.',
+    label: '¿Es usted fumador?',
     required: true,
     plans: [...TODOS],
-    scoreIfTrue: 0,
+    scoreIfTrue: 15,
     scoreIfFalse: 0,
   },
   {
     id: 'cigarrillosPorDia',
     type: 'select',
-    label: '¿Cuántos cigarrillos se fuma al día?',
+    label: '¿Cuantos cigarrillos se fuma al día?',
     required: true,
     plans: [...TODOS],
     showIf: { field: 'fuma', equals: true },
@@ -65,6 +64,15 @@ export const FUNERAL_HEALTH_QUESTIONS_DEFAULT: FuneralHealthQuestion[] = [
       'Se han detectado varios factores de riesgo inhabilitantes, no es posible continuar con el proceso.',
   },
   {
+    id: 'deportesExtremos',
+    type: 'boolean',
+    label: '¿Practica deportes extremos o de alto riesgo?',
+    required: true,
+    plans: [...TODOS],
+    scoreIfTrue: 20,
+    scoreIfFalse: 0,
+  },
+  {
     id: 'enfermedadCardiovascular',
     type: 'boolean',
     label: '¿Ha padecido enfermedades cardiovasculares?',
@@ -82,10 +90,10 @@ export const FUNERAL_HEALTH_QUESTIONS_DEFAULT: FuneralHealthQuestion[] = [
     plans: [...TODOS],
     showIf: { field: 'enfermedadCardiovascular', equals: true },
     options: [
-      { value: 'HIPCON', label: 'Hipertensión controlada' },
-      { value: 'SI', label: 'Diabetes' },
+      { value: 'HIPCON', label: 'Hipertension controlada' },
+      { value: 'SI', label: 'Diábetes' },
       { value: 'inf', label: 'Infarto antiguo' },
-      { value: 'diabe01', label: 'Diabetes controlada' },
+      { value: 'diabe01', label: 'diabetes controlada' },
     ],
     optionScores: {
       HIPCON: 8,
@@ -123,12 +131,12 @@ export const FUNERAL_HEALTH_SCORING_RULES_DEFAULT = {
     emit: {
       min: 0,
       max: 25,
-      message: 'Puede emitir sin inconvenientes.',
+      message: 'Puede Emitir Sin Inconvenientes',
     },
     referred: {
       min: 26,
       max: 39,
-      message: 'Comunicarse con el corredor de seguro.',
+      message: 'Comunicarse con el corredor de seguro',
     },
     reject: {
       min: 40,
