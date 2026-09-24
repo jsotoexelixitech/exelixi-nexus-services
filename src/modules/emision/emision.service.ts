@@ -101,7 +101,8 @@ export class EmisionService {
       },
     });
 
-    // Agrupar por empresa
+    // Agrupar por empresa.
+    // feeTransaccion = % sobre prima (monto USD / mprimaext en jsonData).
     const mapaEmpresas: Record<
       number,
       {
@@ -110,6 +111,8 @@ export class EmisionService {
         empresaRif: string;
         feeTransaccion: number;
         total: number;
+        sumaPrimas: number;
+        ingresoEstimado: number;
         porProducto: Record<string, number>;
         polizas: typeof emisiones;
       }
@@ -126,23 +129,38 @@ export class EmisionService {
             ? Number(e.empresa.feeTransaccion)
             : 0,
           total: 0,
+          sumaPrimas: 0,
+          ingresoEstimado: 0,
           porProducto: {},
           polizas: [],
         };
       }
       mapaEmpresas[eId].total += 1;
 
-      const prod =
-        ((e.jsonData as Record<string, unknown>)?.producto as string) ??
-        'desconocido';
+      const jd = (e.jsonData ?? {}) as Record<string, unknown>;
+      const prima = Number(jd.monto ?? jd.mprimaext ?? 0);
+      const primaOk = Number.isFinite(prima) && prima > 0 ? prima : 0;
+      mapaEmpresas[eId].sumaPrimas += primaOk;
+
+      const prod = (jd.producto as string) ?? 'desconocido';
       mapaEmpresas[eId].porProducto[prod] =
         (mapaEmpresas[eId].porProducto[prod] ?? 0) + 1;
       mapaEmpresas[eId].polizas.push(e);
     }
 
+    const empresas = Object.values(mapaEmpresas).map((emp) => ({
+      ...emp,
+      ingresoEstimado:
+        Math.round(emp.sumaPrimas * (emp.feeTransaccion / 100) * 100) / 100,
+    }));
+
     return {
       totalEmisiones: emisiones.length,
-      empresas: Object.values(mapaEmpresas),
+      totalIngresoEstimado:
+        Math.round(
+          empresas.reduce((acc, e) => acc + e.ingresoEstimado, 0) * 100,
+        ) / 100,
+      empresas,
     };
   }
 
