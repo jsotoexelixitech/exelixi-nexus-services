@@ -63,6 +63,12 @@ function resolveTomadorEmail(
   return emailFromPerson(asSnapshot(snapshot).tomador);
 }
 
+/** Producto que eligió el SSO (lo guarda emisión en el snapshot). */
+function productLabelFromSnapshot(snapshot: unknown): string | undefined {
+  const label = asSnapshot(snapshot).productLabel;
+  return typeof label === 'string' && label.trim() ? label.trim() : undefined;
+}
+
 function mailFlagsFromSnapshot(snapshot: unknown): {
   emailSent?: boolean;
   emailError?: string;
@@ -178,6 +184,7 @@ export class FuneralSubmissionService {
           to,
           tomadorNombre: input.tomadorNombre,
           planName: input.planName,
+          productLabel: productLabelFromSnapshot(snapshot),
           scoreTotal: String(input.scoreTotal ?? ''),
         });
         return { to, sent: mail.sent, error: mail.error };
@@ -318,6 +325,7 @@ export class FuneralSubmissionService {
       to: existing.tomadorEmail,
       name: existing.tomadorNombre ?? undefined,
       planName: existing.planName ?? undefined,
+      productLabel: productLabelFromSnapshot(existing.snapshot),
       paymentUrl: linkResult.checkoutUrl,
       expiresAt,
     });
@@ -379,6 +387,7 @@ export class FuneralSubmissionService {
         to,
         tomadorNombre: existing.tomadorNombre ?? undefined,
         planName: existing.planName ?? undefined,
+        productLabel: productLabelFromSnapshot(existing.snapshot),
         reason: rejectReason,
       });
       if (!clientMail.sent) {

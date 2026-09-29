@@ -19,6 +19,8 @@ export async function sendFuneralPaymentLinkEmail(params: {
   to: string;
   name?: string;
   planName?: string;
+  /** Producto real (Vida, Accidentes Personales…). Sin valor: Funerario. */
+  productLabel?: string;
   paymentUrl: string;
   expiresAt?: Date;
 }): Promise<{ sent: boolean; error?: string }> {
@@ -40,6 +42,7 @@ export async function sendFuneralPaymentLinkEmail(params: {
         to: params.to,
         name: params.name,
         planName: params.planName,
+        productLabel: params.productLabel,
         paymentUrl: params.paymentUrl,
         expiresAt: params.expiresAt?.toISOString(),
       }),

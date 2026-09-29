@@ -19,6 +19,8 @@ export async function sendFuneralReviewAlertEmail(params: {
   to: string;
   tomadorNombre?: string;
   planName?: string;
+  /** Producto real (Vida, Accidentes Personales…). Sin valor: Funerario. */
+  productLabel?: string;
   scoreTotal?: string;
 }): Promise<{ sent: boolean; error?: string }> {
   const apiKey = nestApiKey();
@@ -38,6 +40,7 @@ export async function sendFuneralReviewAlertEmail(params: {
         to: params.to,
         tomadorNombre: params.tomadorNombre,
         planName: params.planName,
+        productLabel: params.productLabel,
         scoreTotal: params.scoreTotal,
       }),
       signal: AbortSignal.timeout(20000),
