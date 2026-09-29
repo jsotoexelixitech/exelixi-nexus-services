@@ -25,4 +25,20 @@ describe('buildFuneralCheckoutPatch', () => {
     expect(canal.originSessionId).toBe('792');
     expect(canal.cproductor).toBe('80080');
   });
+  it('frecuencia mensual marca fraccionado para que Pagos domicilie', () => {
+    const patch = buildFuneralCheckoutPatch(
+      { ...snapshot, funeral: { frecuencia: 'M' } },
+      { submissionId: 'sub-2', cplan: '7' },
+    );
+    expect(patch.fraccionado).toBe(true);
+    expect(patch.checkoutPayload).toEqual({ ifrecuencia: 'M', fraccionado: true, requireFirstPayment: true });
+    expect((patch.checkoutRules as Record<string, unknown>).fraccionado).toBe(true);
+  });
+
+  it('frecuencia anual no es fraccionado', () => {
+    const patch = buildFuneralCheckoutPatch(snapshot, { submissionId: 'sub-3', cplan: '7' });
+    expect(patch.fraccionado).toBe(false);
+    expect((patch.checkoutPayload as Record<string, unknown>).ifrecuencia).toBe('A');
+  });
 });
+

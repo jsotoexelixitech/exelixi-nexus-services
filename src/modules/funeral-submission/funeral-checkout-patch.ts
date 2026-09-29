@@ -31,6 +31,11 @@ export function buildFuneralCheckoutPatch(
     ).trim() ||
     `Plan ${opts.cplan}`;
 
+  // Frecuencia elegida en emisión: M/T/S = fraccionado → Pagos cobra 1ª cuota y domicilia (como RCV).
+  const funeral = (snapshot.funeral ?? {}) as Record<string, unknown>;
+  const ifrecuencia = String(funeral.frecuencia ?? 'A').trim().toUpperCase().charAt(0) || 'A';
+  const fraccionado = ['M', 'T', 'S'].includes(ifrecuencia);
+
   const prevCanal =
     snapshot.metadataCanal && typeof snapshot.metadataCanal === 'object'
       ? (snapshot.metadataCanal as Record<string, unknown>)
@@ -57,11 +62,14 @@ export function buildFuneralCheckoutPatch(
     funeralSubmissionId: opts.submissionId,
     originSessionId: opts.originSessionId,
     funeralApprovedCheckout: true,
+    fraccionado,
+    checkoutPayload: { ifrecuencia, fraccionado, requireFirstPayment: fraccionado },
     checkoutRules: {
       requirePayment: true,
       lockFields: true,
       hideNavigation: true,
       onSuccess: { mode: 'emit' },
+      fraccionado,
     },
     checkout: {
       title: planLabel,
