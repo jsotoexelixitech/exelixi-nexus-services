@@ -94,6 +94,8 @@ const ssoMetadataSchema = z
     csubitem: z.string().max(80).optional(),
     /** Usuario logueado en Sis2000 (entrada al marketplace del portal). */
     xusuario: z.string().max(150).optional(),
+    /** Nombre del canal o productor (se muestra en el marketplace en lugar del código). */
+    xcanal: z.string().max(150).optional(),
     xlogin: z.string().max(80).optional(),
     crol: ssoActorCode.optional(),
     centidad: z.string().max(4).optional(),
@@ -129,6 +131,7 @@ const SSO_ROOT_METADATA_KEYS = [
   'cgestor',
   'csubitem',
   'xusuario',
+  'xcanal',
   'xlogin',
   'crol',
   'centidad',
