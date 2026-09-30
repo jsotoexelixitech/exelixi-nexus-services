@@ -43,6 +43,23 @@ function strField(row: Record<string, unknown>, ...keys: string[]): string {
   return '';
 }
 
+/** Ramos patrimoniales extra por entorno (ej. PORTAL_PATRIMONIAL_RAMOS=10,20). */
+function patrimonialRamos(): Set<number> {
+  return new Set(
+    String(process.env.PORTAL_PATRIMONIAL_RAMOS ?? '')
+      .split(',')
+      .map((v) => Number(v.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0),
+  );
+}
+
+/**
+ * Misma regla que el marketplace SysIP (resolveMarketplaceIframeConfigKey): todo entra por OCR.
+ * - RCV: xform rcv/ocr (o ramo 18 / producto 24).
+ * - Patrimoniales: xform patrimonial o ramo en PORTAL_PATRIMONIAL_RAMOS.
+ * - Resto (funerario, vida, AP, 4 en 1, combinados, salud…): flujo funerario con el
+ *   producto real (cproducto, cramo, xproducto) en la metadata del SSO.
+ */
 function inferFlow(
   xform: string,
   cramo: number,
@@ -55,8 +72,8 @@ function inferFlow(
   const xf = xform.toLowerCase();
   if (
     xf.includes('rcv') ||
+    xf.includes('ocr') ||
     xf === 'automobile' ||
-    xf === 'rcv-external' ||
     cramo === 18 ||
     cproducto === '24'
   ) {
@@ -66,22 +83,17 @@ function inferFlow(
       moduleLabel: 'OCR · inicio de flujo',
     };
   }
-  if (
-    xf.includes('funer') ||
-    cramo === 9 ||
-    cramo === 45 ||
-    cproducto === '57'
-  ) {
+  if (xf.includes('patrimon') || patrimonialRamos().has(cramo)) {
     return {
       target: 'ocr',
-      product: 'funerario',
+      product: 'patrimoniales',
       moduleLabel: 'OCR · inicio de flujo',
     };
   }
   return {
-    target: 'emision',
-    product: 'patrimoniales',
-    moduleLabel: 'Emisión',
+    target: 'ocr',
+    product: 'funerario',
+    moduleLabel: 'OCR · inicio de flujo',
   };
 }
 

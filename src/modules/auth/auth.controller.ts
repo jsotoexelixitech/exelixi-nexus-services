@@ -90,6 +90,12 @@ const ssoMetadataSchema = z
     cscanalalt: ssoActorCode.optional(),
     cgestor_in: z.string().max(120).optional(),
     cgestor: z.string().max(80).optional(),
+    /** Gestor compuesto productor-gestor (ej. "348-342"), igual que el marketplace SysIP. */
+    csubitem: z.string().max(80).optional(),
+    /** Usuario logueado en Sis2000 (entrada al marketplace del portal). */
+    xusuario: z.string().max(150).optional(),
+    xlogin: z.string().max(80).optional(),
+    crol: ssoActorCode.optional(),
     centidad: z.string().max(4).optional(),
     citem: ssoActorCode.optional(),
     cproducto: ssoActorCode.optional(),
@@ -121,6 +127,10 @@ const SSO_ROOT_METADATA_KEYS = [
   'cscanalalt',
   'cgestor_in',
   'cgestor',
+  'csubitem',
+  'xusuario',
+  'xlogin',
+  'crol',
   'centidad',
   'citem',
   'cproducto',
@@ -388,6 +398,49 @@ export class AuthController {
         });
       }
       const metadata = metaParsed.data;
+
+      // Entrada al marketplace del portal desde el menú de Sis2000: no abre un módulo,
+      // devuelve la URL del portal con un pase de un solo uso (sin pantalla de login).
+      if (target === 'marketplace') {
+        if (!apiKey) {
+          return res.status(400).json({
+            success: false,
+            message: 'El marketplace se abre desde Sis2000 con x-api-key.',
+          });
+        }
+        const portalUrl = process.env.PORTAL_PUBLIC_URL?.trim();
+        if (!portalUrl) {
+          return res.status(500).json({
+            success: false,
+            message:
+              'Marketplace no configurado: defina PORTAL_PUBLIC_URL en nexus-api.',
+          });
+        }
+        const hasCanal = Boolean(
+          metadata.citem ?? metadata.ccanalalt_in ?? metadata.cproductor,
+        );
+        if (!hasCanal) {
+          return res.status(400).json({
+            success: false,
+            error: 'invalid_metadata',
+            message:
+              'Falta el canal o productor del usuario (centidad/citem, ccanalalt_in o cproductor).',
+          });
+        }
+        const { generatePortalSsoToken } =
+          await import('../../utils/tenant-token');
+        const portalToken = generatePortalSsoToken(empresaId, metadata);
+        const redirectUrl = `${portalUrl.replace(/\/+$/, '')}/sso?nexus_token=${portalToken}`;
+        logger.info(
+          `ssoDelegate marketplace empresa=${empresaId} canal=${metadata.centidad ?? ''}/${metadata.citem ?? metadata.ccanalalt_in ?? metadata.cproductor ?? ''} cusuario=${metadata.cusuario ?? ''}`,
+        );
+        return res.json({
+          success: true,
+          redirect_url: redirectUrl,
+          empresa: empresaNombre,
+          modulo: 'Marketplace La Mundial',
+        });
+      }
 
       if (target === 'pagos' && !metadata.checkout) {
         logger.info(

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 
@@ -60,6 +61,42 @@ export function generateSsoToken(
     ...(metadata && { metadata }),
   };
   return jwt.sign(payload, env.TENANT_TOKEN_SECRET, { expiresIn: '1h' });
+}
+
+export interface PortalSsoTokenPayload {
+  type: 'portal_sso';
+  empresaId: number;
+  metadata: Record<string, unknown>;
+  jti: string;
+  exp?: number;
+}
+
+/**
+ * Pase de entrada al marketplace del portal (sso-delegate target "marketplace").
+ * Corto (10 min) y de un solo uso: el portal lo canjea por su sesión en /api/portal/sso-session.
+ */
+export function generatePortalSsoToken(
+  empresaId: number,
+  metadata: Record<string, unknown>,
+): string {
+  const payload: Omit<PortalSsoTokenPayload, 'exp'> = {
+    type: 'portal_sso',
+    empresaId,
+    metadata,
+    jti: randomUUID(),
+  };
+  return jwt.sign(payload, env.TENANT_TOKEN_SECRET, { expiresIn: '10m' });
+}
+
+export function verifyPortalSsoToken(token: string): PortalSsoTokenPayload {
+  const decoded = jwt.verify(
+    token,
+    env.TENANT_TOKEN_SECRET,
+  ) as PortalSsoTokenPayload;
+  if (decoded.type !== 'portal_sso' || !decoded.jti) {
+    throw new Error('Tipo de token inválido');
+  }
+  return decoded;
 }
 
 /**
