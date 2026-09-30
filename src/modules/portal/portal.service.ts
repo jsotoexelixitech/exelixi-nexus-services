@@ -1,12 +1,18 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
 import { findSubmoduloForSsoTarget } from './portal-sso-resolver';
-import { PortalChannelService } from './portal-channel.service';
+import {
+  PortalChannelService,
+  type ResolvedPortalCanal,
+} from './portal-channel.service';
 import {
   fetchValrepProductos,
   fetchValrepProductosMarketplace,
 } from './nest-valrep.client';
-import { mapSisProductRow } from './portal-sis-product.mapper';
+import {
+  mapSisProductRow,
+  type MappedSisProduct,
+} from './portal-sis-product.mapper';
 import logger from '../../utils/logger';
 
 export interface PortalProductDto {
@@ -34,6 +40,13 @@ export interface PortalProductDto {
   xurlPresentacion?: string;
   marketplaceUrl?: string;
   marketplaceQr?: string;
+  /** sso = módulo Exélixi vía sso-delegate · sysip = formulario nativo en marketplace SysIP (marketplaceUrl). */
+  launchMode: 'sso' | 'sysip';
+}
+
+/** Igual que el marketplace SysIP: xform con nexus/ext/external abre módulo Exélixi (iframe). */
+function isExelixiForm(xform?: string): boolean {
+  return /nexus|ext/i.test(xform ?? '');
 }
 
 function marketplaceEmissionUrlPrefix(): string | undefined {
@@ -132,13 +145,36 @@ export class PortalService {
       where: { empresaId, activo: true },
     });
 
-    const out: PortalProductDto[] = [];
-    const seen = new Set<string>();
-
+    // maproductos trae una fila por formulario (SysIP nativo y Exélixi): una tarjeta por producto.
+    const byProducto = new Map<string, MappedSisProduct>();
     for (const row of rows) {
       const mapped = mapSisProductRow(row, canal);
-      if (!mapped || seen.has(mapped.key)) continue;
-      seen.add(mapped.key);
+      if (!mapped) continue;
+      const prev = byProducto.get(mapped.cproducto);
+      if (
+        !prev ||
+        (!isExelixiForm(prev.xform) && isExelixiForm(mapped.xform))
+      ) {
+        byProducto.set(mapped.cproducto, mapped);
+      }
+    }
+
+    const out: PortalProductDto[] = [];
+    // Catálogo legacy (SP) sin xform: todo va a módulos Exélixi como antes.
+    const splitByForm = [...byProducto.values()].some((m) => m.xform);
+
+    for (const mapped of byProducto.values()) {
+      if (splitByForm && !isExelixiForm(mapped.xform)) {
+        if (!mapped.marketplaceUrl) continue;
+        out.push({
+          ...this.toDto(mapped, canal),
+          submoduloId: 0,
+          submoduloNombre: 'Marketplace La Mundial',
+          moduleLabel: 'Marketplace La Mundial',
+          launchMode: 'sysip',
+        });
+        continue;
+      }
 
       const hit = await findSubmoduloForSsoTarget(mapped.target, {
         empresaId,
@@ -163,33 +199,43 @@ export class PortalService {
       }
 
       out.push({
-        key: mapped.key,
-        label: mapped.label,
-        description: mapped.description,
-        target: mapped.target,
-        product: mapped.product,
-        defaultCramo: mapped.defaultCramo,
-        moduleLabel: mapped.moduleLabel,
+        ...this.toDto(mapped, canal),
         submoduloId: hit.id,
         submoduloNombre: hit.nombre,
-        cproducto: mapped.cproducto,
-        cramo: mapped.cramo,
-        xform: mapped.xform,
-        xlogo: mapped.xlogo,
-        cproductor: canal.cproductor,
-        cusuario: canal.cusuario,
-        centidad: canal.centidad,
-        citem: canal.citem,
-        ccanalaltIn: canal.ccanalaltIn,
-        cscanalaltIn: canal.cscanalaltIn,
-        mmontoInicial: mapped.mmontoInicial,
-        xfraccionamiento: mapped.xfraccionamiento,
-        xurlPresentacion: mapped.xurlPresentacion,
-        marketplaceUrl: mapped.marketplaceUrl,
-        marketplaceQr: mapped.marketplaceQr,
+        launchMode: 'sso',
       });
     }
 
     return out;
+  }
+
+  private toDto(
+    mapped: MappedSisProduct,
+    canal: ResolvedPortalCanal,
+  ): Omit<PortalProductDto, 'submoduloId' | 'submoduloNombre' | 'launchMode'> {
+    return {
+      key: mapped.key,
+      label: mapped.label,
+      description: mapped.description,
+      target: mapped.target,
+      product: mapped.product,
+      defaultCramo: mapped.defaultCramo,
+      moduleLabel: mapped.moduleLabel,
+      cproducto: mapped.cproducto,
+      cramo: mapped.cramo,
+      xform: mapped.xform,
+      xlogo: mapped.xlogo,
+      cproductor: canal.cproductor,
+      cusuario: canal.cusuario,
+      centidad: canal.centidad,
+      citem: canal.citem,
+      ccanalaltIn: canal.ccanalaltIn,
+      cscanalaltIn: canal.cscanalaltIn,
+      mmontoInicial: mapped.mmontoInicial,
+      xfraccionamiento: mapped.xfraccionamiento,
+      xurlPresentacion: mapped.xurlPresentacion,
+      marketplaceUrl: mapped.marketplaceUrl,
+      marketplaceQr: mapped.marketplaceQr,
+    };
   }
 }
