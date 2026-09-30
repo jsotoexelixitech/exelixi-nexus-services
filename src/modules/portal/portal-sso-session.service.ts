@@ -18,7 +18,7 @@ function consumePass(jti: string, expSec?: number) {
   }
   if (usedPasses.has(jti)) {
     throw new AppError(
-      'Este acceso ya se usó. Vuelva a entrar desde el menú de Sis2000.',
+      'Este acceso ya se usó. Vuelva a entrar desde el menú de La Mundial.',
       401,
     );
   }
@@ -53,7 +53,7 @@ export async function startPortalSsoSession(nexusToken: string) {
     pass = verifyPortalSsoToken(nexusToken);
   } catch {
     throw new AppError(
-      'El acceso desde Sis2000 venció o no es válido. Vuelva a entrar desde el menú.',
+      'El acceso venció o no es válido. Vuelva a entrar desde el menú de La Mundial.',
       401,
     );
   }
