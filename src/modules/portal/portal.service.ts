@@ -31,6 +31,8 @@ export interface PortalProductDto {
   xlogo?: string;
   cproductor?: string;
   cusuario?: string;
+  /** Gestor del canal (Sis2000); el portal lo envía como cgestor/csubitem en el SSO. */
+  cgestor?: string;
   centidad?: string;
   citem?: string;
   ccanalaltIn?: string;
@@ -227,6 +229,7 @@ export class PortalService {
       xlogo: mapped.xlogo,
       cproductor: canal.cproductor,
       cusuario: canal.cusuario,
+      cgestor: canal.cgestor,
       centidad: canal.centidad,
       citem: canal.citem,
       ccanalaltIn: canal.ccanalaltIn,
