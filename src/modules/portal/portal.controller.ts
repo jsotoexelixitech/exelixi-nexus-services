@@ -6,6 +6,7 @@ import { AuthRequest } from '../../middlewares/auth.middleware';
 import { PortalService } from './portal.service';
 import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
+import { loginPortalSis2000 } from './portal-sis2000-login.service';
 
 function portalErrorStatus(error: unknown): number {
   if (error instanceof AppError) return error.statusCode;
@@ -18,6 +19,45 @@ function portalErrorStatus(error: unknown): number {
 const portalService = new PortalService();
 
 export class PortalController {
+  /**
+   * POST /api/portal/login-sis2000
+   * Login con usuario/clave Sis2000 (mismos del marketplace). Respuesta igual a /api/auth/login.
+   */
+  loginSis2000 = async (req: Request, res: Response): Promise<void> => {
+    const { xlogin, xcontrasena } = (req.body ?? {}) as {
+      xlogin?: unknown;
+      xcontrasena?: unknown;
+    };
+    if (
+      typeof xlogin !== 'string' ||
+      typeof xcontrasena !== 'string' ||
+      !xlogin.trim() ||
+      !xcontrasena ||
+      xlogin.length > 100 ||
+      xcontrasena.length > 100
+    ) {
+      res
+        .status(400)
+        .json({ success: false, message: 'Ingrese usuario y contraseña.' });
+      return;
+    }
+    try {
+      const result = await loginPortalSis2000(xlogin, xcontrasena);
+      res.json(result);
+    } catch (error: unknown) {
+      const status = error instanceof AppError ? error.statusCode : 500;
+      if (status >= 500)
+        logger.error(`[portal] login Sis2000: ${getErrorMessage(error)}`);
+      res.status(status).json({
+        success: false,
+        message:
+          status >= 500 && !(error instanceof AppError)
+            ? 'No se pudo iniciar sesión. Intente de nuevo.'
+            : getErrorMessage(error),
+      });
+    }
+  };
+
   /**
    * GET /api/portal/me
    * Contexto de sesión (usuario + empresa) para el portal.

@@ -1,5 +1,6 @@
 import prisma from '../../config/prisma';
 import type { EmpresaPortalConfig, UsuarioPortalPerfil } from '@prisma/client';
+import { isSis2000PortalEmail } from './portal-sis2000-login.service';
 
 export type ResolvedPortalCanal = {
   centidad: string;
@@ -10,6 +11,8 @@ export type ResolvedPortalCanal = {
   ccanalaltIn?: string;
   cscanalaltIn?: string;
   resolverGestorPorEmail: boolean;
+  /** Usuario Sis2000 gestor: nest-api filtra por products/obtener. */
+  filtrarGestor: boolean;
   source: 'usuario' | 'empresa' | 'env';
 };
 
@@ -36,7 +39,7 @@ function pickStr(...vals: (string | null | undefined)[]): string | undefined {
 function mergePerfil(
   perfil: UsuarioPortalPerfil | null,
   empresaCfg: EmpresaPortalConfig | null,
-): Omit<ResolvedPortalCanal, 'source'> & {
+): Omit<ResolvedPortalCanal, 'source' | 'filtrarGestor'> & {
   source: ResolvedPortalCanal['source'];
 } {
   const resolverGestorPorEmail =
@@ -85,7 +88,12 @@ export class PortalChannelService {
       },
     });
     if (!user) throw new Error('Usuario no encontrado');
-    return mergePerfil(user.portalPerfil, user.empresa.portalConfig);
+    const merged = mergePerfil(user.portalPerfil, user.empresa.portalConfig);
+    return {
+      ...merged,
+      filtrarGestor:
+        isSis2000PortalEmail(user.email) && Boolean(user.portalPerfil?.cgestor),
+    };
   }
 
   buildValrepRequest(
@@ -97,6 +105,7 @@ export class PortalChannelService {
     cgestor_in?: string;
     cgestor?: string;
     cproductor?: string;
+    filtrar_gestor?: boolean;
   } {
     const hasExplicit =
       canal.source === 'usuario' ||
@@ -108,6 +117,7 @@ export class PortalChannelService {
         citem: canal.citem,
         cproductor: canal.cproductor,
         cgestor: canal.cgestor,
+        ...(canal.filtrarGestor ? { filtrar_gestor: true } : {}),
       };
     }
 
