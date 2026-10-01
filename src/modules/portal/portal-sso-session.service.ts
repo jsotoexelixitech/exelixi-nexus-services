@@ -164,6 +164,8 @@ export async function startPortalSsoSession(nexusToken: string) {
       sso: true,
       /** Nombre del canal enviado por Sis2000 (xcanal); el portal cae al código si no llega. */
       canal: str(m.xcanal) || null,
+      /** Rol Sis2000 del usuario (técnico vs productor): el portal lo reenvía en sso-delegate. */
+      crol: str(m.crol) || null,
     },
   };
 }
