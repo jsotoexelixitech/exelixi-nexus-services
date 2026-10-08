@@ -175,6 +175,8 @@ const SSO_TARGET_PORT: Record<string, string> = {
   formulario: '5182',
   emision: '5183',
   pagos: '5184',
+  /** Reporte de Desempeño (app-compare-ui, Vite dev). */
+  gestion: '5174',
 };
 
 /** Host producción GCIA (Srv-Gcia-proyect — subdominios *.exelixitech.com). */
@@ -183,6 +185,8 @@ const SSO_TARGET_HOST: Record<string, string> = {
   formulario: 'formulario.exelixitech.com',
   emision: 'emision.exelixitech.com',
   pagos: 'pagos.exelixitech.com',
+  /** Se sirve bajo ruta (…/gestion/), no subdominio: coincide por contenido de la URL. */
+  gestion: '/gestion',
 };
 
 /** Nombre en BD cuando la URL ya no incluye el puerto (ej. cierrelmds.exelixitech.com). */
@@ -191,6 +195,7 @@ const SSO_TARGET_NAME: Record<string, string> = {
   formulario: 'Formulario',
   emision: 'Emisi?n',
   pagos: 'Pagos',
+  gestion: 'Desempeño',
 };
 
 function isFuneralSubHint(
