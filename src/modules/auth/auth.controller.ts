@@ -90,6 +90,16 @@ const ssoMetadataSchema = z
     cscanalalt: ssoActorCode.optional(),
     cgestor_in: z.string().max(120).optional(),
     cgestor: z.string().max(80).optional(),
+    /** Gestor compuesto productor-gestor (ej. "348-342"), igual que el marketplace SysIP. */
+    csubitem: z.string().max(80).optional(),
+    /** Rol del usuario Sis2000 (selector de productor para técnicos en Emisión). */
+    crol: ssoActorCode.optional(),
+    /** Correo del usuario anfitrión (backoffice Sis2000). */
+    email: z.string().max(150).optional(),
+    /** Origen de la sesión (backoffice | marketplace): Emisión y Pagos deciden emisión pendiente y selector de productor. */
+    origen: z.string().max(40).optional(),
+    allowPendingEmission: z.union([z.boolean(), z.string().max(10)]).optional(),
+    tipoEmision: z.string().max(40).optional(),
     centidad: z.string().max(4).optional(),
     citem: ssoActorCode.optional(),
     cproducto: ssoActorCode.optional(),
@@ -121,6 +131,12 @@ const SSO_ROOT_METADATA_KEYS = [
   'cscanalalt',
   'cgestor_in',
   'cgestor',
+  'csubitem',
+  'crol',
+  'email',
+  'origen',
+  'allowPendingEmission',
+  'tipoEmision',
   'centidad',
   'citem',
   'cproducto',
