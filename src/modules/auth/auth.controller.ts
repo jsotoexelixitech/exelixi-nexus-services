@@ -102,8 +102,6 @@ const ssoMetadataSchema = z
     tipoEmision: z.string().max(40).optional(),
     /** Usuario logueado en Sis2000 (entrada al marketplace del portal). */
     xusuario: z.string().max(150).optional(),
-    /** Nombre del canal o productor (se muestra en el marketplace en lugar del código). */
-    xcanal: z.string().max(150).optional(),
     xlogin: z.string().max(80).optional(),
     centidad: z.string().max(4).optional(),
     citem: ssoActorCode.optional(),
@@ -143,7 +141,6 @@ const SSO_ROOT_METADATA_KEYS = [
   'allowPendingEmission',
   'tipoEmision',
   'xusuario',
-  'xcanal',
   'xlogin',
   'centidad',
   'citem',
