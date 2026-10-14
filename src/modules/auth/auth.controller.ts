@@ -98,6 +98,12 @@ const ssoMetadataSchema = z
     xcanal: z.string().max(150).optional(),
     xlogin: z.string().max(80).optional(),
     crol: ssoActorCode.optional(),
+    /** Correo del usuario anfitrión (backoffice Sis2000). */
+    email: z.string().max(150).optional(),
+    /** Origen de la sesión (backoffice | marketplace): Emisión y Pagos deciden emisión pendiente y selector de productor. */
+    origen: z.string().max(40).optional(),
+    allowPendingEmission: z.union([z.boolean(), z.string().max(10)]).optional(),
+    tipoEmision: z.string().max(40).optional(),
     centidad: z.string().max(4).optional(),
     citem: ssoActorCode.optional(),
     cproducto: ssoActorCode.optional(),
@@ -134,6 +140,10 @@ const SSO_ROOT_METADATA_KEYS = [
   'xcanal',
   'xlogin',
   'crol',
+  'email',
+  'origen',
+  'allowPendingEmission',
+  'tipoEmision',
   'centidad',
   'citem',
   'cproducto',
