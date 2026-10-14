@@ -56,6 +56,8 @@ export type ValrepProductosRequest = {
   cgestor_in?: string;
   cgestor?: string;
   cproductor?: string;
+  /** nest-api: limita al catálogo del gestor (SysIP products/obtener). */
+  filtrar_gestor?: boolean;
 };
 
 export type ValrepMarketplaceRequest = ValrepProductosRequest & {
@@ -134,4 +136,88 @@ export async function fetchValrepProductos(
   if (Array.isArray(data)) return data;
   if (Array.isArray(raw)) return raw as Record<string, unknown>[];
   return [];
+}
+
+export type NestPortalLoginResult = {
+  usuario: {
+    cusuario?: string | number | null;
+    xusuario?: string | null;
+    xlogin?: string | null;
+    xcorreo?: string | null;
+    bcambioclave?: boolean | number | null;
+    centidad?: string | null;
+    citem?: string | null;
+    ccorredor?: string | null;
+    cgestor?: string | null;
+    ccanalalt?: string | null;
+    cscanalalt?: string | null;
+  };
+  catalogo: {
+    centidad: string;
+    citem: string;
+    cgestor: string | null;
+    filtrar_gestor: boolean;
+  } | null;
+};
+
+/** Error de credenciales Sis2000 (no de token nest). */
+export class NestPortalLoginError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * POST nest-api /v1/portal/login (usuarios seusuariosweb, igual que SysIP signIn).
+ * Reintenta una vez si el Bearer de servicio expiró.
+ */
+export async function nestPortalLogin(
+  xlogin: string,
+  xcontrasena: string,
+): Promise<NestPortalLoginResult> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const bearer = await getNestBearer();
+    const res = await fetch(`${nestBaseUrl()}/api/v1/portal/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Bearer ${bearer}`,
+      },
+      body: JSON.stringify({ xlogin, xcontrasena }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const raw = (await res
+      .json()
+      .catch(() => ({}))) as NestEnvelope<NestPortalLoginResult> & {
+      message?: string;
+    };
+    if (res.ok && raw.data?.usuario) return raw.data;
+
+    const msg =
+      typeof raw.message === 'string'
+        ? raw.message
+        : `portal/login HTTP ${res.status}`;
+    const credentialError =
+      res.status === 401 && /usuario|contraseña|perfil/i.test(msg);
+    if (credentialError) throw new NestPortalLoginError(msg, 401);
+    if (res.status === 401 && attempt === 0) {
+      cachedBearer = null;
+      continue;
+    }
+    logger.warn(`[portal] nest portal/login: ${msg}`);
+    throw new NestPortalLoginError(
+      res.status === 403
+        ? 'La API key de nexus-api no tiene el scope portal:login en nest-api.'
+        : 'No se pudo validar el usuario en Sis2000.',
+      502,
+    );
+  }
+  throw new NestPortalLoginError(
+    'No se pudo validar el usuario en Sis2000.',
+    502,
+  );
 }

@@ -31,6 +31,8 @@ export interface CreateFuneralSubmissionInput {
   reviewerEmails?: string[];
   notifyReviewers?: boolean;
   autoApprove?: boolean;
+  /** Verde: aprobar sin link ni correo; el emisor sigue al pago en la misma sesión. */
+  directPay?: boolean;
 }
 
 const PAYMENT_LINK_TTL_HOURS = Number(
@@ -234,6 +236,10 @@ export class FuneralSubmissionService {
       return this.notifyReviewers(row.id, formatted.snapshot, input);
     }
 
+    if (input.autoApprove && input.verdict === 'emit' && input.directPay) {
+      return this.approveDirectPay(row.id, formatted.snapshot);
+    }
+
     if (input.autoApprove && input.verdict === 'emit') {
       try {
         const approved = await this.approve(row.id, {
@@ -276,6 +282,32 @@ export class FuneralSubmissionService {
       },
     });
     return row ? formatRow(row) : null;
+  }
+
+  /**
+   * Semáforo verde con pago en la misma sesión: queda aprobada (fuera de la cola de mesa)
+   * sin link de pago ni correo al tomador.
+   */
+  private async approveDirectPay(id: string, snapshot: unknown) {
+    const reviewedAt = new Date();
+    const row = await prisma.funeralSubmission.update({
+      where: { id },
+      data: {
+        estado: 'approved',
+        reviewedBy: 'auto-score',
+        reviewedAt,
+        snapshotJson: {
+          ...asSnapshot(snapshot),
+          reviewDecision: {
+            action: 'approved',
+            mode: 'direct-pay',
+            reviewedBy: 'auto-score',
+            reviewedAt: reviewedAt.toISOString(),
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+    return formatRow(row);
   }
 
   async approve(id: string, opts: { reviewedBy?: string; empresaId?: number }) {

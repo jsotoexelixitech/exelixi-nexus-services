@@ -110,6 +110,7 @@ router.post('/', apiKeyGuard, async (req: Request, res: Response) => {
         : [],
       notifyReviewers: body.notifyReviewers === true,
       autoApprove: body.autoApprove === true,
+      directPay: body.directPay === true,
     });
     res.status(201).json({ success: true, data: created });
   } catch (err: unknown) {
