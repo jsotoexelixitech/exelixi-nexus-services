@@ -58,11 +58,6 @@ function marketplaceEmissionUrlPrefix(): string | undefined {
   return raw || undefined;
 }
 
-/** PORTAL_INCLUDE_SIS2000_FORMS=true vuelve a mostrar productos sin fila Exélixi (abren Sis2000). */
-function includeSis2000Forms(): boolean {
-  return process.env.PORTAL_INCLUDE_SIS2000_FORMS === 'true';
-}
-
 function useMarketplaceCatalog(): boolean {
   return process.env.PORTAL_USE_LEGACY_PRODUCTOS !== 'true';
 }
@@ -172,9 +167,7 @@ export class PortalService {
 
     for (const mapped of byProducto.values()) {
       if (splitByForm && !isExelixiForm(mapped.xform)) {
-        // El marketplace nuevo solo muestra lo que emite por OCR (fila Exélixi en maproductos);
-        // los formularios propios de Sis2000 siguen en su marketplace.
-        if (!includeSis2000Forms() || !mapped.marketplaceUrl) continue;
+        if (!mapped.marketplaceUrl) continue;
         out.push({
           ...this.toDto(mapped, canal),
           submoduloId: 0,
