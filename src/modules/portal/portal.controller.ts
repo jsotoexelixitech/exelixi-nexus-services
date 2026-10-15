@@ -7,6 +7,7 @@ import { PortalService } from './portal.service';
 import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
 import { loginPortalSis2000 } from './portal-sis2000-login.service';
+import { startPortalSsoSession } from './portal-sso-session.service';
 
 function portalErrorStatus(error: unknown): number {
   if (error instanceof AppError) return error.statusCode;
@@ -53,6 +54,39 @@ export class PortalController {
         message:
           status >= 500 && !(error instanceof AppError)
             ? 'No se pudo iniciar sesión. Intente de nuevo.'
+            : getErrorMessage(error),
+      });
+    }
+  };
+
+  /**
+   * POST /api/portal/sso-session
+   * Canjea el pase de Sis2000 (sso-delegate target "marketplace") por la sesión del portal.
+   */
+  ssoSession = async (req: Request, res: Response): Promise<void> => {
+    const { nexus_token } = (req.body ?? {}) as { nexus_token?: unknown };
+    if (
+      typeof nexus_token !== 'string' ||
+      !nexus_token.trim() ||
+      nexus_token.length > 4096
+    ) {
+      res
+        .status(400)
+        .json({ success: false, message: 'Falta el acceso de Sis2000.' });
+      return;
+    }
+    try {
+      const result = await startPortalSsoSession(nexus_token.trim());
+      res.json(result);
+    } catch (error: unknown) {
+      const status = error instanceof AppError ? error.statusCode : 500;
+      if (status >= 500)
+        logger.error(`[portal] SSO Sis2000: ${getErrorMessage(error)}`);
+      res.status(status).json({
+        success: false,
+        message:
+          status >= 500 && !(error instanceof AppError)
+            ? 'No se pudo abrir el marketplace. Intente de nuevo.'
             : getErrorMessage(error),
       });
     }
