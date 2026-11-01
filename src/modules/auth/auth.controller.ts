@@ -10,6 +10,11 @@ import {
   appendProductToUrl,
   resolveSsoFlowProduct,
 } from '../../utils/flow-product';
+import {
+  ADMIN_ROLE_ID,
+  ADMIN_SSO_BYPASS_ENV,
+  adminPuedeSaltarValidacion,
+} from './sso-admin-bypass';
 
 /** Línea de detalle en checkout Pagos (metadata SSO). */
 const ssoCheckoutLineSchema = z.object({
@@ -382,11 +387,19 @@ export class AuthController {
             where: { id: decoded.empresaId },
             select: { id: true, nombre: true, activo: true },
           });
-          // Allow roleId 1 (admin) to pass even if empresa is inactive or missing, for debugging purposes
-          if (!empresa && decoded.roleId !== 1)
-            throw new Error('Empresa inactiva');
-          if (empresa && !empresa.activo && decoded.roleId !== 1)
-            throw new Error('Empresa inactiva');
+          // El admin (roleId 1) solo salta la validación de empresa con
+          // NEXUS_ALLOW_ADMIN_SSO_BYPASS=true (dev). Sin la variable se rechaza igual que un usuario normal.
+          if (!empresa || !empresa.activo) {
+            const bypass = adminPuedeSaltarValidacion(decoded.roleId);
+            if (!bypass) {
+              if (decoded.roleId === ADMIN_ROLE_ID) {
+                logger.warn(
+                  `ssoDelegate: admin bypass deshabilitado (${ADMIN_SSO_BYPASS_ENV} no es true); se rechaza roleId=${decoded.roleId} empresaId=${decoded.empresaId} empresa=${empresa ? 'inactiva' : 'inexistente'} target=${target}`,
+                );
+              }
+              throw new Error('Empresa inactiva');
+            }
+          }
 
           empresaId = decoded.empresaId;
           empresaNombre = empresa ? empresa.nombre : 'Admin Bypass';
@@ -500,10 +513,16 @@ export class AuthController {
         select: { tenantToken: true, activo: true },
       });
 
-      const isAdmin = (req as any).userRole === 1;
+      const userRole = (req as any).userRole as number | undefined;
 
       if (!empresaSubmodulo || !empresaSubmodulo.activo) {
-        if (!isAdmin) {
+        // Solo el admin con NEXUS_ALLOW_ADMIN_SSO_BYPASS=true salta el chequeo de submódulo activo.
+        if (!adminPuedeSaltarValidacion(userRole)) {
+          if (userRole === ADMIN_ROLE_ID) {
+            logger.warn(
+              `ssoDelegate: admin bypass deshabilitado (${ADMIN_SSO_BYPASS_ENV} no es true); se rechaza roleId=${userRole} empresaId=${empresaId} submoduloId=${submodulo.id} target=${target} motivo=${empresaSubmodulo ? 'submodulo inactivo' : 'sin vinculo empresa-submodulo'}`,
+            );
+          }
           return res.status(403).json({
             success: false,
             message: `El servicio "${target}" no está activado para esta empresa.`,
