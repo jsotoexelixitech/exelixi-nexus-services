@@ -40,5 +40,55 @@ describe('buildFuneralCheckoutPatch', () => {
     expect(patch.fraccionado).toBe(false);
     expect((patch.checkoutPayload as Record<string, unknown>).ifrecuencia).toBe('A');
   });
+
+  it('frecuencia anual cobra la prima anual completa (sin cambios)', () => {
+    const patch = buildFuneralCheckoutPatch(snapshot, { submissionId: 'sub-4', cplan: '7' });
+    const checkout = patch.checkout as Record<string, unknown>;
+    expect(checkout.totalVes).toBe(1000);
+    expect(checkout.totalUsd).toBe(10);
+    expect(checkout.exchangeRate).toBe(100);
+    expect(checkout.subtitle).toBe('Seguro funerario · pago en línea');
+  });
+
+  it.each([
+    ['M', 12, 1, 100],
+    ['T', 4, 3, 300],
+    ['S', 2, 6, 600],
+  ])(
+    'frecuencia %s cobra la 1ª de %i cuotas (no la prima anual)',
+    (frecuencia, cuotas, cuotaUsd, cuotaVes) => {
+      const patch = buildFuneralCheckoutPatch(
+        { ...snapshot, quote: { mprima: 1200, mprimaext: 12, ptasa: 100 }, funeral: { frecuencia } },
+        { submissionId: 'sub-5', cplan: '7' },
+      );
+      const checkout = patch.checkout as Record<string, unknown>;
+      expect(patch.fraccionado).toBe(true);
+      expect(checkout.totalUsd).toBe(cuotaUsd);
+      expect(checkout.totalVes).toBe(cuotaVes);
+      expect(checkout.subtitle).toBe(`Seguro funerario · 1ª de ${cuotas} cuotas`);
+    },
+  );
+
+  it('mensual aplica paridad Sis2000 ROUND((ROUND(mprimaext,2)/cuotas)*ptasa,2)', () => {
+    const patch = buildFuneralCheckoutPatch(
+      { ...snapshot, quote: { mprima: 4567.89, mprimaext: 123.456, ptasa: 36.99 }, funeral: { frecuencia: 'M' } },
+      { submissionId: 'sub-6', cplan: '7' },
+    );
+    const checkout = patch.checkout as Record<string, unknown>;
+    // round2(123.456)=123.46 → /12 = 10.288333… → ×36.99 = 380.5654… → 380.57
+    expect(checkout.totalVes).toBe(380.57);
+    expect(checkout.totalUsd).toBe(10.29);
+  });
+
+  it('mensual sin mprimaext ni ptasa divide la prima entre las cuotas (mprimaext cae a mprima)', () => {
+    const patch = buildFuneralCheckoutPatch(
+      { ...snapshot, quote: { mprima: 1200 }, funeral: { frecuencia: 'M' } },
+      { submissionId: 'sub-7', cplan: '7' },
+    );
+    const checkout = patch.checkout as Record<string, unknown>;
+    expect(checkout.totalVes).toBe(100);
+    expect(checkout.totalUsd).toBe(100);
+    expect(checkout.exchangeRate).toBe(1);
+  });
 });
 
