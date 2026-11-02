@@ -6,6 +6,7 @@ import { AuthRequest } from '../../middlewares/auth.middleware';
 import { AppError } from '../../utils/app-error';
 import { getErrorMessage } from '../../utils/error-handler';
 import logger from '../../utils/logger';
+import { parseSsoSubmoduloId } from './sso-submodulo';
 import {
   appendProductToUrl,
   resolveSsoFlowProduct,
@@ -468,11 +469,38 @@ export class AuthController {
 
       // No need to query empresa again, we already have empresaId and empresaNombre
 
+      // submoduloId explícito (opcional): entrada fija para integradores server-to-server.
+      const subParsed = parseSsoSubmoduloId(
+        (req.body as Record<string, unknown>)?.submoduloId,
+      );
+      if (!subParsed.ok) {
+        return res.status(400).json({
+          success: false,
+          error: 'invalid_request',
+          message: subParsed.message,
+        });
+      }
+
       const productHint = resolveSsoFlowProduct(metadata);
-      const submodulo = await findSubmoduloForSsoTarget(target, {
-        empresaId,
-        product: productHint,
-      });
+      let submodulo: { id: number; url: string | null; nombre: string } | null;
+      if (subParsed.submoduloId) {
+        const row = await prisma.submodulo.findUnique({
+          where: { id: subParsed.submoduloId },
+          select: { id: true, url: true, nombre: true, activo: true },
+        });
+        if (!row || !row.activo || !row.url) {
+          return res.status(404).json({
+            success: false,
+            message: `El submódulo ${subParsed.submoduloId} no existe, está inactivo o no tiene URL.`,
+          });
+        }
+        submodulo = { id: row.id, url: row.url, nombre: row.nombre };
+      } else {
+        submodulo = await findSubmoduloForSsoTarget(target, {
+          empresaId,
+          product: productHint,
+        });
+      }
 
       if (!submodulo) {
         return res.status(404).json({
@@ -567,6 +595,8 @@ export class AuthController {
         success: true,
         redirect_url: redirectUrl,
         empresa: empresaNombre,
+        empresa_id: empresaId,
+        submodulo_id: submodulo.id,
         modulo: submodulo.nombre,
       });
     } catch (error: unknown) {
