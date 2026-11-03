@@ -120,11 +120,7 @@ export class PublicLinksController {
       product !== 'rcv' && metadata.product !== product
         ? { ...metadata, product }
         : metadata;
-    const token = generateSsoToken(
-      link.empresaId,
-      submodulo.id,
-      tokenMetadata,
-    );
+    const token = generateSsoToken(link.empresaId, submodulo.id, tokenMetadata);
     const redirectUrl = appendProductToUrl(
       buildAccessUrl(submodulo.url, token),
       product,
