@@ -69,7 +69,7 @@ const ssoActorCode = z.union([z.string(), z.number()]);
 
 /** Schema de metadata permitida en el token SSO.
  *  Campos desconocidos se eliminan con strip() — no quitar actor Sis2000. */
-const ssoMetadataSchema = z
+export const ssoMetadataSchema = z
   .object({
     cproductor: ssoActorCode.optional(),
     canal: z.string().max(50).optional(),
@@ -246,7 +246,7 @@ function ssoSubHintScore(
  * Si hay empresa: solo entre los que ella tiene activos.
  * Si product=funerario/patrimoniales: prioriza esa cadena (no la de RCV).
  */
-async function findSubmoduloForSsoTarget(
+export async function findSubmoduloForSsoTarget(
   target: string,
   opts?: {
     empresaId?: number;

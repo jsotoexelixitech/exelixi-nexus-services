@@ -30,6 +30,7 @@ import productConfigRoutes from './modules/config/product-config.routes';
 import emisionRoutes from './modules/emision/emision.routes';
 import funeralSubmissionRoutes from './modules/funeral-submission/funeral-submission.routes';
 import portalRoutes from './modules/portal/portal.routes';
+import publicLinksRoutes from './modules/public-links/public-links.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -115,6 +116,9 @@ app.use('/api/funeral-submissions', funeralSubmissionRoutes);
 
 // Portal operadores La Mundial — solo JWT Bearer (authenticate en el router)
 app.use('/api/portal', portalRoutes);
+
+// Links directos de emisión (web La Mundial) — sin API key; lista blanca NEXUS_LINKS_DIRECTOS + rate limit propio
+app.use('/api/public', publicLinksRoutes);
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);
