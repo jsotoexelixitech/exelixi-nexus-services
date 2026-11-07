@@ -289,6 +289,8 @@ export function createFakePrisma() {
     'emision',
     'usuarioPortalPerfil',
     'usuario',
+    'funeralSubmission',
+    'empresa',
   ];
   const client: Record<string, any> = {};
   for (const m of models) client[m] = makeModel(m, store, seq);

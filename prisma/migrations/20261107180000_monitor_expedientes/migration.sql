@@ -26,6 +26,7 @@ CREATE TABLE "mkt_expediente" (
     "mexp_snapshot" JSONB,
     "mexp_carpeta" TEXT,
     "mexp_origen" VARCHAR(16) NOT NULL DEFAULT 'emision',
+    "mexp_info_documental" BOOLEAN NOT NULL DEFAULT true,
     "mexp_etapa_enviada" INTEGER NOT NULL DEFAULT -1,
     "mexp_intentos" INTEGER NOT NULL DEFAULT 0,
     "mexp_ultimo_envio" TIMESTAMP(6),

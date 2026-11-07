@@ -111,7 +111,8 @@ beforeEach(() => {
           nombre: 'LUIS',
           apellido: 'PEREZ',
         },
-        confianza: 0.95,
+        confianza: 1,
+        proveedor: 'test',
       },
     },
   };
@@ -212,6 +213,53 @@ describe('carga del vendedor', () => {
     expect(req(b, 'licencia').estado).toBe('observado');
   });
 
+  it('automática: confianza 0.5 con datos que coinciden → recibido (sin certeza)', async () => {
+    conOcr();
+    await svc.updateConfig(
+      { validacion: 'automatica', motivo: 'probar' } as any,
+      'portal:1',
+    );
+    ocrRespuesta.body.ocr.confianza = 0.5;
+    const id = await crear('P-7');
+    await request(app)
+      .post(`/api/expedientes/${id}/upload`)
+      .set(AUTH)
+      .field('tipo', 'cedula')
+      .attach('file', JPG, 'c.jpg');
+    expect(req(id, 'cedula').estado).toBe('recibido');
+    ocrRespuesta.body.ocr = {
+      extraido: {},
+      confianza: 0,
+      motivo: 'Imagen borrosa',
+    };
+    await request(app)
+      .post(`/api/expedientes/${id}/upload`)
+      .set(AUTH)
+      .field('tipo', 'licencia')
+      .attach('file', JPG, 'l.jpg');
+    expect(req(id, 'licencia')).toMatchObject({
+      estado: 'observado',
+      motivo: 'Imagen borrosa',
+    });
+  });
+
+  it('OCR rechaza el archivo (422): se informa al usuario y no cambia nada', async () => {
+    conOcr();
+    ocrRespuesta = {
+      status: 422,
+      body: { ok: false, message: 'No es un documento' },
+    };
+    const id = await crear('P-8');
+    const r = await request(app)
+      .post(`/api/expedientes/${id}/upload`)
+      .set(AUTH)
+      .field('tipo', 'cedula')
+      .attach('file', JPG, 'c.jpg');
+    expect(r.status).toBe(422);
+    expect(r.body.message).toBe('No es un documento');
+    expect(req(id, 'cedula').estado).toBe('faltante');
+  });
+
   it('OCR caído: 502 y el requisito no cambia', async () => {
     conOcr();
     ocrRespuesta = { status: 500, body: { ok: false } };
@@ -266,11 +314,11 @@ describe('enlace público del asegurado', () => {
     const r = await request(app).get(`/api/expedientes/publico/${token}`);
     expect(r.status).toBe(200);
     expect(r.body.data.nombre).toBe('Luis');
-    expect(r.body.data.polizas[0].poliza).toMatch(/\*+5678$/);
-    expect(r.body.data.pendientes).toEqual([
-      'cedula',
-      'licencia',
-      'certificado',
+    expect(r.body.data.polizaMasked).toMatch(/\*+5678$/);
+    expect(r.body.data.requisitos.map((x: any) => [x.tipo, x.estado])).toEqual([
+      ['cedula', 'faltante'],
+      ['licencia', 'faltante'],
+      ['certificado', 'faltante'],
     ]);
     const json = JSON.stringify(r.body);
     expect(json).not.toContain('11222333');
@@ -295,6 +343,14 @@ describe('enlace público del asegurado', () => {
       .field('tipo', 'cedula')
       .attach('file', JPG, 'c.jpg');
     expect(up.status).toBe(404);
+  });
+
+  it('módulo apagado: la página pública recibe 503', async () => {
+    delete process.env.EXPEDIENTES_ENABLED;
+    const r = await request(app).get(
+      `/api/expedientes/publico/${generarToken().token}`,
+    );
+    expect(r.status).toBe(503);
   });
 
   it('enlace vencido → 410', async () => {

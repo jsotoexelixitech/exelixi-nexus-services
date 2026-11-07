@@ -89,9 +89,14 @@ function idParam(req: Request): number {
   return id;
 }
 
-// Apagado por defecto: sin la variable, el módulo no existe.
-router.use((_req: Request, res: Response, next: NextFunction) => {
-  if (!expedientesEnabled()) return fail(res, 404, 'Ruta no encontrada');
+// Apagado por defecto: sin la variable, el módulo no existe (404). La página
+// pública recibe 503 para mostrar "servicio no disponible" en vez de "enlace inválido".
+router.use((req: Request, res: Response, next: NextFunction) => {
+  if (!expedientesEnabled()) {
+    return req.path.startsWith('/publico/')
+      ? fail(res, 503, 'Servicio no disponible')
+      : fail(res, 404, 'Ruta no encontrada');
+  }
   res.setHeader('Cache-Control', 'no-store');
   next();
 });
@@ -168,7 +173,7 @@ router.get(
   internoLimiter,
   authenticate,
   requirePortalAdmin,
-  h(async (_req, res) => ok(res, await svc.getConfig())),
+  h(async (_req, res) => ok(res, await svc.getConfigConCambios())),
 );
 
 router.put(

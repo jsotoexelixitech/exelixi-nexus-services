@@ -143,7 +143,15 @@ export async function leerMultipart(
 
 export interface OcrDocumentoResultado {
   ref: string | null;
-  ocr: { extraido?: Record<string, unknown>; confianza?: number } | null;
+  /** 'poliza' = carpeta de la póliza; 'pendiente' = carpeta temporal del OCR. */
+  ubicacion: string | null;
+  ocr: {
+    extraido?: Record<string, unknown>;
+    /** 0 | 0.5 | 1 */
+    confianza?: number;
+    motivo?: string;
+    proveedor?: string;
+  } | null;
 }
 
 export class OcrNoConfiguradoError extends Error {
@@ -152,10 +160,27 @@ export class OcrNoConfiguradoError extends Error {
   }
 }
 
+/** 400 / 413 / 422 del OCR: el archivo es el problema (se informa al usuario). */
+export class OcrRechazoError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function mensajeOcr(body: Record<string, unknown>, fallback: string): string {
+  const m = body.message ?? body.error;
+  return typeof m === 'string' && m.trim() ? m.trim().slice(0, 200) : fallback;
+}
+
 /**
  * POST {OCR_INTERNAL_URL}/api/internal/expedientes/documento
- * multipart: file, tipo, cnpoliza, cnrecibo, documento, empresaId
- * header x-expediente-key. Responde { ok, ref, ocr: { extraido, confianza } }.
+ * multipart: file, tipo, cnpoliza, cnrecibo, documento, empresaId, empresaNombre?
+ * header x-expediente-key. Responde { ok, ref, ubicacion, ocr: { extraido, confianza, motivo?, proveedor } }.
+ * Errores: 401 / 503 (sin clave) = técnicos; 400 / 413 / 422 = archivo rechazado.
+ * La lectura puede tardar decenas de segundos: timeout 90 s.
  */
 export async function enviarDocumentoAlOcr(params: {
   file: ArchivoCargado;
@@ -164,6 +189,7 @@ export async function enviarDocumentoAlOcr(params: {
   cnrecibo?: string | null;
   documento?: string | null;
   empresaId: number;
+  empresaNombre?: string | null;
 }): Promise<OcrDocumentoResultado> {
   const cfg = ocrInternalConfig();
   if (!cfg) throw new OcrNoConfiguradoError();
@@ -180,6 +206,7 @@ export async function enviarDocumentoAlOcr(params: {
   form.append('cnrecibo', params.cnrecibo ?? '');
   form.append('documento', params.documento ?? '');
   form.append('empresaId', String(params.empresaId));
+  if (params.empresaNombre) form.append('empresaNombre', params.empresaNombre);
 
   const res = await fetch(`${cfg.url}/api/internal/expedientes/documento`, {
     method: 'POST',
@@ -188,6 +215,15 @@ export async function enviarDocumentoAlOcr(params: {
     signal: AbortSignal.timeout(90_000),
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (res.status === 413) {
+    throw new OcrRechazoError(413, 'El archivo supera el máximo de 25 MB.');
+  }
+  if (res.status === 400 || res.status === 422) {
+    throw new OcrRechazoError(
+      res.status,
+      mensajeOcr(body, 'El documento no es válido. Intente con otra imagen.'),
+    );
+  }
   if (!res.ok || body.ok === false) {
     throw new Error(`OCR respondió HTTP ${res.status}`);
   }
@@ -195,5 +231,9 @@ export async function enviarDocumentoAlOcr(params: {
     body.ocr && typeof body.ocr === 'object'
       ? (body.ocr as OcrDocumentoResultado['ocr'])
       : null;
-  return { ref: typeof body.ref === 'string' ? body.ref : null, ocr };
+  return {
+    ref: typeof body.ref === 'string' ? body.ref : null,
+    ubicacion: typeof body.ubicacion === 'string' ? body.ubicacion : null,
+    ocr,
+  };
 }

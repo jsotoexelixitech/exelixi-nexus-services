@@ -25,10 +25,9 @@ export interface BrandedContent {
 
 export type ResultadoEnvio =
   | 'enviado'
-  | 'fallido'
+  | 'error'
   | 'bloqueado_whitelist'
   | 'sin_correo'
-  | 'sin_destinatarios'
   | 'excluido';
 
 export interface EntregaResultado {
@@ -123,7 +122,7 @@ export async function entregarCorreo(
       `[expedientes-mail] envío fallido: ${r.error ?? 'sin detalle'}`,
     );
     return {
-      resultado: 'fallido',
+      resultado: 'error',
       destinatarioMasked: maskedPermitidos,
       error: recortar(String(r.error ?? 'error'), 300),
     };
@@ -238,6 +237,7 @@ export interface ResumenNocturno {
   totalCartera: number;
   totalCompletos: number;
   totalIncompletos: number;
+  sinInformacion: number;
   sinVinculo: number;
   errores: number;
   pendientesPago: number;
@@ -267,12 +267,13 @@ export function correoResumenNocturno(r: ResumenNocturno): BrandedContent {
         label: 'Entregados (aceptados por el servidor)',
         value: n(r.entregados),
       },
-      { label: 'Fallidos', value: n(r.rebotes) },
+      { label: 'Con error o rebotados', value: n(r.rebotes) },
       { label: '«No enviar correos»', value: n(r.excluidos) },
       {
         label: `Acumulado cartera ${r.areasLabel}`,
         value: `${r.totalCartera} (${r.totalCompletos} completos, ${r.totalIncompletos} incompletos)`,
       },
+      { label: 'Sin información documental', value: n(r.sinInformacion) },
       { label: 'Sin vínculo documental', value: n(r.sinVinculo) },
       { label: 'Errores técnicos', value: n(r.errores) },
     ],

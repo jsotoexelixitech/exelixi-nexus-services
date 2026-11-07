@@ -99,6 +99,86 @@ describe('creación desde el feed emision', () => {
     expect(rows[0].area).toBe('desconocida');
     expect(rows[0].aseguradoDocumento).toBe('12345678');
     expect(rows[0].estadoPago).toBe('pagada');
+    // Sin campo `expediente` no se sabe qué falta: no es incompleto.
+    expect(rows[0].estadoDocumental).toBe('sin_informacion');
+    expect(rows[1].estadoDocumental).toBe('sin_informacion');
+    const reqs = db.mktExpedienteRequisito._rows();
+    expect(reqs.every((r: any) => r.estado === 'sin_informacion')).toBe(true);
+    const ind = await svc.indicadores({});
+    expect(ind).toMatchObject({ incompletos: 0, sinInformacion: 2 });
+  });
+
+  it('personas con documentosEnWizard=false: sin información, no faltante', async () => {
+    await svc.registrarDesdeEmision(emision(3, 'P-003', { producto: 'Vida' }), {
+      expediente: payloadCanal({
+        producto: 'personas',
+        documentosEnWizard: false,
+        xlogin: null,
+        cproductor: '80080',
+        cproducto: 'VIDA1',
+        documentos: { cedula: { recibido: false, ref: null, url: null } },
+        snapshot: { fdesde: null, fhasta: null },
+      }),
+    });
+    const exp = db.mktExpediente._rows()[0];
+    expect(exp.infoDocumental).toBe(false);
+    expect(exp.estadoDocumental).toBe('sin_informacion');
+    expect(exp.area).toBe('canal');
+    const lista = await svc.listar({ estadoDoc: 'incompleto' });
+    expect(lista.total).toBe(0);
+  });
+
+  it('personas: cruza con funeral_submission si el snapshot trae documents', async () => {
+    await db.funeralSubmission.create({
+      data: {
+        empresaId: 7,
+        cnpoliza: 'P-004',
+        createdAt: new Date(),
+        snapshotJson: {
+          documents: {
+            cedula: { status: 'done', file: { url: 'ocr/x/cedula.jpg' } },
+          },
+        },
+      },
+    });
+    await svc.registrarDesdeEmision(emision(4, 'P-004', { producto: 'Vida' }), {
+      expediente: payloadCanal({
+        producto: 'personas',
+        documentosEnWizard: false,
+      }),
+    });
+    const exp = db.mktExpediente._rows()[0];
+    expect(exp.infoDocumental).toBe(true);
+    expect(exp.estadoDocumental).toBe('incompleto');
+    const req = db.mktExpedienteRequisito._rows()[0];
+    expect(req).toMatchObject({
+      estado: 'recibido',
+      origen: 'mesa_tecnica',
+      ref: 'ocr/x/cedula.jpg',
+    });
+  });
+
+  it('un registro posterior con documentos pasa sin_informacion a faltante', async () => {
+    const e = emision(5, 'P-005');
+    await svc.registrarDesdeEmision(e);
+    expect(db.mktExpediente._rows()[0].estadoDocumental).toBe(
+      'sin_informacion',
+    );
+    await svc.registrarDesdeEmision(e, {
+      expediente: payloadCanal({
+        documentosEnWizard: true,
+        documentos: { cedula: { recibido: true, url: 'ocr/p5/cedula.jpg' } },
+      }),
+    });
+    const reqs = db.mktExpedienteRequisito._rows();
+    expect(reqs.find((r: any) => r.tipo === 'cedula')).toMatchObject({
+      estado: 'recibido',
+      ref: 'ocr/p5/cedula.jpg',
+    });
+    expect(reqs.find((r: any) => r.tipo === 'licencia').estado).toBe(
+      'faltante',
+    );
+    expect(db.mktExpediente._rows()[0].estadoDocumental).toBe('incompleto');
   });
 
   it('documento recibido en la emisión queda recibido, no validado (sigue incompleto)', async () => {
@@ -278,10 +358,23 @@ describe('lectura', () => {
     );
     expect(item.asegurado.emailMasked).toBe('an***@test.com');
     expect(item.asegurado.email).toBeUndefined();
-    const grupos = await svc.listar({ agrupar: 'asegurado' });
-    expect(grupos.total).toBe(1);
-    expect((grupos.items[0] as any).polizas).toHaveLength(2);
+    // agrupar=asegurado: misma lista plana, ordenada por asegurado.
+    await svc.registrarDesdeEmision(emision(3, 'P-3'), {
+      expediente: payloadCanal({
+        asegurado: { tipoDoc: 'V', documento: '10000000', nombre: 'Beto' },
+      }),
+    });
+    const porAsegurado = await svc.listar({ agrupar: 'asegurado' });
+    expect(porAsegurado.total).toBe(3);
+    const orden = porAsegurado.items.map((i: any) => i.cnpoliza);
+    // V10000000 (Beto) antes que V12345678 (Ana, sus dos pólizas juntas).
+    expect(orden[0]).toBe('P-3');
+    expect(orden.slice(1).sort()).toEqual(['P-1', 'P-2']);
+    // Filtro de área con el código del SSO.
+    expect((await svc.listar({ area: 'C' })).total).toBe(3);
+    expect((await svc.listar({ area: 'G' })).total).toBe(0);
     const det = await svc.detalle(item.id);
+    expect(det.validacion).toBe('manual');
     expect(det.eventos.length).toBeGreaterThan(0);
     expect(Array.isArray(det.notificaciones)).toBe(true);
     expect(Array.isArray(det.cambios)).toBe(true);

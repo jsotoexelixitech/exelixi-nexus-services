@@ -2,27 +2,36 @@ import { z } from 'zod';
 import { horaValida } from './expedientes.domain';
 
 const str = (max: number) => z.string().trim().max(max);
+/** Campo tolerante: si viene mal, queda null y no tumba el resto del payload. */
 const optStr = (max: number) =>
   z
     .union([z.string(), z.number()])
     .transform((v) => String(v).trim())
     .pipe(z.string().max(max))
     .optional()
-    .nullable();
+    .nullable()
+    .catch(null);
+const optBool = z.boolean().optional().nullable().catch(null);
 
-/** Campo opcional `expediente` del registro de emisión (contrato v1). Tolerante. */
+/**
+ * Campo opcional `expediente` del registro de emisión (contrato v1 + ajustes de Emisión):
+ * cproductor, cproducto, documentosEnWizard y documentos[tipo] = { recibido, ref, url }.
+ */
 export const expedientePayloadSchema = z
   .object({
-    version: z.coerce.number().optional(),
+    version: z.coerce.number().optional().catch(undefined),
     centidad: optStr(1),
     citem: optStr(32),
     cgestor: optStr(50),
     ccanalalt: optStr(32),
     cusuario: optStr(32),
     xlogin: optStr(100),
+    cproductor: optStr(32),
+    cproducto: optStr(32),
     producto: optStr(32),
-    cramo: z.coerce.number().int().optional().nullable(),
+    cramo: z.coerce.number().int().optional().nullable().catch(null),
     estadoPago: optStr(16),
+    documentosEnWizard: optBool,
     asegurado: z
       .object({
         tipoDoc: optStr(2),
@@ -34,19 +43,24 @@ export const expedientePayloadSchema = z
       })
       .partial()
       .optional()
-      .nullable(),
-    snapshot: z.record(z.unknown()).optional().nullable(),
+      .nullable()
+      .catch(null),
+    snapshot: z.record(z.unknown()).optional().nullable().catch(null),
     documentos: z
       .record(
         z
           .object({
-            recibido: z.boolean().optional(),
+            recibido: optBool,
             ref: optStr(500),
+            url: optStr(1000),
           })
-          .partial(),
+          .partial()
+          .nullable()
+          .catch(null),
       )
       .optional()
-      .nullable(),
+      .nullable()
+      .catch(null),
     carpetaExpediente: optStr(500),
   })
   .partial();
@@ -59,39 +73,37 @@ const tipoRequisito = z
   .regex(/^[a-z_]{2,32}$/, 'Tipo de requisito inválido');
 
 export const configUpdateSchema = z.object({
-  body: z
-    .object({
-      motivo: str(500).min(3, 'El motivo es obligatorio'),
-      alcance: z
-        .object({
-          canales: z.boolean(),
-          gestores: z.boolean(),
-          productores: z.boolean(),
-          desconocida: z.boolean(),
-        })
-        .partial()
-        .optional(),
-      validacion: z.enum(['manual', 'automatica']).optional(),
-      cadenciaDias: z
-        .array(z.number().int().min(0).max(90))
-        .min(1)
-        .max(10)
-        .refine(
-          (a) => a.every((v, i) => i === 0 || v > a[i - 1]),
-          'cadenciaDias debe ser ascendente y sin repetidos',
-        )
-        .optional(),
-      destinatariosResumen: z
-        .array(z.string().trim().email().max(200))
-        .max(20)
-        .optional(),
-      horaDiaria: z.string().refine(horaValida, 'Hora HH:MM').optional(),
-      horaResumen: z.string().refine(horaValida, 'Hora HH:MM').optional(),
-      requisitosPorProducto: z
-        .record(z.array(tipoRequisito).max(10))
-        .optional(),
-    })
-    .strict(),
+  body: z.object({
+    motivo: str(500).min(3, 'El motivo es obligatorio'),
+    alcance: z
+      .object({
+        canales: z.boolean(),
+        gestores: z.boolean(),
+        productores: z.boolean(),
+        desconocida: z.boolean(),
+      })
+      .partial()
+      .optional(),
+    validacion: z.enum(['manual', 'automatica']).optional(),
+    // Se ordena y se quitan repetidos antes de validar.
+    cadenciaDias: z
+      .preprocess(
+        (v) =>
+          Array.isArray(v)
+            ? Array.from(new Set(v.map(Number))).sort((a, b) => a - b)
+            : v,
+        z.array(z.number().int().min(0).max(90)).min(1).max(10),
+      )
+      .optional(),
+    destinatariosResumen: z
+      .array(z.string().trim().email().max(200))
+      .max(20)
+      .optional(),
+    horaDiaria: z.string().refine(horaValida, 'Hora HH:MM').optional(),
+    horaResumen: z.string().refine(horaValida, 'Hora HH:MM').optional(),
+    requisitosPorProducto: z.record(z.array(tipoRequisito).max(10)).optional(),
+  }),
+  // Campos desconocidos (p. ej. `cambios` reenviado por la pantalla) se ignoran.
 });
 
 export const exclusionCreateSchema = z.object({
@@ -104,12 +116,15 @@ export const exclusionCreateSchema = z.object({
       empresaId: z.coerce.number().int().positive().optional(),
       documento: str(32).optional(),
       tipoDoc: str(2).optional(),
+      /** documento (asegurado) o cnpoliza (póliza), según el alcance. */
+      valor: str(64).optional(),
     })
     .refine(
       (b) =>
         b.expedienteId != null ||
+        !!b.valor ||
         (b.alcance === 'poliza' ? !!b.cnpoliza : !!b.documento),
-      'Indique expedienteId, o cnpoliza (póliza) / documento (asegurado).',
+      'Indique valor, expedienteId, o cnpoliza (póliza) / documento (asegurado).',
     ),
 });
 
@@ -118,9 +133,10 @@ export const observarSchema = z.object({
 });
 
 export const listQuerySchema = z.object({
-  estadoDoc: z.enum(['completo', 'incompleto']).optional(),
+  estadoDoc: z.enum(['completo', 'incompleto', 'sin_informacion']).optional(),
   estadoPago: z.enum(['pagada', 'pendiente']).optional(),
-  area: z.enum(['canal', 'gestor', 'productor', 'desconocida']).optional(),
+  // C / G / P (centidad del SSO) o el nombre del área.
+  area: z.string().trim().max(20).optional(),
   producto: z.enum(['rcv', 'personas', 'patrimonial']).optional(),
   desde: z
     .string()
@@ -145,5 +161,5 @@ export const indicadoresQuerySchema = listQuerySchema.pick({
   hasta: true,
 });
 
-export const JOBS = ['conciliacion'] as const;
+export const JOBS = ['diaria', 'nocturna', 'conciliacion'] as const;
 export type JobName = (typeof JOBS)[number];

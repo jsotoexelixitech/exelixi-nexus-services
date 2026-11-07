@@ -8,10 +8,13 @@ export const ESTADOS_REQUISITO = [
   'recibido',
   'observado',
   'validado',
+  /** La emisión no informó documentos (registro viejo o personas sin wizard). No es faltante. */
+  'sin_informacion',
 ] as const;
 export type EstadoRequisito = (typeof ESTADOS_REQUISITO)[number];
 
-export type EstadoDocumental = 'completo' | 'incompleto';
+/** sin_informacion: no hay datos para saber si falta algo; no es incompleto ni recibe recordatorios. */
+export type EstadoDocumental = 'completo' | 'incompleto' | 'sin_informacion';
 export type EstadoPago = 'pagada' | 'pendiente';
 export type ProductoExpediente = 'rcv' | 'personas' | 'patrimonial';
 export type AreaExpediente = 'canal' | 'gestor' | 'productor' | 'desconocida';
@@ -53,11 +56,16 @@ export const DEFAULT_CONFIG: ExpedientesConfig = {
   },
 };
 
+/** Las 8 claves de documento de la mesa técnica. */
 export const REQUISITO_LABELS: Record<string, string> = {
   cedula: 'Cédula de identidad',
+  cedula_titular: 'Cédula del titular',
+  cedula_beneficiario: 'Cédula del beneficiario',
   licencia: 'Licencia de conducir',
   certificado: 'Certificado de circulación',
   rif: 'RIF',
+  pasaporte: 'Pasaporte',
+  factura: 'Factura',
 };
 
 export function requisitoLabel(tipo: string): string {
@@ -147,16 +155,22 @@ export function requisitosAplicables(
   return Array.from(new Set(list));
 }
 
-/** Completo SOLO si todos los requisitos aplicables están validados. */
+/**
+ * Completo SOLO si todos los requisitos aplicables están validados.
+ * Si lo único no validado es "sin_informacion", el expediente es sin_informacion
+ * (no se sabe si falta algo: no cuenta como incompleto).
+ */
 export function calcularEstadoDocumental(
   aplicables: string[],
   requisitos: { tipo: string; estado: string }[],
 ): EstadoDocumental {
   if (!aplicables.length) return 'incompleto';
   const porTipo = new Map(requisitos.map((r) => [r.tipo, r.estado]));
-  return aplicables.every((t) => porTipo.get(t) === 'validado')
-    ? 'completo'
-    : 'incompleto';
+  const estados = aplicables.map((t) => porTipo.get(t) ?? 'faltante');
+  if (estados.every((e) => e === 'validado')) return 'completo';
+  if (estados.every((e) => e === 'validado' || e === 'sin_informacion'))
+    return 'sin_informacion';
+  return 'incompleto';
 }
 
 export function esPendiente(estado: string): boolean {
@@ -368,7 +382,8 @@ function nombresCoinciden(ocr: string, esperado: string): boolean {
   return comunes >= Math.min(2, b.length);
 }
 
-export const CONFIANZA_MINIMA = 0.6;
+/** Tipos que se comparan contra el asegurado (documento y nombre). */
+const TIPOS_PERSONA = new Set(['cedula', 'licencia', 'rif', 'pasaporte']);
 
 export interface DatosEsperados {
   documento?: string | null;
@@ -378,28 +393,40 @@ export interface DatosEsperados {
 }
 
 /**
- * automatica: coincide → validado; no coincide u OCR sin datos → observado;
- * sin certeza (confianza baja o nada comparable) → recibido.
+ * Validación automática. El OCR responde confianza 0 | 0.5 | 1:
+ * - 0 o sin datos → observado con motivo (ilegible).
+ * - datos que no coinciden → observado (incongruente).
+ * - 1 y todo coincide → validado.
+ * - 0.5 (o sin confianza) con datos coincidentes, o nada comparable → recibido (sin certeza).
  */
 export function compararOcrConSnapshot(
   tipo: string,
-  ocr: { extraido?: unknown; confianza?: number | null } | null | undefined,
+  ocr:
+    | { extraido?: unknown; confianza?: number | null; motivo?: string | null }
+    | null
+    | undefined,
   esperado: DatosEsperados,
 ): ResultadoComparacion {
   const extraido =
     ocr?.extraido && typeof ocr.extraido === 'object'
       ? (ocr.extraido as Record<string, unknown>)
       : null;
-  if (!extraido || !Object.keys(extraido).length) {
+  const confianza = Number(ocr?.confianza);
+  if (
+    !extraido ||
+    !Object.keys(extraido).length ||
+    (Number.isFinite(confianza) && confianza <= 0)
+  ) {
+    const motivoOcr = String(ocr?.motivo ?? '')
+      .trim()
+      .slice(0, 200);
     return {
       estado: 'observado',
       codigo: 'ilegible',
-      motivo: 'No se pudo leer el documento. Adjunte una imagen más nítida.',
+      motivo:
+        motivoOcr ||
+        'No se pudo leer el documento. Adjunte una imagen más nítida.',
     };
-  }
-  const confianza = Number(ocr?.confianza);
-  if (Number.isFinite(confianza) && confianza < CONFIANZA_MINIMA) {
-    return { estado: 'recibido', motivo: 'Lectura con baja certeza' };
   }
 
   const snap = (esperado.snapshot ?? {}) as Record<string, unknown>;
@@ -427,7 +454,7 @@ export function compararOcrConSnapshot(
     ]);
     if (serialOcr && serialEsp)
       checks.push(normPlaca(serialOcr) === normPlaca(serialEsp));
-  } else {
+  } else if (TIPOS_PERSONA.has(tipo)) {
     const docOcr = soloDigitos(
       pick(extraido, [
         'documento',
@@ -461,10 +488,14 @@ export function compararOcrConSnapshot(
   if (!checks.length) {
     return { estado: 'recibido', motivo: 'Sin datos comparables' };
   }
-  if (checks.every(Boolean)) return { estado: 'validado' };
-  return {
-    estado: 'observado',
-    codigo: 'incongruente',
-    motivo: 'Los datos del documento no coinciden con la póliza.',
-  };
+  if (!checks.every(Boolean)) {
+    return {
+      estado: 'observado',
+      codigo: 'incongruente',
+      motivo: 'Los datos del documento no coinciden con la póliza.',
+    };
+  }
+  if (Number.isFinite(confianza) && confianza >= 1)
+    return { estado: 'validado' };
+  return { estado: 'recibido', motivo: 'Lectura con certeza parcial' };
 }

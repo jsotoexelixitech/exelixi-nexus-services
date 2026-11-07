@@ -59,12 +59,15 @@ describe('rutas /api/expedientes', () => {
   });
 
   it('GET lista, indicadores y detalle con { status, data }', async () => {
-    const r = await expedientesService.registrarDesdeEmision({
-      id: 1,
-      empresaId: 7,
-      polizaNumero: 'P-1',
-      jsonData: { producto: 'rcv' },
-    });
+    const r = await expedientesService.registrarDesdeEmision(
+      {
+        id: 1,
+        empresaId: 7,
+        polizaNumero: 'P-1',
+        jsonData: { producto: 'rcv' },
+      },
+      { expediente: { centidad: 'C', ccanalalt: '900', producto: 'rcv' } },
+    );
     const lista = await request(app)
       .get('/api/expedientes?estadoDoc=incompleto')
       .set(AUTH);

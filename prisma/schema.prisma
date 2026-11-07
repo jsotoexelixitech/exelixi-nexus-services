@@ -445,6 +445,8 @@ model MktExpediente {
   snapshot           Json?     @map("mexp_snapshot") @db.JsonB
   carpetaExpediente  String?   @map("mexp_carpeta") @db.Text
   origen             String    @default("emision") @map("mexp_origen") @db.VarChar(16)
+  /// false = la emisión no informó documentos (registros viejos o personas sin wizard): requisitos "sin_informacion".
+  infoDocumental     Boolean   @default(true) @map("mexp_info_documental")
   etapaEnviada       Int       @default(-1) @map("mexp_etapa_enviada")
   intentos           Int       @default(0) @map("mexp_intentos")
   ultimoEnvio        DateTime? @map("mexp_ultimo_envio") @db.Timestamp(6)

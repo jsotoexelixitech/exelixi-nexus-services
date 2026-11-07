@@ -7,6 +7,8 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { caracasParts } from './expedientes.domain';
+import { expedientesJobsEnabled } from './expedientes.env';
+import { tareaDiaria, tareaNocturna } from './expedientes.tareas';
 import { expedientesService as svc } from './expedientes.service';
 import type { JobName } from './expedientes.schema';
 
@@ -30,13 +32,17 @@ export type JobResultado =
 
 async function correr(
   job: JobName,
-  _ahora: Date,
+  ahora: Date,
 ): Promise<Record<string, unknown>> {
   switch (job) {
     case 'conciliacion':
       return { conciliacion: await svc.conciliar() };
+    case 'diaria':
+      return tareaDiaria(ahora);
+    case 'nocturna':
+      return tareaNocturna(ahora);
     default:
-      throw new Error(`Tarea ${job} no implementada`);
+      throw new Error(`Tarea ${String(job)} no implementada`);
   }
 }
 
@@ -95,4 +101,65 @@ export async function ejecutarJob(
       resumen: { error: msg },
     };
   }
+}
+
+// ─── Scheduler (patrón setInterval; solo con EXPEDIENTES_JOBS_ENABLED) ──────
+
+const TICK_MS = 60 * 1000;
+const yaCorrio: Partial<Record<JobName, string>> = {};
+let corriendo = false;
+let timer: NodeJS.Timeout | null = null;
+
+/**
+ * Un tick: si la hora de Caracas ya pasó la hora configurada y la tarea del día
+ * no corrió, la ejecuta. El único (job, fecha) evita repetir tras reinicios.
+ */
+export async function tickScheduler(
+  ahora: Date = new Date(),
+): Promise<JobName[]> {
+  if (!expedientesJobsEnabled() || corriendo) return [];
+  corriendo = true;
+  const corridos: JobName[] = [];
+  try {
+    const config = await svc.getConfig();
+    const { fecha, hora } = caracasParts(ahora);
+    const plan: [JobName, string][] = [
+      ['diaria', config.horaDiaria],
+      ['nocturna', config.horaResumen],
+    ];
+    for (const [job, horaJob] of plan) {
+      if (hora < horaJob || yaCorrio[job] === fecha) continue;
+      const r = await ejecutarJob(job, {
+        origen: 'auto',
+        ahora,
+        actor: 'scheduler',
+      });
+      yaCorrio[job] = fecha;
+      if (!r.omitido) corridos.push(job);
+    }
+  } catch (err) {
+    logger.error(
+      `[expedientes] scheduler: ${err instanceof Error ? err.message : 'error'}`,
+    );
+  } finally {
+    corriendo = false;
+  }
+  return corridos;
+}
+
+export function iniciarSchedulerExpedientes(): void {
+  if (timer || !expedientesJobsEnabled()) return;
+  timer = setInterval(() => {
+    void tickScheduler();
+  }, TICK_MS);
+  timer.unref();
+  logger.info('[expedientes] scheduler de tareas activo (hora Caracas)');
+}
+
+/** Solo pruebas. */
+export function _resetScheduler(): void {
+  for (const k of Object.keys(yaCorrio)) delete yaCorrio[k as JobName];
+  corriendo = false;
+  if (timer) clearInterval(timer);
+  timer = null;
 }

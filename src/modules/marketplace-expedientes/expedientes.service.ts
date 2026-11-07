@@ -40,6 +40,7 @@ import {
   hashToken,
   OcrDocumentoResultado,
   OcrNoConfiguradoError,
+  OcrRechazoError,
 } from './expedientes.files';
 import {
   correoCompleto,
@@ -96,6 +97,22 @@ export function primerNombre(e: Pick<Exp, 'aseguradoNombre'>): string {
 export function polizaOResumen(exps: Pick<Exp, 'cnpoliza'>[]): string {
   if (exps.length === 1) return `N° ${exps[0].cnpoliza}`;
   return `de tus ${exps.length} pólizas`;
+}
+
+const AREA_CODIGO: Record<string, string> = {
+  canal: 'C',
+  gestor: 'G',
+  productor: 'P',
+};
+
+/** Filtro de área: acepta C/G/P (centidad del SSO) o el nombre. */
+export function areaDesdeFiltro(v: string): string {
+  const s = v.trim().toUpperCase();
+  if (s === 'C' || s.startsWith('CANAL')) return 'canal';
+  if (s === 'G' || s.startsWith('GESTOR')) return 'gestor';
+  if (s === 'P' || s.startsWith('PRODUCTOR')) return 'productor';
+  if (s.startsWith('DESCONOCID')) return 'desconocida';
+  return '__ninguna__';
 }
 
 export function estaExcluido(
@@ -261,8 +278,10 @@ export class ExpedientesService {
       await this.evento(exp.id, 'expediente_creado', origen, {
         area: exp.area,
         producto: exp.producto,
+        cproducto: payload.cproducto ?? null,
         estadoPago: exp.estadoPago,
         conDatosExpediente: rawPayload != null,
+        infoDocumental: exp.infoDocumental,
       });
     } else {
       const cambios = this.fusionar(exp, datos, emision, payload);
@@ -271,6 +290,13 @@ export class ExpedientesService {
           where: { id: exp.id },
           data: cambios,
         });
+        if (cambios.infoDocumental === true) {
+          // Ahora sí se conocen los documentos: "sin_informacion" pasa a "faltante".
+          await prisma.mktExpedienteRequisito.updateMany({
+            where: { expedienteId: exp.id, estado: 'sin_informacion' },
+            data: { estado: 'faltante' },
+          });
+        }
         await this.evento(exp.id, 'expediente_actualizado', origen, {
           campos: Object.keys(cambios),
         });
@@ -281,8 +307,67 @@ export class ExpedientesService {
     if (payload.documentos) {
       await this.aplicarDocumentosEmision(exp, payload.documentos, config);
     }
+    if (!exp.infoDocumental) await this.cruzarMesaTecnica(exp, config);
     await this.recalcularEstado(exp.id, config);
     return { id: exp.id, creado };
+  }
+
+  /**
+   * Personas sin documentos en el wizard: si la mesa técnica guardó el snapshot con
+   * `documents`, se usa para saber qué se recibió (lo demás pasa a faltante).
+   */
+  async cruzarMesaTecnica(
+    exp: Exp,
+    config: ExpedientesConfig,
+  ): Promise<boolean> {
+    let documents: Record<string, unknown> | null = null;
+    try {
+      const sub = await prisma.funeralSubmission.findFirst({
+        where: { empresaId: exp.empresaId, cnpoliza: exp.cnpoliza },
+        orderBy: { createdAt: 'desc' },
+      });
+      const snap = rec(sub?.snapshotJson);
+      const docs = snap.documents ?? rec(snap.data).documents;
+      if (docs && typeof docs === 'object' && !Array.isArray(docs)) {
+        documents = docs as Record<string, unknown>;
+      }
+    } catch {
+      return false;
+    }
+    if (!documents) return false;
+    await prisma.mktExpediente.update({
+      where: { id: exp.id },
+      data: { infoDocumental: true },
+    });
+    await prisma.mktExpedienteRequisito.updateMany({
+      where: { expedienteId: exp.id, estado: 'sin_informacion' },
+      data: { estado: 'faltante' },
+    });
+    const aplicables = new Set(requisitosAplicables(exp.producto, config));
+    for (const [tipo, raw] of Object.entries(documents)) {
+      if (!aplicables.has(tipo)) continue;
+      const d = rec(raw);
+      const url = str(rec(d.file).url) ?? str(d.url) ?? str(d.ref);
+      if (d.status !== 'done' && !url) continue;
+      const r = await prisma.mktExpedienteRequisito.findUnique({
+        where: { expedienteId_tipo: { expedienteId: exp.id, tipo } },
+      });
+      if (!r || r.estado !== 'faltante') continue;
+      await prisma.mktExpedienteRequisito.update({
+        where: { id: r.id },
+        data: {
+          estado: 'recibido',
+          origen: 'mesa_tecnica',
+          ref: url ?? null,
+          recibidoEn: new Date(),
+        },
+      });
+      await this.evento(exp.id, 'documento_recibido', 'mesa_tecnica', {
+        tipo,
+        origen: 'mesa_tecnica',
+      });
+    }
+    return true;
   }
 
   private async construirDatos(
@@ -309,9 +394,13 @@ export class ExpedientesService {
     const emailRaw = str(aseg.email)?.toLowerCase() ?? null;
     const email = emailRaw && emailValido(emailRaw) ? emailRaw : null;
 
+    const centidadP = str(p.centidad)?.toUpperCase() ?? null;
     let vendedor = {
-      centidad: str(p.centidad)?.toUpperCase() ?? null,
-      citem: str(p.citem) ?? null,
+      centidad: centidadP,
+      citem:
+        str(p.citem) ??
+        (centidadP === 'P' ? (str(p.cproductor) ?? null) : null) ??
+        null,
       cgestor: str(p.cgestor) ?? null,
       ccanalalt: str(p.ccanalalt) ?? null,
       cusuario: str(p.cusuario) ?? null,
@@ -342,6 +431,10 @@ export class ExpedientesService {
       } as Record<string, unknown>);
 
     return {
+      // Sin campo `expediente` (registros viejos) o personas sin documentos en el
+      // wizard: no se sabe qué falta → requisitos "sin_informacion", no incompleto.
+      infoDocumental:
+        Object.keys(p).length > 0 && p.documentosEnWizard !== false,
       cnrecibo: str(extra.cnrecibo) ?? str(jd.cnrecibo) ?? null,
       producto,
       cramo: Number.isFinite(cramoRaw) ? Number(cramoRaw) : null,
@@ -417,6 +510,7 @@ export class ExpedientesService {
       out.producto = datos.producto;
     if (p.estadoPago && exp.estadoPago !== datos.estadoPago)
       out.estadoPago = datos.estadoPago;
+    if (!exp.infoDocumental && datos.infoDocumental) out.infoDocumental = true;
     return out as Prisma.MktExpedienteUpdateInput;
   }
 
@@ -430,7 +524,11 @@ export class ExpedientesService {
       if (tipos.has(tipo)) continue;
       try {
         await prisma.mktExpedienteRequisito.create({
-          data: { expedienteId: exp.id, tipo, estado: 'faltante' },
+          data: {
+            expedienteId: exp.id,
+            tipo,
+            estado: exp.infoDocumental ? 'faltante' : 'sin_informacion',
+          },
         });
       } catch (err) {
         if ((err as { code?: string }).code !== 'P2002') throw err;
@@ -450,13 +548,14 @@ export class ExpedientesService {
       const r = await prisma.mktExpedienteRequisito.findUnique({
         where: { expedienteId_tipo: { expedienteId: exp.id, tipo } },
       });
-      if (!r || r.estado !== 'faltante') continue;
+      if (!r || (r.estado !== 'faltante' && r.estado !== 'sin_informacion'))
+        continue;
       await prisma.mktExpedienteRequisito.update({
         where: { id: r.id },
         data: {
           estado: 'recibido',
           origen: 'emision',
-          ref: d.ref ?? null,
+          ref: d.ref ?? d.url ?? null,
           recibidoEn: new Date(),
         },
       });
@@ -507,6 +606,7 @@ export class ExpedientesService {
     revisadas: number;
     creadas: number;
     errores: number;
+    noCubiertos: { producto: string; motivo: string }[];
   }> {
     const existentes = await prisma.mktExpediente.findMany({
       select: { empresaId: true, cnpoliza: true },
@@ -552,15 +652,42 @@ export class ExpedientesService {
       }
       if (lote.length < 500) break;
     }
-    return { revisadas, creadas, errores };
+    return {
+      revisadas,
+      creadas,
+      errores,
+      // Patrimonial no registra en POST /api/emisiones: no llega al feed.
+      noCubiertos: [
+        {
+          producto: 'patrimonial',
+          motivo: 'La emisión patrimonial no registra la póliza en Nexus.',
+        },
+      ],
+    };
+  }
+
+  /** Requisitos "sin_informacion": reintenta el cruce con la mesa técnica. */
+  async cruzarSinInformacion(config: ExpedientesConfig): Promise<number> {
+    const exps = await prisma.mktExpediente.findMany({
+      where: { infoDocumental: false, estadoDocumental: 'sin_informacion' },
+    });
+    let cruzados = 0;
+    for (const e of exps) {
+      if (await this.cruzarMesaTecnica(e, config)) {
+        cruzados++;
+        await this.recalcularEstado(e.id, config);
+      }
+    }
+    return cruzados;
   }
 
   // ─── Lectura ────────────────────────────────────────────────────────────
 
   private whereLista(q: Partial<ListQuery>, config: ExpedientesConfig) {
     const areas = areasEnAlcance(config.alcance) as string[];
+    const area = q.area ? areaDesdeFiltro(q.area) : null;
     const where: Prisma.MktExpedienteWhereInput = {
-      area: { in: q.area ? areas.filter((a) => a === q.area) : areas },
+      area: { in: area ? areas.filter((a) => a === area) : areas },
     };
     if (q.estadoDoc) where.estadoDocumental = q.estadoDoc;
     if (q.estadoPago) where.estadoPago = q.estadoPago;
@@ -646,6 +773,7 @@ export class ExpedientesService {
       cnrecibo: e.cnrecibo,
       producto: e.producto,
       area: e.area,
+      areaCodigo: AREA_CODIGO[e.area] ?? null,
       vendedor,
       vendedorDetalle: {
         centidad: e.centidad,
@@ -671,8 +799,10 @@ export class ExpedientesService {
         return {
           tipo,
           label: requisitoLabel(tipo),
-          estado: r?.estado ?? 'faltante',
+          estado:
+            r?.estado ?? (e.infoDocumental ? 'faltante' : 'sin_informacion'),
           motivo: r?.motivo ?? null,
+          ref: r?.ref ?? null,
         };
       }),
       intentos: e.intentos,
@@ -700,66 +830,16 @@ export class ExpedientesService {
     const pageSize = q.pageSize ?? 25;
     const exclusiones = await this.exclusionesActivas();
 
-    if (q.agrupar === 'asegurado') {
-      const exps = await prisma.mktExpediente.findMany({
-        where,
-        orderBy: { emitidaEn: 'desc' },
-        take: 5000,
-      });
-      const reqs = await this.requisitosDe(exps.map((e) => e.id));
-      const grupos = new Map<
-        string,
-        ReturnType<ExpedientesService['toItem']>[]
-      >();
-      for (const e of exps) {
-        const key = e.aseguradoKey ?? `exp:${e.id}`;
-        const list = grupos.get(key) ?? [];
-        list.push(this.toItem(e, reqs.get(e.id) ?? [], exclusiones, config));
-        grupos.set(key, list);
-      }
-      const all = Array.from(grupos.values()).map((polizas) => {
-        const envios = polizas
-          .map((p) => p.ultimoEnvio)
-          .filter((d): d is Date => !!d)
-          .sort((a, b) => b.getTime() - a.getTime());
-        const proximos = polizas
-          .map((p) => p.proximoEnvio)
-          .filter((d): d is Date => !!d)
-          .sort((a, b) => a.getTime() - b.getTime());
-        return {
-          grupo: 'asegurado' as const,
-          asegurado: polizas[0].asegurado,
-          estadoDocumental: polizas.some(
-            (p) => p.estadoDocumental !== 'completo',
-          )
-            ? 'incompleto'
-            : 'completo',
-          estadoPago: polizas.some((p) => p.estadoPago === 'pendiente')
-            ? 'pendiente'
-            : 'pagada',
-          totalPolizas: polizas.length,
-          intentos: polizas.reduce((a, p) => a + p.intentos, 0),
-          ultimoEnvio: envios[0] ?? null,
-          proximoEnvio: proximos[0] ?? null,
-          noEnviar: polizas.some((p) => p.noEnviar),
-          cambiosDetectados: polizas.some((p) => p.cambiosDetectados),
-          polizas,
-        };
-      });
-      return {
-        items: all.slice((page - 1) * pageSize, page * pageSize),
-        total: all.length,
-        page,
-        pageSize,
-        agrupar: 'asegurado',
-      };
-    }
-
+    // agrupar=asegurado: la misma lista plana, ordenada por asegurado.
+    const orderBy: Prisma.MktExpedienteOrderByWithRelationInput[] =
+      q.agrupar === 'asegurado'
+        ? [{ aseguradoKey: 'asc' }, { emitidaEn: 'desc' }]
+        : [{ emitidaEn: 'desc' }];
     const [total, exps] = await Promise.all([
       prisma.mktExpediente.count({ where }),
       prisma.mktExpediente.findMany({
         where,
-        orderBy: { emitidaEn: 'desc' },
+        orderBy,
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -772,7 +852,7 @@ export class ExpedientesService {
       total,
       page,
       pageSize,
-      agrupar: 'poliza',
+      agrupar: q.agrupar ?? 'poliza',
     };
   }
 
@@ -788,7 +868,12 @@ export class ExpedientesService {
     return {
       total: exps.length,
       completos: exps.filter((e) => e.estadoDocumental === 'completo').length,
-      incompletos: exps.filter((e) => e.estadoDocumental !== 'completo').length,
+      incompletos: exps.filter((e) => e.estadoDocumental === 'incompleto')
+        .length,
+      /** Sin datos documentales (registros viejos o personas sin wizard): no son incompletos. */
+      sinInformacion: exps.filter(
+        (e) => e.estadoDocumental === 'sin_informacion',
+      ).length,
       pagadas: exps.filter((e) => e.estadoPago === 'pagada').length,
       pendientesPago: exps.filter((e) => e.estadoPago === 'pendiente').length,
       porValidar: exps.filter((e) => conEstado(e, 'recibido')).length,
@@ -824,8 +909,18 @@ export class ExpedientesService {
       this.exclusionesActivas(),
     ]);
     const item = this.toItem(e, reqs, exclusiones, config);
+    const texto = (v: unknown) => (typeof v === 'string' ? v : null);
     return {
       ...item,
+      validacion: config.validacion,
+      documentos: Object.fromEntries(
+        reqs
+          .filter((r) => r.ref)
+          .map((r) => [
+            r.tipo,
+            { ref: r.ref, recibido: r.estado !== 'faltante' },
+          ]),
+      ),
       requisitos: item.requisitos.map((r) => {
         const row = reqs.find((x) => x.tipo === r.tipo);
         return {
@@ -846,29 +941,49 @@ export class ExpedientesService {
           creadoPor: x.creadoPor,
           createdAt: x.createdAt,
         })),
-      eventos: eventos.map((ev) => ({
-        id: ev.id,
-        tipo: ev.tipo,
-        actor: ev.actor,
-        detalle: ev.detalle,
-        createdAt: ev.createdAt,
-      })),
+      eventos: eventos.map((ev) => {
+        const d = rec(ev.detalle);
+        return {
+          id: ev.id,
+          tipo: ev.tipo,
+          actor: ev.actor,
+          motivo: texto(d.motivo),
+          requisito: texto(d.tipo),
+          detalle: ev.detalle,
+          fecha: ev.createdAt,
+          createdAt: ev.createdAt,
+        };
+      }),
       notificaciones: notificaciones.map((n) => ({
         id: n.id,
         tipo: n.tipo,
         etapa: n.etapa,
+        canal: 'correo',
+        estado: n.resultado,
         resultado: n.resultado,
-        destinatario: n.destinatarioMasked,
+        destinoMasked: n.destinatarioMasked,
         error: n.error,
+        fecha: n.createdAt,
         createdAt: n.createdAt,
       })),
       cambios: eventos
         .filter((ev) => ev.tipo === 'cambio_detectado')
-        .map((ev) => ({
-          id: ev.id,
-          detalle: ev.detalle,
-          createdAt: ev.createdAt,
-        })),
+        .flatMap((ev) => {
+          const d = rec(ev.detalle);
+          const lista = Array.isArray(d.cambios) ? d.cambios : [d];
+          return lista.map((c) => {
+            const x = rec(c);
+            return {
+              id: ev.id,
+              campo: String(x.campo ?? ''),
+              anterior: x.anterior ?? null,
+              nuevo: x.nuevo ?? null,
+              origen: texto(x.origen) ?? 'sis2000',
+              fecha: ev.createdAt,
+              createdAt: ev.createdAt,
+            };
+          });
+        }),
     };
   }
 
@@ -917,7 +1032,7 @@ export class ExpedientesService {
         anterior: r.estado,
       });
     } else {
-      if (r.estado === 'faltante') {
+      if (r.estado === 'faltante' || r.estado === 'sin_informacion') {
         throw new AppError('No hay documento recibido para observar.', 409);
       }
       await prisma.mktExpedienteRequisito.update({
@@ -976,6 +1091,13 @@ export class ExpedientesService {
 
     let ocrRes: OcrDocumentoResultado | null = null;
     let ocrDisponible = true;
+    const empresaNombre = await prisma.empresa
+      .findUnique({
+        where: { id: principal.empresaId },
+        select: { nombre: true },
+      })
+      .then((emp) => emp?.nombre ?? null)
+      .catch(() => null);
     try {
       ocrRes = await enviarDocumentoAlOcr({
         file,
@@ -984,6 +1106,7 @@ export class ExpedientesService {
         cnrecibo: principal.cnrecibo,
         documento: principal.aseguradoDocumento,
         empresaId: principal.empresaId,
+        empresaNombre,
       });
     } catch (err) {
       if (err instanceof OcrNoConfiguradoError) {
@@ -992,6 +1115,9 @@ export class ExpedientesService {
           { etapa: 'carga', motivo: 'ocr_no_configurado', tipo },
           principal.id,
         );
+      } else if (err instanceof OcrRechazoError) {
+        // 400/413/422 del OCR: el archivo es el problema, no el servicio.
+        throw new AppError(err.message, err.status);
       } else {
         await this.eventoTecnico(
           {
@@ -1058,6 +1184,7 @@ export class ExpedientesService {
         tipo,
         origen,
         ocr: ocrDisponible,
+        ubicacion: ocrRes?.ubicacion ?? null,
         tamanoKb: Math.round(file.size / 1024),
       });
       if (estado === 'validado') {
@@ -1184,42 +1311,53 @@ export class ExpedientesService {
       data: { ultimoAccesoEn: new Date(), accesos: { increment: 1 } },
     });
     const reqs = await this.requisitosDe(expedientes.map((e) => e.id));
+    // Mismo vocabulario que el monitor; "sin_informacion" no se muestra.
+    const prioridad: Record<string, number> = {
+      observado: 4,
+      faltante: 3,
+      recibido: 2,
+      validado: 1,
+    };
     const polizas = expedientes.map((e, i) => {
       const porTipo = new Map((reqs.get(e.id) ?? []).map((r) => [r.tipo, r]));
       return {
         ref: i + 1,
-        poliza: maskPoliza(e.cnpoliza),
+        polizaMasked: maskPoliza(e.cnpoliza),
         producto: e.producto,
-        requisitos: requisitosAplicables(e.producto, config).map((tipo) => {
-          const r = porTipo.get(tipo);
-          const estado = r?.estado ?? 'faltante';
-          return {
-            tipo,
-            label: requisitoLabel(tipo),
-            estado:
-              estado === 'faltante'
-                ? 'pendiente'
-                : estado === 'observado'
-                  ? 'observado'
-                  : 'recibido',
-            motivo: estado === 'observado' ? (r?.motivo ?? null) : null,
-          };
-        }),
+        requisitos: requisitosAplicables(e.producto, config)
+          .map((tipo) => {
+            const r = porTipo.get(tipo);
+            const estado = r?.estado ?? 'faltante';
+            return {
+              tipo,
+              label: requisitoLabel(tipo),
+              estado,
+              motivo: estado === 'observado' ? (r?.motivo ?? null) : null,
+            };
+          })
+          .filter((r) => r.estado !== 'sin_informacion'),
       };
     });
-    const pendientes = Array.from(
-      new Set(
-        polizas.flatMap((p) =>
-          p.requisitos
-            .filter((r) => r.estado !== 'recibido')
-            .map((r) => r.tipo),
-        ),
-      ),
-    );
+    const agregados = new Map<
+      string,
+      (typeof polizas)[number]['requisitos'][number]
+    >();
+    for (const p of polizas) {
+      for (const r of p.requisitos) {
+        const prev = agregados.get(r.tipo);
+        if (!prev || (prioridad[r.estado] ?? 0) > (prioridad[prev.estado] ?? 0))
+          agregados.set(r.tipo, r);
+      }
+    }
+    const requisitos = Array.from(agregados.values());
     return {
       nombre: expedientes[0] ? primerNombre(expedientes[0]) : null,
+      polizaMasked: polizas.map((p) => p.polizaMasked).join(', ') || null,
+      requisitos,
+      pendientes: requisitos
+        .filter((r) => esPendiente(r.estado))
+        .map((r) => r.tipo),
       polizas,
-      pendientes,
       expiraEn: enlace.expiraEn,
     };
   }
@@ -1248,12 +1386,8 @@ export class ExpedientesService {
       destino = pendienteEn(e) ? [e] : [];
     } else {
       destino = expedientes.filter(pendienteEn);
-      if (tipo === 'certificado' && destino.length > 1) {
-        throw new AppError(
-          'Indique a cuál póliza corresponde el documento.',
-          400,
-        );
-      }
+      // El certificado es por vehículo: sin `poliza`, va a la primera pendiente.
+      if (tipo === 'certificado' && destino.length > 1) destino = [destino[0]];
     }
     if (!destino.length) {
       throw new AppError('Ese documento no está pendiente.', 409);
@@ -1386,6 +1520,8 @@ export class ExpedientesService {
       empresaId?: number;
       documento?: string;
       tipoDoc?: string;
+      /** documento (asegurado) o cnpoliza (póliza), según el alcance. */
+      valor?: string;
     },
     actor: string,
   ) {
@@ -1396,14 +1532,22 @@ export class ExpedientesService {
       });
       if (!exp) throw new AppError('Expediente no encontrado.', 404);
     }
+    const documento =
+      body.alcance === 'asegurado' ? (body.documento ?? body.valor) : undefined;
+    const cnpolizaBody =
+      body.alcance === 'poliza' ? (body.cnpoliza ?? body.valor) : undefined;
+    const id = separarIdentificacion(documento);
     const key =
       body.alcance === 'asegurado'
         ? (exp?.aseguradoKey ??
           aseguradoKey({
-            tipoDoc: body.tipoDoc ?? 'V',
-            documento: body.documento,
+            tipoDoc: body.tipoDoc ?? id.tipoDoc ?? 'V',
+            documento: id.documento,
           }))
         : null;
+    if (body.alcance === 'poliza' && !exp && !cnpolizaBody) {
+      throw new AppError('Indique la póliza.', 400);
+    }
     if (body.alcance === 'asegurado' && !key) {
       throw new AppError(
         'El expediente no tiene asegurado identificable.',
@@ -1422,7 +1566,7 @@ export class ExpedientesService {
             : null,
         cnpoliza:
           body.alcance === 'poliza'
-            ? (exp?.cnpoliza ?? body.cnpoliza ?? null)
+            ? (exp?.cnpoliza ?? cnpolizaBody?.trim() ?? null)
             : null,
         aseguradoKey: key,
       },
@@ -1460,22 +1604,56 @@ export class ExpedientesService {
       orderBy: { createdAt: 'desc' },
       take: 500,
     });
-    return rows.map((x) => ({
-      id: x.id,
-      alcance: x.alcance,
-      expedienteId: x.expedienteId,
-      empresaId: x.empresaId,
-      cnpoliza: x.cnpoliza,
-      asegurado: x.aseguradoKey?.startsWith('mail:')
+    return rows.map((x) => {
+      const asegurado = x.aseguradoKey?.startsWith('mail:')
         ? maskEmail(x.aseguradoKey.slice(5))
-        : x.aseguradoKey,
-      motivo: x.motivo,
-      creadoPor: x.creadoPor,
-      activo: x.activo,
-      createdAt: x.createdAt,
-      eliminadoPor: x.eliminadoPor,
-      eliminadoEn: x.eliminadoEn,
-    }));
+        : x.aseguradoKey;
+      return {
+        id: x.id,
+        alcance: x.alcance,
+        valor: (x.alcance === 'poliza' ? x.cnpoliza : asegurado) ?? '',
+        expedienteId: x.expedienteId,
+        empresaId: x.empresaId,
+        cnpoliza: x.cnpoliza,
+        asegurado,
+        motivo: x.motivo,
+        actor: x.creadoPor,
+        creadoPor: x.creadoPor,
+        activo: x.activo,
+        createdAt: x.createdAt,
+        eliminadoPor: x.eliminadoPor,
+        eliminadoEn: x.eliminadoEn,
+      };
+    });
+  }
+
+  /** Configuración + historial de cambios (uno por campo cambiado). */
+  async getConfigConCambios() {
+    const config = await this.getConfig();
+    const eventos = await prisma.mktExpedienteEvento.findMany({
+      where: { expedienteId: null, tipo: 'config_actualizada' },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    const cambios = eventos.flatMap((ev) => {
+      const d = rec(ev.detalle);
+      const anterior = rec(d.anterior);
+      const nuevo = rec(d.nuevo);
+      const campos = Object.keys(nuevo).filter(
+        (k) => JSON.stringify(anterior[k]) !== JSON.stringify(nuevo[k]),
+      );
+      return campos.map((campo) => ({
+        id: `${ev.id}-${campo}`,
+        campo,
+        anterior: anterior[campo] ?? null,
+        nuevo: nuevo[campo] ?? null,
+        actor: ev.actor,
+        motivo: typeof d.motivo === 'string' ? d.motivo : null,
+        fecha: ev.createdAt,
+        createdAt: ev.createdAt,
+      }));
+    });
+    return { ...config, cambios };
   }
 }
 
