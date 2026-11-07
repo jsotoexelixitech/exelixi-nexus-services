@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { horaValida } from './expedientes.domain';
+import {
+  ALCANCES_EXCLUSION,
+  horaValida,
+  TIPOS_ACTOR,
+} from './expedientes.domain';
 
 const str = (max: number) => z.string().trim().max(max);
 /** Campo tolerante: si viene mal, queda null y no tumba el resto del payload. */
@@ -106,26 +110,59 @@ export const configUpdateSchema = z.object({
   // Campos desconocidos (p. ej. `cambios` reenviado por la pantalla) se ignoran.
 });
 
+const alcanceExclusion = z.enum(ALCANCES_EXCLUSION);
+
 export const exclusionCreateSchema = z.object({
   body: z
     .object({
-      alcance: z.enum(['asegurado', 'poliza']),
+      alcance: alcanceExclusion,
       motivo: str(500).min(3, 'El motivo es obligatorio'),
       expedienteId: z.coerce.number().int().positive().optional(),
       cnpoliza: str(64).optional(),
       empresaId: z.coerce.number().int().positive().optional(),
       documento: str(32).optional(),
       tipoDoc: str(2).optional(),
-      /** documento (asegurado) o cnpoliza (póliza), según el alcance. */
+      /**
+       * documento (asegurado), cnpoliza (póliza) o el código de canal (ccanalalt),
+       * gestor (cgestor) o intermediario (cproductor), según el alcance.
+       */
       valor: str(64).optional(),
     })
     .refine(
       (b) =>
         b.expedienteId != null ||
         !!b.valor ||
-        (b.alcance === 'poliza' ? !!b.cnpoliza : !!b.documento),
+        (b.alcance === 'poliza'
+          ? !!b.cnpoliza
+          : b.alcance === 'asegurado'
+            ? !!b.documento
+            : false),
       'Indique valor, expedienteId, o cnpoliza (póliza) / documento (asegurado).',
     ),
+});
+
+/** Varios valores en una sola acción: cada uno queda como una exclusión propia. */
+export const exclusionLoteSchema = z.object({
+  body: z.object({
+    alcance: alcanceExclusion,
+    motivo: str(500).min(3, 'El motivo es obligatorio'),
+    valores: z
+      .array(str(64).min(1, 'Valor vacío'))
+      .min(1, 'Elija al menos un valor')
+      .max(200, 'Máximo 200 valores por acción'),
+    /** Solo póliza: empresa de las pólizas (opcional, como en la exclusión individual). */
+    empresaId: z.coerce.number().int().positive().optional(),
+  }),
+});
+
+export const exclusionesQuerySchema = z.object({
+  todas: z.string().max(10).optional(),
+  alcance: alcanceExclusion.optional(),
+});
+
+export const actoresQuerySchema = z.object({
+  tipo: z.enum(TIPOS_ACTOR),
+  q: z.string().trim().max(100).optional(),
 });
 
 export const observarSchema = z.object({

@@ -8,10 +8,13 @@ import type {
   MktExpedienteRequisito,
   Prisma,
 } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/app-error';
 import {
+  ALCANCES_EXCLUSION,
+  AlcanceExclusion,
   AreaExpediente,
   aseguradoKey,
   areaDesdeVendedor,
@@ -20,16 +23,20 @@ import {
   compararOcrConSnapshot,
   emailValido,
   esPendiente,
+  esTipoActor,
   ExpedientesConfig,
   maskEmail,
   maskPoliza,
   mergeConfig,
+  normalizarCodigoActor,
   normalizarEstadoPago,
   normalizarProducto,
   proximoEnvio,
   requisitoLabel,
   requisitosAplicables,
   separarIdentificacion,
+  TipoActor,
+  valorActor,
 } from './expedientes.domain';
 import { expedientesEnabled, linkDias, publicBaseUrl } from './expedientes.env';
 import {
@@ -115,21 +122,120 @@ export function areaDesdeFiltro(v: string): string {
   return '__ninguna__';
 }
 
+type ExpExcluible = Pick<
+  Exp,
+  'id' | 'empresaId' | 'cnpoliza' | 'aseguradoKey'
+> &
+  Partial<
+    Pick<Exp, 'centidad' | 'citem' | 'cgestor' | 'ccanalalt' | 'cproductor'>
+  >;
+
+function aplicaExclusion(e: ExpExcluible, x: MktExpedienteExclusion): boolean {
+  if (!x.activo) return false;
+  if (x.alcance === 'poliza') {
+    if (x.expedienteId != null) return x.expedienteId === e.id;
+    return (
+      x.cnpoliza === e.cnpoliza &&
+      (x.empresaId == null || x.empresaId === e.empresaId)
+    );
+  }
+  if (x.alcance === 'asegurado')
+    return !!x.aseguradoKey && x.aseguradoKey === e.aseguradoKey;
+  if (esTipoActor(x.alcance)) {
+    const v = normalizarCodigoActor(x.valor);
+    return !!v && v === valorActor(e, x.alcance);
+  }
+  return false;
+}
+
+/** Exclusiones activas que alcanzan a la póliza, de la más específica a la más general. */
+export function exclusionesQueAplican(
+  e: ExpExcluible,
+  exclusiones: MktExpedienteExclusion[],
+): MktExpedienteExclusion[] {
+  const orden = (a: string) =>
+    (ALCANCES_EXCLUSION as readonly string[]).indexOf(a);
+  return exclusiones
+    .filter((x) => aplicaExclusion(e, x))
+    .sort((a, b) => orden(a.alcance) - orden(b.alcance));
+}
+
+/** Asegurado, póliza, canal, gestor o intermediario: cualquier exclusión activa detiene el envío. */
 export function estaExcluido(
-  e: Pick<Exp, 'id' | 'empresaId' | 'cnpoliza' | 'aseguradoKey'>,
+  e: ExpExcluible,
   exclusiones: MktExpedienteExclusion[],
 ): boolean {
-  return exclusiones.some((x) => {
-    if (!x.activo) return false;
-    if (x.alcance === 'poliza') {
-      if (x.expedienteId != null) return x.expedienteId === e.id;
-      return (
-        x.cnpoliza === e.cnpoliza &&
-        (x.empresaId == null || x.empresaId === e.empresaId)
-      );
-    }
-    return !!x.aseguradoKey && x.aseguradoKey === e.aseguradoKey;
-  });
+  return exclusiones.some((x) => aplicaExclusion(e, x));
+}
+
+/** Texto corto del valor excluido (el correo del asegurado va enmascarado). */
+function valorExclusion(x: MktExpedienteExclusion): string {
+  if (x.alcance === 'poliza') return x.cnpoliza ?? '';
+  if (x.alcance === 'asegurado') {
+    const k = x.aseguradoKey ?? '';
+    return k.startsWith('mail:') ? (maskEmail(k.slice(5)) ?? '') : k;
+  }
+  return x.valor ?? '';
+}
+
+const ETIQUETA_ACTOR: Record<TipoActor, string> = {
+  canal: 'canal',
+  gestor: 'gestor',
+  intermediario: 'intermediario',
+};
+
+/** Exclusión tal como la ve la pantalla de configuración. */
+export function exclusionDto(x: MktExpedienteExclusion) {
+  const asegurado =
+    x.alcance === 'asegurado' && x.aseguradoKey ? valorExclusion(x) : null;
+  return {
+    id: x.id,
+    alcance: x.alcance,
+    valor: valorExclusion(x),
+    expedienteId: x.expedienteId,
+    empresaId: x.empresaId,
+    cnpoliza: x.cnpoliza,
+    asegurado,
+    motivo: x.motivo,
+    actor: x.creadoPor,
+    creadoPor: x.creadoPor,
+    activo: x.activo,
+    createdAt: x.createdAt,
+    eliminadoPor: x.eliminadoPor,
+    eliminadoEn: x.eliminadoEn,
+  };
+}
+
+/** Nombre del actor si la emisión lo dejó en el snapshot (no se consulta Sis2000). */
+function nombreActorDeSnapshot(
+  snapshot: unknown,
+  tipo: TipoActor,
+): string | null {
+  const s = rec(snapshot);
+  const claves: Record<TipoActor, string[]> = {
+    canal: ['canal', 'canalAlterno', 'xcanal', 'xcanalalt', 'canalNombre'],
+    gestor: ['gestor', 'xgestor', 'gestorNombre'],
+    intermediario: [
+      'intermediario',
+      'productor',
+      'xproductor',
+      'productorNombre',
+      'intermediarioNombre',
+    ],
+  };
+  for (const k of claves[tipo]) {
+    const v = s[k];
+    // `canal`/`gestor` sueltos pueden ser el código: solo se aceptan como objeto con nombre.
+    const esCampoNombre = k.startsWith('x') || k.endsWith('Nombre');
+    const nombre =
+      typeof v === 'string'
+        ? esCampoNombre
+          ? str(v)
+          : undefined
+        : (str(rec(v).nombre) ?? str(rec(v).xnombre));
+    if (nombre) return nombre.slice(0, 150);
+  }
+  return null;
 }
 
 export class ExpedientesService {
@@ -405,11 +511,15 @@ export class ExpedientesService {
       ccanalalt: str(p.ccanalalt) ?? null,
       cusuario: str(p.cusuario) ?? null,
       xlogin: str(p.xlogin) ?? null,
+      // Intermediario de la póliza (también en ventas de canal o gestor).
+      cproductor: str(p.cproductor) ?? null,
     };
     if (!vendedor.centidad && vendedor.cusuario) {
+      const perfil = await this.vendedorDesdePerfil(vendedor.cusuario);
       vendedor = {
         ...vendedor,
-        ...(await this.vendedorDesdePerfil(vendedor.cusuario)),
+        ...perfil,
+        cproductor: vendedor.cproductor ?? perfil.cproductor ?? null,
       };
     }
     const area: AreaExpediente = areaDesdeVendedor(vendedor);
@@ -454,7 +564,16 @@ export class ExpedientesService {
   }
 
   /** Área desde el perfil del portal cuando la emisión no trae centidad. */
-  private async vendedorDesdePerfil(cusuario: string) {
+  private async vendedorDesdePerfil(
+    cusuario: string,
+  ): Promise<
+    Partial<
+      Record<
+        'centidad' | 'citem' | 'cgestor' | 'ccanalalt' | 'cproductor',
+        string | null
+      >
+    >
+  > {
     try {
       const perfil = await prisma.usuarioPortalPerfil.findFirst({
         where: { cusuario },
@@ -465,6 +584,7 @@ export class ExpedientesService {
         citem: perfil.citem ?? null,
         cgestor: perfil.cgestor ?? null,
         ccanalalt: perfil.ccanalaltIn ?? null,
+        cproductor: perfil.cproductor ?? null,
       };
     } catch {
       return {};
@@ -488,6 +608,7 @@ export class ExpedientesService {
       'ccanalalt',
       'cusuario',
       'xlogin',
+      'cproductor',
       'aseguradoTipoDoc',
       'aseguradoDocumento',
       'aseguradoNombre',
@@ -725,6 +846,7 @@ export class ExpedientesService {
           { citem: v },
           { cgestor: v },
           { ccanalalt: v },
+          { cproductor: v },
         ],
       });
     }
@@ -766,6 +888,7 @@ export class ExpedientesService {
       (e.cusuario ? `Usuario ${e.cusuario}` : null) ||
       (e.cgestor ? `Gestor ${e.cgestor}` : null) ||
       (e.citem ? `${e.centidad ?? ''}${e.citem}` : null);
+    const noEnviarPor = exclusionesQueAplican(e, exclusiones);
     return {
       id: e.id,
       empresaId: e.empresaId,
@@ -782,6 +905,7 @@ export class ExpedientesService {
         ccanalalt: e.ccanalalt,
         cusuario: e.cusuario,
         xlogin: e.xlogin,
+        cproductor: valorActor(e, 'intermediario'),
       },
       asegurado: {
         documento: e.aseguradoDocumento
@@ -816,7 +940,14 @@ export class ExpedientesService {
               e.etapaEnviada,
               config.horaDiaria,
             ),
-      noEnviar: estaExcluido(e, exclusiones),
+      noEnviar: noEnviarPor.length > 0,
+      /** Por qué no se envía: la exclusión más específica primero (p. ej. canal 45). */
+      noEnviarPor: noEnviarPor.map((x) => ({
+        id: x.id,
+        alcance: x.alcance,
+        valor: valorExclusion(x),
+        motivo: x.motivo,
+      })),
       sinCorreo: !emailValido(e.aseguradoEmail),
       cambiosDetectados: e.cambiosDetectados,
       emitidaEn: e.emitidaEn,
@@ -932,15 +1063,14 @@ export class ExpedientesService {
           validadoPor: row?.validadoPor ?? null,
         };
       }),
-      exclusiones: exclusiones
-        .filter((x) => estaExcluido(e, [x]))
-        .map((x) => ({
-          id: x.id,
-          alcance: x.alcance,
-          motivo: x.motivo,
-          creadoPor: x.creadoPor,
-          createdAt: x.createdAt,
-        })),
+      exclusiones: exclusionesQueAplican(e, exclusiones).map((x) => ({
+        id: x.id,
+        alcance: x.alcance,
+        valor: valorExclusion(x),
+        motivo: x.motivo,
+        creadoPor: x.creadoPor,
+        createdAt: x.createdAt,
+      })),
       eventos: eventos.map((ev) => {
         const d = rec(ev.detalle);
         return {
@@ -1513,15 +1643,20 @@ export class ExpedientesService {
 
   async crearExclusion(
     body: {
-      alcance: 'asegurado' | 'poliza';
+      alcance: AlcanceExclusion;
       motivo: string;
       expedienteId?: number;
       cnpoliza?: string;
       empresaId?: number;
       documento?: string;
       tipoDoc?: string;
-      /** documento (asegurado) o cnpoliza (póliza), según el alcance. */
+      /**
+       * documento (asegurado), cnpoliza (póliza) o código de canal (ccanalalt),
+       * gestor (cgestor) o intermediario (cproductor), según el alcance.
+       */
       valor?: string;
+      /** Acción de selección múltiple a la que pertenece (auditoría). */
+      lote?: string;
     },
     actor: string,
   ) {
@@ -1531,6 +1666,9 @@ export class ExpedientesService {
         where: { id: body.expedienteId },
       });
       if (!exp) throw new AppError('Expediente no encontrado.', 404);
+    }
+    if (esTipoActor(body.alcance)) {
+      return this.crearExclusionActor(body.alcance, body, exp, actor);
     }
     const documento =
       body.alcance === 'asegurado' ? (body.documento ?? body.valor) : undefined;
@@ -1575,8 +1713,172 @@ export class ExpedientesService {
       exclusionId: x.id,
       alcance: x.alcance,
       motivo: x.motivo,
+      ...(body.lote ? { lote: body.lote } : {}),
     });
     return x;
+  }
+
+  /** Canal, gestor o intermediario: alcanza a todas sus pólizas, presentes y futuras. */
+  private async crearExclusionActor(
+    tipo: TipoActor,
+    body: { motivo: string; valor?: string; lote?: string },
+    exp: Exp | null,
+    actor: string,
+  ) {
+    const valor =
+      normalizarCodigoActor(body.valor) ?? (exp ? valorActor(exp, tipo) : null);
+    if (!valor) {
+      throw new AppError(
+        exp
+          ? `La póliza no tiene ${ETIQUETA_ACTOR[tipo]} registrado.`
+          : `Indique el código del ${ETIQUETA_ACTOR[tipo]}.`,
+        400,
+      );
+    }
+    const x = await prisma.mktExpedienteExclusion.create({
+      data: {
+        alcance: tipo,
+        valor,
+        motivo: body.motivo,
+        creadoPor: actor,
+      },
+    });
+    await this.evento(exp?.id ?? null, 'exclusion_creada', actor, {
+      exclusionId: x.id,
+      alcance: x.alcance,
+      valor,
+      motivo: x.motivo,
+      ...(body.lote ? { lote: body.lote } : {}),
+    });
+    return x;
+  }
+
+  /** Clave para no repetir una exclusión activa del mismo alcance y valor. */
+  private claveExclusion(
+    alcance: AlcanceExclusion,
+    valor: string,
+  ): string | null {
+    if (esTipoActor(alcance)) return normalizarCodigoActor(valor);
+    if (alcance === 'poliza') return str(valor) ?? null;
+    const id = separarIdentificacion(valor);
+    return aseguradoKey({
+      tipoDoc: id.tipoDoc ?? 'V',
+      documento: id.documento,
+    });
+  }
+
+  private claveDeExclusion(x: MktExpedienteExclusion): string | null {
+    if (esTipoActor(x.alcance)) return normalizarCodigoActor(x.valor);
+    if (x.alcance === 'poliza') return x.cnpoliza;
+    return x.aseguradoKey;
+  }
+
+  /**
+   * Selección múltiple: un motivo común y una exclusión propia por valor (auditada y
+   * reactivable por separado). Los valores repetidos o ya excluidos se informan, no se duplican.
+   */
+  async crearExclusionesLote(
+    body: {
+      alcance: AlcanceExclusion;
+      motivo: string;
+      valores: string[];
+      empresaId?: number;
+    },
+    actor: string,
+  ) {
+    const lote = randomUUID();
+    const activas = (await this.exclusionesActivas()).filter(
+      (x) =>
+        x.alcance === body.alcance &&
+        (body.alcance !== 'poliza' ||
+          x.empresaId == null ||
+          x.empresaId === (body.empresaId ?? null)),
+    );
+    const yaActivas = new Set(activas.map((x) => this.claveDeExclusion(x)));
+    const vistas = new Set<string>();
+    const creadas: ReturnType<typeof exclusionDto>[] = [];
+    const omitidas: { valor: string; motivo: string }[] = [];
+    for (const valor of body.valores) {
+      const clave = this.claveExclusion(body.alcance, valor);
+      if (!clave) {
+        omitidas.push({ valor, motivo: 'Valor no válido.' });
+        continue;
+      }
+      if (vistas.has(clave)) continue;
+      vistas.add(clave);
+      if (yaActivas.has(clave)) {
+        omitidas.push({ valor, motivo: 'Ya estaba excluido.' });
+        continue;
+      }
+      try {
+        const x = await this.crearExclusion(
+          {
+            alcance: body.alcance,
+            motivo: body.motivo,
+            valor,
+            empresaId: body.empresaId,
+            lote,
+          },
+          actor,
+        );
+        creadas.push(exclusionDto(x));
+      } catch (err) {
+        if (!(err instanceof AppError)) throw err;
+        omitidas.push({ valor, motivo: err.message });
+      }
+    }
+    return { lote, alcance: body.alcance, creadas, omitidas };
+  }
+
+  /**
+   * Canales, gestores o intermediarios presentes en los expedientes guardados (sin
+   * consultar Sis2000), con el nombre si la emisión lo dejó y el número de pólizas.
+   */
+  async actores(tipo: TipoActor, q?: string) {
+    const exps = await prisma.mktExpediente.findMany({
+      select: {
+        id: true,
+        centidad: true,
+        citem: true,
+        cgestor: true,
+        ccanalalt: true,
+        cproductor: true,
+        snapshot: true,
+      },
+    });
+    const excluidos = new Map(
+      (await this.exclusionesActivas())
+        .filter((x) => x.alcance === tipo)
+        .map((x) => [normalizarCodigoActor(x.valor), x.id]),
+    );
+    const porValor = new Map<
+      string,
+      { nombre: string | null; polizas: number }
+    >();
+    for (const e of exps) {
+      const valor = valorActor(e, tipo);
+      if (!valor) continue;
+      const a = porValor.get(valor) ?? { nombre: null, polizas: 0 };
+      a.polizas++;
+      a.nombre = a.nombre ?? nombreActorDeSnapshot(e.snapshot, tipo);
+      porValor.set(valor, a);
+    }
+    const t = (q ?? '').trim().toLowerCase();
+    return Array.from(porValor, ([valor, a]) => ({
+      tipo,
+      valor,
+      nombre: a.nombre,
+      polizas: a.polizas,
+      excluido: excluidos.has(valor),
+      exclusionId: excluidos.get(valor) ?? null,
+    }))
+      .filter(
+        (a) =>
+          !t ||
+          a.valor.toLowerCase().includes(t) ||
+          (a.nombre ?? '').toLowerCase().includes(t),
+      )
+      .sort((a, b) => b.polizas - a.polizas || a.valor.localeCompare(b.valor));
   }
 
   async eliminarExclusion(id: number, actor: string, motivo?: string) {
@@ -1593,38 +1895,26 @@ export class ExpedientesService {
     });
     await this.evento(x.expedienteId ?? null, 'exclusion_eliminada', actor, {
       exclusionId: id,
+      alcance: x.alcance,
+      ...(esTipoActor(x.alcance) ? { valor: x.valor } : {}),
       motivo: motivo ?? null,
     });
     return upd;
   }
 
-  async listarExclusiones(incluirInactivas = false) {
+  async listarExclusiones(
+    incluirInactivas = false,
+    alcance?: AlcanceExclusion,
+  ) {
     const rows = await prisma.mktExpedienteExclusion.findMany({
-      where: incluirInactivas ? {} : { activo: true },
+      where: {
+        ...(incluirInactivas ? {} : { activo: true }),
+        ...(alcance ? { alcance } : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: 500,
     });
-    return rows.map((x) => {
-      const asegurado = x.aseguradoKey?.startsWith('mail:')
-        ? maskEmail(x.aseguradoKey.slice(5))
-        : x.aseguradoKey;
-      return {
-        id: x.id,
-        alcance: x.alcance,
-        valor: (x.alcance === 'poliza' ? x.cnpoliza : asegurado) ?? '',
-        expedienteId: x.expedienteId,
-        empresaId: x.empresaId,
-        cnpoliza: x.cnpoliza,
-        asegurado,
-        motivo: x.motivo,
-        actor: x.creadoPor,
-        creadoPor: x.creadoPor,
-        activo: x.activo,
-        createdAt: x.createdAt,
-        eliminadoPor: x.eliminadoPor,
-        eliminadoEn: x.eliminadoEn,
-      };
-    });
+    return rows.map(exclusionDto);
   }
 
   /** Configuración + historial de cambios (uno por campo cambiado). */

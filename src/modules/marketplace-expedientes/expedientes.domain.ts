@@ -144,6 +144,57 @@ export function enAlcance(area: string, alcance: AlcanceConfig): boolean {
   return (areasEnAlcance(alcance) as string[]).includes(area);
 }
 
+// ─── Exclusiones «No enviar» ──────────────────────────────────────────────
+
+/** Actores por los que se puede excluir en lote: ccanalalt, cgestor y cproductor. */
+export const TIPOS_ACTOR = ['canal', 'gestor', 'intermediario'] as const;
+export type TipoActor = (typeof TIPOS_ACTOR)[number];
+
+/** Orden también de prioridad al explicar por qué una póliza no recibe correos. */
+export const ALCANCES_EXCLUSION = [
+  'poliza',
+  'asegurado',
+  ...TIPOS_ACTOR,
+] as const;
+export type AlcanceExclusion = (typeof ALCANCES_EXCLUSION)[number];
+
+export function esTipoActor(v: string): v is TipoActor {
+  return (TIPOS_ACTOR as readonly string[]).includes(v);
+}
+
+/** Código de canal/gestor/productor comparable: sin espacios y en mayúsculas. */
+export function normalizarCodigoActor(v?: string | null): string | null {
+  const s = String(v ?? '')
+    .trim()
+    .toUpperCase();
+  return s ? s.slice(0, 64) : null;
+}
+
+export interface VendedorActores {
+  centidad?: string | null;
+  citem?: string | null;
+  cgestor?: string | null;
+  ccanalalt?: string | null;
+  cproductor?: string | null;
+}
+
+/**
+ * Código del actor de la póliza. Si la emisión no trajo el código propio, se usa citem
+ * cuando centidad coincide (C = canal, G = gestor, P = productor), como en los
+ * registros anteriores a la columna cproductor.
+ */
+export function valorActor(e: VendedorActores, tipo: TipoActor): string | null {
+  const c = String(e.centidad ?? '')
+    .trim()
+    .toUpperCase();
+  const porEntidad = (letra: string) => (c === letra ? e.citem : null);
+  if (tipo === 'canal')
+    return normalizarCodigoActor(e.ccanalalt ?? porEntidad('C'));
+  if (tipo === 'gestor')
+    return normalizarCodigoActor(e.cgestor ?? porEntidad('G'));
+  return normalizarCodigoActor(e.cproductor ?? porEntidad('P'));
+}
+
 // ─── Estados ────────────────────────────────────────────────────────────────
 
 export function requisitosAplicables(

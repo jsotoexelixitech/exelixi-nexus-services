@@ -21,8 +21,11 @@ import {
 } from './expedientes.env';
 import { expedientesService as svc } from './expedientes.service';
 import {
+  actoresQuerySchema,
   configUpdateSchema,
   exclusionCreateSchema,
+  exclusionesQuerySchema,
+  exclusionLoteSchema,
   indicadoresQuerySchema,
   JOBS,
   JobName,
@@ -230,9 +233,10 @@ router.get(
   internoLimiter,
   sesion,
   admin,
-  h(async (req, res) =>
-    ok(res, await svc.listarExclusiones(req.query.todas === 'true')),
-  ),
+  h(async (req, res) => {
+    const q = exclusionesQuerySchema.parse(req.query);
+    return ok(res, await svc.listarExclusiones(q.todas === 'true', q.alcance));
+  }),
 );
 
 router.post(
@@ -243,6 +247,30 @@ router.post(
   h(async (req, res) => {
     const body = exclusionCreateSchema.shape.body.parse(req.body ?? {});
     return ok(res, await svc.crearExclusion(body, actorDe(req)), 201);
+  }),
+);
+
+/** Selección múltiple: { alcance, motivo, valores[] } → una exclusión por valor. */
+router.post(
+  '/exclusiones/lote',
+  internoLimiter,
+  sesion,
+  admin,
+  h(async (req, res) => {
+    const body = exclusionLoteSchema.shape.body.parse(req.body ?? {});
+    return ok(res, await svc.crearExclusionesLote(body, actorDe(req)), 201);
+  }),
+);
+
+/** Valores para elegir en exclusiones: canal | gestor | intermediario (sin Sis2000). */
+router.get(
+  '/actores',
+  internoLimiter,
+  sesion,
+  admin,
+  h(async (req, res) => {
+    const q = actoresQuerySchema.parse(req.query);
+    return ok(res, await svc.actores(q.tipo, q.q));
   }),
 );
 

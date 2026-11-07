@@ -433,6 +433,8 @@ model MktExpediente {
   ccanalalt          String?   @map("mexp_ccanalalt") @db.VarChar(32)
   cusuario           String?   @map("mexp_cusuario") @db.VarChar(32)
   xlogin             String?   @map("mexp_xlogin") @db.VarChar(100)
+  /// Intermediario (cproductor) informado por la emisión; los registros anteriores lo toman de citem si centidad = P.
+  cproductor         String?   @map("mexp_cproductor") @db.VarChar(32)
   estadoPago         String    @default("pagada") @map("mexp_estado_pago") @db.VarChar(16)
   estadoDocumental   String    @default("incompleto") @map("mexp_estado_documental") @db.VarChar(16)
   aseguradoKey       String?   @map("mexp_asegurado_key") @db.VarChar(120)
@@ -513,7 +515,10 @@ model MktExpedienteConfig {
 
 model MktExpedienteExclusion {
   id                Int       @id @default(autoincrement()) @map("mexc_id")
+  /// asegurado | poliza | canal | gestor | intermediario
   alcance           String    @map("mexc_alcance") @db.VarChar(16)
+  /// Código excluido si el alcance es canal (ccanalalt), gestor (cgestor) o intermediario (cproductor).
+  valor             String?   @map("mexc_valor") @db.VarChar(64)
   empresaId         Int?      @map("mexc_empresa_id")
   cnpoliza          String?   @map("mexc_cnpoliza") @db.VarChar(64)
   aseguradoKey      String?   @map("mexc_asegurado_key") @db.VarChar(120)
