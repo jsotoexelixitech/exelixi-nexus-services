@@ -29,6 +29,7 @@ router.post('/', apiKeyGuard, async (req: Request, res: Response) => {
     frecuencia,
     monto,
     jsonData,
+    expediente,
   } = req.body || {};
 
   if (!empresaId || !producto || !polizaNumero) {
@@ -52,6 +53,7 @@ router.post('/', apiKeyGuard, async (req: Request, res: Response) => {
       frecuencia,
       monto: monto != null ? Number(monto) : undefined,
       jsonData,
+      expediente,
     });
     res.status(201).json({ success: true, data: emision });
   } catch (err: unknown) {

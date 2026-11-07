@@ -1,5 +1,6 @@
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
+import { onEmisionRegistrada } from '../marketplace-expedientes/expedientes.hook';
 
 export interface RegistrarEmisionDto {
   empresaId: number;
@@ -13,6 +14,8 @@ export interface RegistrarEmisionDto {
   frecuencia?: string;
   monto?: number;
   jsonData?: Record<string, unknown>;
+  /** Opcional (monitor de expedientes). No se guarda en `emision`. */
+  expediente?: unknown;
 }
 
 export class EmisionService {
@@ -34,6 +37,8 @@ export class EmisionService {
       logger.info(
         `[EmisionService] Emisión ya existía id=${yaRegistrada.id} poliza=${dto.polizaNumero}`,
       );
+      // Monitor de expedientes: no bloquea ni cambia la respuesta (apagado por defecto).
+      onEmisionRegistrada(yaRegistrada, dto);
       return yaRegistrada;
     }
 
@@ -73,6 +78,9 @@ export class EmisionService {
     logger.info(
       `[EmisionService] Emisión registrada id=${emision.id} poliza=${emision.polizaNumero}`,
     );
+
+    // Monitor de expedientes: no bloquea ni cambia la respuesta (apagado por defecto).
+    onEmisionRegistrada(emision, dto);
 
     return emision;
   }

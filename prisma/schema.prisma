@@ -412,3 +412,170 @@ model PortalAuditLog {
   @@index([sessionId], map: "idx_portal_audit_session")
   @@map("portal_audit_log")
 }
+
+// ─── Monitor de expedientes Marketplace (tablas nuevas, solo aditivo) ──────
+// La fuente de pólizas sigue siendo `emision`: aquí solo se guarda la llave
+// (emisionId, empresa + cnpoliza) y lo que el feed no trae (estado documental,
+// requisitos, intentos, exclusiones, enlaces, configuración y auditoría).
+
+model MktExpediente {
+  id                 Int       @id @default(autoincrement()) @map("mexp_id")
+  empresaId          Int       @map("mexp_empresa_id")
+  emisionId          Int?      @map("mexp_emision_id")
+  cnpoliza           String    @map("mexp_cnpoliza") @db.VarChar(64)
+  cnrecibo           String?   @map("mexp_cnrecibo") @db.VarChar(64)
+  producto           String    @map("mexp_producto") @db.VarChar(32)
+  cramo              Int?      @map("mexp_cramo")
+  area               String    @default("desconocida") @map("mexp_area") @db.VarChar(16)
+  centidad           String?   @map("mexp_centidad") @db.VarChar(1)
+  citem              String?   @map("mexp_citem") @db.VarChar(32)
+  cgestor            String?   @map("mexp_cgestor") @db.VarChar(50)
+  ccanalalt          String?   @map("mexp_ccanalalt") @db.VarChar(32)
+  cusuario           String?   @map("mexp_cusuario") @db.VarChar(32)
+  xlogin             String?   @map("mexp_xlogin") @db.VarChar(100)
+  estadoPago         String    @default("pagada") @map("mexp_estado_pago") @db.VarChar(16)
+  estadoDocumental   String    @default("incompleto") @map("mexp_estado_documental") @db.VarChar(16)
+  aseguradoKey       String?   @map("mexp_asegurado_key") @db.VarChar(120)
+  aseguradoTipoDoc   String?   @map("mexp_asegurado_tipo_doc") @db.VarChar(2)
+  aseguradoDocumento String?   @map("mexp_asegurado_documento") @db.VarChar(32)
+  aseguradoNombre    String?   @map("mexp_asegurado_nombre") @db.VarChar(150)
+  aseguradoApellido  String?   @map("mexp_asegurado_apellido") @db.VarChar(150)
+  aseguradoEmail     String?   @map("mexp_asegurado_email") @db.VarChar(200)
+  aseguradoTelefono  String?   @map("mexp_asegurado_telefono") @db.VarChar(40)
+  snapshot           Json?     @map("mexp_snapshot") @db.JsonB
+  carpetaExpediente  String?   @map("mexp_carpeta") @db.Text
+  origen             String    @default("emision") @map("mexp_origen") @db.VarChar(16)
+  etapaEnviada       Int       @default(-1) @map("mexp_etapa_enviada")
+  intentos           Int       @default(0) @map("mexp_intentos")
+  ultimoEnvio        DateTime? @map("mexp_ultimo_envio") @db.Timestamp(6)
+  cadenciaAgotada    Boolean   @default(false) @map("mexp_cadencia_agotada")
+  cambiosDetectados  Boolean   @default(false) @map("mexp_cambios_detectados")
+  emitidaEn          DateTime  @map("mexp_emitida_en") @db.Timestamp(6)
+  completadoEn       DateTime? @map("mexp_completado_en") @db.Timestamp(6)
+  createdAt          DateTime  @default(now()) @map("mexp_created_at") @db.Timestamp(6)
+  updatedAt          DateTime  @updatedAt @map("mexp_updated_at") @db.Timestamp(6)
+
+  requisitos MktExpedienteRequisito[]
+
+  @@unique([empresaId, cnpoliza], map: "uq_mkt_expediente_empresa_poliza")
+  @@index([estadoDocumental, area], map: "idx_mkt_expediente_estado_area")
+  @@index([emitidaEn], map: "idx_mkt_expediente_emitida")
+  @@index([aseguradoKey], map: "idx_mkt_expediente_asegurado")
+  @@index([emisionId], map: "idx_mkt_expediente_emision")
+  @@map("mkt_expediente")
+}
+
+model MktExpedienteRequisito {
+  id           Int       @id @default(autoincrement()) @map("mreq_id")
+  expedienteId Int       @map("mreq_expediente_id")
+  tipo         String    @map("mreq_tipo") @db.VarChar(32)
+  estado       String    @default("faltante") @map("mreq_estado") @db.VarChar(16)
+  motivo       String?   @map("mreq_motivo") @db.Text
+  ref          String?   @map("mreq_ref") @db.Text
+  origen       String?   @map("mreq_origen") @db.VarChar(16)
+  ocrDatos     Json?     @map("mreq_ocr_datos") @db.JsonB
+  ocrConfianza Float?    @map("mreq_ocr_confianza")
+  recibidoEn   DateTime? @map("mreq_recibido_en") @db.Timestamp(6)
+  validadoEn   DateTime? @map("mreq_validado_en") @db.Timestamp(6)
+  validadoPor  String?   @map("mreq_validado_por") @db.VarChar(128)
+  updatedAt    DateTime  @updatedAt @map("mreq_updated_at") @db.Timestamp(6)
+
+  expediente MktExpediente @relation(fields: [expedienteId], references: [id], onDelete: Cascade, map: "fk_mkt_requisito_expediente")
+
+  @@unique([expedienteId, tipo], map: "uq_mkt_requisito_expediente_tipo")
+  @@map("mkt_expediente_requisito")
+}
+
+/// Auditoría: eventos por expediente y eventos globales (config, técnicos) con expedienteId null.
+model MktExpedienteEvento {
+  id           Int      @id @default(autoincrement()) @map("mevt_id")
+  expedienteId Int?     @map("mevt_expediente_id")
+  tipo         String   @map("mevt_tipo") @db.VarChar(48)
+  actor        String   @map("mevt_actor") @db.VarChar(128)
+  detalle      Json?    @map("mevt_detalle") @db.JsonB
+  createdAt    DateTime @default(now()) @map("mevt_created_at") @db.Timestamp(6)
+
+  @@index([expedienteId], map: "idx_mkt_evento_expediente")
+  @@index([tipo, createdAt], map: "idx_mkt_evento_tipo_fecha")
+  @@map("mkt_expediente_evento")
+}
+
+model MktExpedienteConfig {
+  clave          String   @id @map("mcfg_clave") @db.VarChar(32)
+  valor          Json     @map("mcfg_valor") @db.JsonB
+  actualizadoPor String?  @map("mcfg_actualizado_por") @db.VarChar(128)
+  updatedAt      DateTime @updatedAt @map("mcfg_updated_at") @db.Timestamp(6)
+
+  @@map("mkt_expediente_config")
+}
+
+model MktExpedienteExclusion {
+  id                Int       @id @default(autoincrement()) @map("mexc_id")
+  alcance           String    @map("mexc_alcance") @db.VarChar(16)
+  empresaId         Int?      @map("mexc_empresa_id")
+  cnpoliza          String?   @map("mexc_cnpoliza") @db.VarChar(64)
+  aseguradoKey      String?   @map("mexc_asegurado_key") @db.VarChar(120)
+  expedienteId      Int?      @map("mexc_expediente_id")
+  motivo            String    @map("mexc_motivo") @db.Text
+  creadoPor         String    @map("mexc_creado_por") @db.VarChar(128)
+  activo            Boolean   @default(true) @map("mexc_activo")
+  eliminadoPor      String?   @map("mexc_eliminado_por") @db.VarChar(128)
+  eliminadoEn       DateTime? @map("mexc_eliminado_en") @db.Timestamp(6)
+  motivoEliminacion String?   @map("mexc_motivo_eliminacion") @db.Text
+  createdAt         DateTime  @default(now()) @map("mexc_created_at") @db.Timestamp(6)
+
+  @@index([activo, alcance], map: "idx_mkt_exclusion_activo")
+  @@map("mkt_expediente_exclusion")
+}
+
+/// Intentos de correo (recordatorios, eventos y resumen nocturno). Destinatario solo enmascarado.
+model MktExpedienteNotificacion {
+  id                 Int      @id @default(autoincrement()) @map("mnot_id")
+  expedienteId       Int?     @map("mnot_expediente_id")
+  aseguradoKey       String?  @map("mnot_asegurado_key") @db.VarChar(120)
+  tipo               String   @map("mnot_tipo") @db.VarChar(32)
+  etapa              Int?     @map("mnot_etapa")
+  resultado          String   @map("mnot_resultado") @db.VarChar(24)
+  destinatarioMasked String?  @map("mnot_destinatario") @db.VarChar(200)
+  proveedor          String?  @map("mnot_proveedor") @db.VarChar(32)
+  error              String?  @map("mnot_error") @db.Text
+  lote               String?  @map("mnot_lote") @db.VarChar(64)
+  createdAt          DateTime @default(now()) @map("mnot_created_at") @db.Timestamp(6)
+
+  @@index([expedienteId], map: "idx_mkt_notificacion_expediente")
+  @@index([createdAt], map: "idx_mkt_notificacion_fecha")
+  @@map("mkt_expediente_notificacion")
+}
+
+/// Enlace firmado del asegurado: solo se guarda el hash SHA-256 del token.
+model MktExpedienteEnlace {
+  id             Int       @id @default(autoincrement()) @map("menl_id")
+  tokenHash      String    @unique(map: "uq_mkt_enlace_hash") @map("menl_token_hash") @db.VarChar(64)
+  proposito      String    @default("carga_documental") @map("menl_proposito") @db.VarChar(32)
+  aseguradoKey   String?   @map("menl_asegurado_key") @db.VarChar(120)
+  expedienteIds  Json      @map("menl_expediente_ids") @db.JsonB
+  expiraEn       DateTime  @map("menl_expira_en") @db.Timestamp(6)
+  usadoEn        DateTime? @map("menl_usado_en") @db.Timestamp(6)
+  revocadoEn     DateTime? @map("menl_revocado_en") @db.Timestamp(6)
+  ultimoAccesoEn DateTime? @map("menl_ultimo_acceso_en") @db.Timestamp(6)
+  accesos        Int       @default(0) @map("menl_accesos")
+  createdAt      DateTime  @default(now()) @map("menl_created_at") @db.Timestamp(6)
+
+  @@map("mkt_expediente_enlace")
+}
+
+/// Una ejecución por tarea y fecha (hora Caracas) para no repetir tras reinicios.
+model MktExpedienteJobRun {
+  id      Int       @id @default(autoincrement()) @map("mjob_id")
+  job     String    @map("mjob_job") @db.VarChar(32)
+  fecha   String    @map("mjob_fecha") @db.VarChar(48)
+  origen  String    @default("auto") @map("mjob_origen") @db.VarChar(16)
+  estado  String    @default("en_curso") @map("mjob_estado") @db.VarChar(16)
+  inicio  DateTime  @default(now()) @map("mjob_inicio") @db.Timestamp(6)
+  fin     DateTime? @map("mjob_fin") @db.Timestamp(6)
+  resumen Json?     @map("mjob_resumen") @db.JsonB
+  error   String?   @map("mjob_error") @db.Text
+
+  @@unique([job, fecha], map: "uq_mkt_job_run_job_fecha")
+  @@map("mkt_expediente_job_run")
+}

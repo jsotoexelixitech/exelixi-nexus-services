@@ -31,6 +31,7 @@ import emisionRoutes from './modules/emision/emision.routes';
 import funeralSubmissionRoutes from './modules/funeral-submission/funeral-submission.routes';
 import portalRoutes from './modules/portal/portal.routes';
 import publicLinksRoutes from './modules/public-links/public-links.routes';
+import expedientesRoutes from './modules/marketplace-expedientes/expedientes.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -116,6 +117,10 @@ app.use('/api/funeral-submissions', funeralSubmissionRoutes);
 
 // Portal operadores La Mundial — solo JWT Bearer (authenticate en el router)
 app.use('/api/portal', portalRoutes);
+
+// Monitor de expedientes Marketplace — sesión del portal + enlace firmado público.
+// Apagado por defecto (EXPEDIENTES_ENABLED); sin la variable responde 404.
+app.use('/api/expedientes', expedientesRoutes);
 
 // Links directos de emisión (web La Mundial) — sin API key; lista blanca NEXUS_LINKS_DIRECTOS + rate limit propio
 app.use('/api/public', publicLinksRoutes);
