@@ -80,7 +80,9 @@ import {
   correoObservado,
   correoRecibido,
   correoSolicitudInicial,
+  DocumentoCorreo,
   entregarCorreo,
+  estadoDocCorreo,
 } from './expedientes.mail';
 import {
   expedientePayloadSchema,
@@ -154,6 +156,45 @@ function rec(v: unknown): Record<string, unknown> {
 export function primerNombre(e: Pick<Exp, 'aseguradoNombre'>): string {
   const n = String(e.aseguradoNombre ?? '').trim();
   return n ? n.split(/\s+/)[0] : 'cliente';
+}
+
+/**
+ * Documentos del asegurado para el correo, solo de sus propias pólizas. El motivo de
+ * «envíalo de nuevo» es el mismo que ve en la página pública (nunca el resumen de la IA).
+ * `recienRecibido`: el tipo que acaba de cargar se muestra «Recibido» en vez de «En revisión».
+ */
+export function documentosCorreo(
+  exps: Exp[],
+  reqs: Map<number, Req[]>,
+  config: ExpedientesConfig,
+  recienRecibido?: string,
+): DocumentoCorreo[] {
+  const varias = exps.length > 1;
+  const out: DocumentoCorreo[] = [];
+  for (const e of exps) {
+    const porTipo = new Map((reqs.get(e.id) ?? []).map((r) => [r.tipo, r]));
+    for (const tipo of requisitosAplicables(e.producto, config)) {
+      const r = porTipo.get(tipo);
+      let estado = estadoDocCorreo(r?.estado ?? 'faltante');
+      if (!estado) continue;
+      if (estado === 'en_revision' && recienRecibido === tipo)
+        estado = 'recibido';
+      const diag = r ? diagnosticoVigente(r) : null;
+      const motivo =
+        estado === 'corregir'
+          ? diag && r?.decision === 'ia'
+            ? motivoParaAsegurado(diag)
+            : (r?.motivo ?? '')
+          : '';
+      out.push({
+        nombre: requisitoLabel(tipo),
+        estado,
+        ...(motivo ? { motivo } : {}),
+        ...(varias ? { poliza: e.cnpoliza } : {}),
+      });
+    }
+  }
+  return out;
 }
 
 export function polizaOResumen(exps: Pick<Exp, 'cnpoliza'>[]): string {
@@ -2133,27 +2174,44 @@ export class ExpedientesService {
         return;
       }
       const nombre = primerNombre(exp);
+      const [config, reqs] = await Promise.all([
+        this.getConfig(),
+        this.requisitosDe([exp.id]),
+      ]);
+      const documentos = documentosCorreo(
+        [exp],
+        reqs,
+        config,
+        tipo === 'recibido' ? extra.tipo : undefined,
+      );
+      const base = { nombre, polizas: [exp.cnpoliza], documentos };
       let content;
       if (tipo === 'completo') {
-        content = correoCompleto({
-          nombre,
-          polizaOResumen: `la póliza N° ${exp.cnpoliza}`,
-        });
+        content = correoCompleto({ ...base, enlace: null });
       } else if (tipo === 'recibido') {
         content = correoRecibido({
-          nombre,
+          ...base,
+          enlace: null,
           documento: requisitoLabel(extra.tipo ?? ''),
         });
       } else {
         const link = emailValido(exp.aseguradoEmail)
           ? await this.crearEnlace(exp.aseguradoKey, [exp.id])
           : null;
+        const motivo = extra.motivo || 'el documento no se pudo verificar';
         content = correoObservado({
-          nombre,
+          ...base,
+          // El motivo del evento manda sobre el guardado (es el de esta revisión).
+          documentos: documentos.map((d) =>
+            d.estado === 'corregir' &&
+            d.nombre === requisitoLabel(extra.tipo ?? '')
+              ? { ...d, motivo }
+              : d,
+          ),
           documento: requisitoLabel(extra.tipo ?? ''),
-          motivo: extra.motivo || 'el documento no se pudo verificar',
-          poliza: `N° ${exp.cnpoliza}`,
+          motivo,
           enlace: link?.url ?? null,
+          expiraEn: link?.expiraEn ?? null,
         });
       }
       const r = await entregarCorreo([exp.aseguradoEmail], nombre, content);
@@ -2190,18 +2248,14 @@ export class ExpedientesService {
       this.getConfig(),
       prisma.mktExpedienteRequisito.findMany({ where: { expedienteId: id } }),
     ]);
-    const pendientes = requisitosAplicables(exp.producto, config)
-      .filter((t) =>
-        esPendiente(reqs.find((r) => r.tipo === t)?.estado ?? 'faltante'),
-      )
-      .map(requisitoLabel);
     const link = await this.crearEnlace(exp.aseguradoKey, [exp.id]);
     const nombre = primerNombre(exp);
     const base = correoSolicitudInicial({
       nombre,
-      polizaOResumen: polizaOResumen([exp]),
-      pendientes: pendientes.length ? pendientes : ['documentos en validación'],
+      polizas: [exp.cnpoliza],
+      documentos: documentosCorreo([exp], new Map([[exp.id, reqs]]), config),
       enlace: link.url,
+      expiraEn: link.expiraEn,
     });
     const content = { ...base, subject: `[Prueba QA] ${base.subject}` };
     const r = await entregarCorreo([destino], nombre, content);

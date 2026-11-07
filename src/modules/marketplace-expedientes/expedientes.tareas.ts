@@ -15,7 +15,6 @@ import {
   esPendiente,
   etapaDebida,
   ExpedientesConfig,
-  requisitoLabel,
   requisitosAplicables,
   whitelistPermite,
 } from './expedientes.domain';
@@ -31,9 +30,9 @@ import {
   entregarCorreo,
 } from './expedientes.mail';
 import {
+  documentosCorreo,
   estaExcluido,
   expedientesService as svc,
-  polizaOResumen,
   primerNombre,
 } from './expedientes.service';
 
@@ -230,28 +229,21 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
     const paraEnlace = conPendientes.length
       ? conPendientes
       : activos.map((m) => m.exp);
-    const pendientes = paraEnlace.map((e) => {
-      const docs = pendientesDe(e, reqs.get(e.id) ?? [], config).map(
-        requisitoLabel,
-      );
-      const lista = docs.length ? docs.join(', ') : 'documentos en validación';
-      return paraEnlace.length > 1
-        ? `Póliza N° ${e.cnpoliza}: ${lista}`
-        : lista;
-    });
     const link = await svc.crearEnlace(
       key.startsWith('exp:') ? null : key,
       paraEnlace.map((e) => e.id),
     );
     const nombre = primerNombre(activos[0].exp);
+    const datos = {
+      nombre,
+      polizas: paraEnlace.map((e) => e.cnpoliza),
+      documentos: documentosCorreo(paraEnlace, reqs, config),
+      enlace: link.url,
+      expiraEn: link.expiraEn,
+    };
     const content = inicial
-      ? correoSolicitudInicial({
-          nombre,
-          polizaOResumen: polizaOResumen(paraEnlace),
-          pendientes,
-          enlace: link.url,
-        })
-      : correoRecordatorio({ nombre, pendientes, enlace: link.url });
+      ? correoSolicitudInicial(datos)
+      : correoRecordatorio(datos);
     const r = await entregarCorreo([email], nombre, content);
     await registrar(r.resultado, r.destinatarioMasked, r.error);
     if (r.resultado === 'enviado') resumen.enviados += activos.length;

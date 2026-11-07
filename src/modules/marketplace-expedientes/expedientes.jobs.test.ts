@@ -119,11 +119,15 @@ describe('lista blanca', () => {
     expect(mailCalls()).toHaveLength(1);
     const body = bodyDe(mailCalls()[0]);
     expect(body.to).toBe('luis@test.com');
-    expect(body.template).toBe('branded');
+    expect(body.template).toBe('expediente-documentos');
+    expect(body.data.tipo).toBe('solicitud');
     expect(body.data.subject).toBe(
       'La Mundial | Completa la documentación de tu póliza',
     );
-    expect(body.data.ctaUrl).toMatch(
+    expect(body.data.poliza).toBe('P-1');
+    expect(body.data.documentos.length).toBeGreaterThan(0);
+    expect(body.data.venceEn).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(body.data.enlace).toMatch(
       /^https:\/\/nexusqa\.test\/portal-lm\/expediente\?t=[\w-]{43}$/,
     );
     expect(notifs('enviado')).toHaveLength(1);
@@ -201,9 +205,10 @@ describe('agrupación, exclusiones y sin correo', () => {
     await crear('P-2');
     await enviarRecordatorios(BASE);
     expect(mailCalls()).toHaveLength(1);
-    const intro = bodyDe(mailCalls()[0]).data.intro as string;
-    expect(intro).toContain('P-1');
-    expect(intro).toContain('P-2');
+    const data = bodyDe(mailCalls()[0]).data;
+    expect(data.poliza).toBe('P-1, P-2');
+    const polizasDocs = new Set(data.documentos.map((d: any) => d.poliza));
+    expect([...polizasDocs].sort()).toEqual(['P-1', 'P-2']);
     const enviados = notifs('enviado');
     expect(enviados).toHaveLength(2);
     expect(enviados[0].lote).toBe(enviados[1].lote);
