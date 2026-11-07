@@ -26,6 +26,7 @@ vi.mock('../portal/portal-admin.middleware', () => ({
 }));
 
 import prisma from '../../config/prisma';
+import logger from '../../utils/logger';
 import router from './expedientes.routes';
 import { expedientesService } from './expedientes.service';
 
@@ -40,7 +41,9 @@ beforeEach(() => {
   db.$reset();
   process.env.EXPEDIENTES_ENABLED = 'true';
   delete process.env.EXPEDIENTES_ENTORNO;
+  delete process.env.EXPEDIENTES_ACCESO_LIBRE;
   process.env.NODE_ENV = 'test';
+  vi.mocked(logger.info).mockClear();
 });
 
 describe('rutas /api/expedientes', () => {
@@ -280,5 +283,117 @@ describe('bloque 2: config, exclusiones y validación manual', () => {
     );
     const auto = await request(app).post(`${base}/validar`).set(ADMIN);
     expect(auto.status).toBe(409);
+  });
+});
+
+describe('acceso libre QA (EXPEDIENTES_ACCESO_LIBRE)', () => {
+  const JPG = Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    Buffer.alloc(200, 1),
+  ]);
+
+  async function rutasInternas(id: number) {
+    const base = `/api/expedientes/${id}/requisitos/cedula`;
+    return [
+      await request(app).get('/api/expedientes'),
+      await request(app).get('/api/expedientes/indicadores'),
+      await request(app).get(`/api/expedientes/${id}`),
+      await request(app).get('/api/expedientes/config'),
+      await request(app)
+        .put('/api/expedientes/config')
+        .send({ horaDiaria: '07:30', motivo: 'prueba QA' }),
+      await request(app).get('/api/expedientes/exclusiones'),
+      await request(app)
+        .post('/api/expedientes/exclusiones')
+        .send({ alcance: 'asegurado', expedienteId: id, motivo: 'prueba QA' }),
+      await request(app)
+        .post(`${base}/observar`)
+        .send({ motivo: 'Imagen ilegible' }),
+      await request(app).post(`${base}/validar`),
+      await request(app)
+        .post(`/api/expedientes/${id}/upload`)
+        .field('tipo', 'licencia')
+        .attach('file', JPG, 'licencia.jpg'),
+      await request(app).post('/api/expedientes/jobs/conciliacion/ejecutar'),
+    ];
+  }
+
+  it('QA sin sesión: lee y escribe como administrador y audita qa-acceso-libre', async () => {
+    process.env.EXPEDIENTES_ACCESO_LIBRE = 'true';
+    const r = await crearRcvConCedulaRecibida();
+    const res = await rutasInternas(r!.id);
+    expect(res.map((x) => x.status)).toEqual([
+      200, 200, 200, 200, 200, 200, 201, 200, 200, 201, 200,
+    ]);
+    const del = await request(app)
+      .delete(`/api/expedientes/exclusiones/${res[6].body.data.id}`)
+      .send({ motivo: 'fin de la prueba' });
+    expect(del.status).toBe(200);
+
+    const auditado = (tipo: string) =>
+      db.mktExpedienteEvento
+        ._rows()
+        .some((x: any) => x.tipo === tipo && x.actor === 'qa-acceso-libre');
+    for (const tipo of [
+      'config_actualizada',
+      'exclusion_creada',
+      'exclusion_eliminada',
+      'requisito_observado',
+      'requisito_validado',
+      'documento_recibido',
+    ]) {
+      expect(auditado(tipo)).toBe(true);
+    }
+
+    const logs = vi
+      .mocked(logger.info)
+      .mock.calls.map((c) => String(c[0]))
+      .filter((m) => m.includes('acceso libre'));
+    expect(logs.length).toBeGreaterThanOrEqual(res.length);
+    for (const m of logs) expect(m).not.toMatch(/11222333|luis@test|Luis/);
+  });
+
+  it('producción declarada: la variable no abre nada', async () => {
+    process.env.EXPEDIENTES_ACCESO_LIBRE = 'true';
+    const r = await crearRcvConCedulaRecibida();
+    process.env.EXPEDIENTES_ENTORNO = 'produccion';
+    const res = await rutasInternas(r!.id);
+    expect(res.every((x) => x.status === 401)).toBe(true);
+    expect(
+      db.mktExpedienteEvento
+        ._rows()
+        .some((x: any) => x.actor === 'qa-acceso-libre'),
+    ).toBe(false);
+    // Con sesión real en producción, config sigue exigiendo administrador.
+    expect(
+      (await request(app).get('/api/expedientes/config').set(AUTH)).status,
+    ).toBe(403);
+  });
+
+  it('NODE_ENV=production exige EXPEDIENTES_ENTORNO=qa explícito', async () => {
+    process.env.EXPEDIENTES_ACCESO_LIBRE = 'true';
+    process.env.NODE_ENV = 'production';
+    expect((await request(app).get('/api/expedientes')).status).toBe(401);
+    process.env.EXPEDIENTES_ENTORNO = 'qa';
+    expect((await request(app).get('/api/expedientes')).status).toBe(200);
+  });
+
+  it('sin la variable, sin sesión da 401; con sesión real se usa la sesión real', async () => {
+    expect((await request(app).get('/api/expedientes/config')).status).toBe(
+      401,
+    );
+    process.env.EXPEDIENTES_ACCESO_LIBRE = 'true';
+    expect(
+      (await request(app).get('/api/expedientes/config').set(AUTH)).status,
+    ).toBe(403);
+    const put = await request(app)
+      .put('/api/expedientes/config')
+      .set(ADMIN)
+      .send({ horaDiaria: '07:45', motivo: 'sesión real' });
+    expect(put.status).toBe(200);
+    const ev = db.mktExpedienteEvento
+      ._rows()
+      .find((x: any) => x.tipo === 'config_actualizada');
+    expect(ev.actor).toContain('portal:1');
   });
 });

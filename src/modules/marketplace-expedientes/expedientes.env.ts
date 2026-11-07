@@ -46,6 +46,16 @@ export function expedientesJobsManualPermitido(): boolean {
   );
 }
 
+/**
+ * QA: monitor completo sin login (administrador ficticio, actor `qa-acceso-libre`).
+ * Requiere EXPEDIENTES_ACCESO_LIBRE=true y se ignora siempre en producción declarada.
+ * Con NODE_ENV=production (servidores QA) exige además EXPEDIENTES_ENTORNO=qa explícito,
+ * la misma regla del endpoint de tareas: si falta la variable de entorno, no abre nada.
+ */
+export function expedientesAccesoLibre(): boolean {
+  return flag('EXPEDIENTES_ACCESO_LIBRE') && expedientesJobsManualPermitido();
+}
+
 export function mailWhitelist(): string[] {
   return String(process.env.EXPEDIENTES_MAIL_WHITELIST ?? '')
     .split(/[,;\s]+/)

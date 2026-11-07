@@ -3,6 +3,9 @@
  * Interno: sesión del portal (Bearer, mismo esquema que /api/portal/*).
  * Admin (config, exclusiones, validar, jobs): requirePortalAdmin.
  * Con EXPEDIENTES_ENABLED apagado todas las rutas responden 404.
+ * QA con EXPEDIENTES_ACCESO_LIBRE (nunca en producción): sin Authorization, todas las rutas
+ * internas entran como administrador ficticio (actor `qa-acceso-libre`). Con sesión real,
+ * se usa la sesión real. Las rutas públicas no cambian.
  */
 import { NextFunction, Request, Response, Router } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -12,6 +15,7 @@ import { requirePortalAdmin } from '../portal/portal-admin.middleware';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
 import {
+  expedientesAccesoLibre,
   expedientesEnabled,
   expedientesJobsManualPermitido,
 } from './expedientes.env';
@@ -78,7 +82,33 @@ export function h(fn: Handler) {
   };
 }
 
+export const ACTOR_ACCESO_LIBRE = 'qa-acceso-libre';
+
+type ExpedientesRequest = AuthRequest & { accesoLibre?: boolean };
+
+/**
+ * Sesión del portal. En QA con acceso libre, una petición SIN Authorization entra como
+ * administrador ficticio; si trae Authorization se valida la sesión real como siempre.
+ */
+function sesion(req: Request, res: Response, next: NextFunction) {
+  if (!req.headers.authorization && expedientesAccesoLibre()) {
+    (req as ExpedientesRequest).accesoLibre = true;
+    // Solo método y ruta (ids internos): sin query, sin datos personales.
+    logger.info(
+      `[expedientes] acceso libre QA sin sesión: ${req.method} ${req.baseUrl}${req.path}`,
+    );
+    return next();
+  }
+  return authenticate(req as AuthRequest, res, next);
+}
+
+function admin(req: Request, res: Response, next: NextFunction) {
+  if ((req as ExpedientesRequest).accesoLibre) return next();
+  return requirePortalAdmin(req as AuthRequest, res, next);
+}
+
 export function actorDe(req: AuthRequest): string {
+  if ((req as ExpedientesRequest).accesoLibre) return ACTOR_ACCESO_LIBRE;
   const u = req.user;
   return u ? `portal:${u.id}:${u.email ?? ''}`.slice(0, 128) : 'desconocido';
 }
@@ -118,8 +148,8 @@ const internoLimiter = rateLimit({
 router.post(
   '/jobs/:job/ejecutar',
   internoLimiter,
-  authenticate,
-  requirePortalAdmin,
+  sesion,
+  admin,
   h(async (req, res) => {
     if (!expedientesJobsManualPermitido())
       return fail(res, 404, 'Ruta no encontrada');
@@ -142,7 +172,7 @@ router.post(
 router.get(
   '/',
   internoLimiter,
-  authenticate,
+  sesion,
   h(async (req, res) => {
     const q = listQuerySchema.parse(req.query);
     return ok(res, await svc.listar(q));
@@ -152,7 +182,7 @@ router.get(
 router.get(
   '/indicadores',
   internoLimiter,
-  authenticate,
+  sesion,
   h(async (req, res) => {
     const q = indicadoresQuerySchema.parse(req.query);
     return ok(res, await svc.indicadores(q));
@@ -162,7 +192,7 @@ router.get(
 router.get(
   '/:id(\\d+)',
   internoLimiter,
-  authenticate,
+  sesion,
   h(async (req, res) => ok(res, await svc.detalle(idParam(req)))),
 );
 
@@ -171,16 +201,16 @@ router.get(
 router.get(
   '/config',
   internoLimiter,
-  authenticate,
-  requirePortalAdmin,
+  sesion,
+  admin,
   h(async (_req, res) => ok(res, await svc.getConfigConCambios())),
 );
 
 router.put(
   '/config',
   internoLimiter,
-  authenticate,
-  requirePortalAdmin,
+  sesion,
+  admin,
   h(async (req, res) => {
     const body = configUpdateSchema.shape.body.parse(req.body ?? {});
     return ok(
@@ -198,8 +228,8 @@ router.put(
 router.get(
   '/exclusiones',
   internoLimiter,
-  authenticate,
-  requirePortalAdmin,
+  sesion,
+  admin,
   h(async (req, res) =>
     ok(res, await svc.listarExclusiones(req.query.todas === 'true')),
   ),
@@ -208,8 +238,8 @@ router.get(
 router.post(
   '/exclusiones',
   internoLimiter,
-  authenticate,
-  requirePortalAdmin,
+  sesion,
+  admin,
   h(async (req, res) => {
     const body = exclusionCreateSchema.shape.body.parse(req.body ?? {});
     return ok(res, await svc.crearExclusion(body, actorDe(req)), 201);
@@ -219,8 +249,8 @@ router.post(
 router.delete(
   '/exclusiones/:id(\\d+)',
   internoLimiter,
-  authenticate,
-  requirePortalAdmin,
+  sesion,
+  admin,
   h(async (req, res) => {
     const motivoRaw = req.body?.motivo ?? req.query.motivo;
     const motivo =
@@ -241,8 +271,8 @@ router.delete(
 router.post(
   '/:id(\\d+)/requisitos/:tipo/validar',
   internoLimiter,
-  authenticate,
-  requirePortalAdmin,
+  sesion,
+  admin,
   h(async (req, res) =>
     ok(
       res,
@@ -259,8 +289,8 @@ router.post(
 router.post(
   '/:id(\\d+)/requisitos/:tipo/observar',
   internoLimiter,
-  authenticate,
-  requirePortalAdmin,
+  sesion,
+  admin,
   h(async (req, res) => {
     const { body } = observarSchema.parse({ body: req.body ?? {} });
     return ok(
@@ -303,7 +333,7 @@ const cargaLimiter = rateLimit({
 router.post(
   '/:id(\\d+)/upload',
   cargaLimiter,
-  authenticate,
+  sesion,
   h(async (req, res) => {
     const id = idParam(req);
     const { file, fields } = await leerMultipart(req);
