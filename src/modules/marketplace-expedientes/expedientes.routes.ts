@@ -17,10 +17,13 @@ import {
 } from './expedientes.env';
 import { expedientesService as svc } from './expedientes.service';
 import {
+  configUpdateSchema,
+  exclusionCreateSchema,
   indicadoresQuerySchema,
   JOBS,
   JobName,
   listQuerySchema,
+  observarSchema,
 } from './expedientes.schema';
 import { ejecutarJob } from './expedientes.jobs';
 
@@ -155,6 +158,116 @@ router.get(
   internoLimiter,
   authenticate,
   h(async (req, res) => ok(res, await svc.detalle(idParam(req)))),
+);
+
+// ─── Configuración (admin; cada cambio con motivo y auditoría) ────────────
+
+router.get(
+  '/config',
+  internoLimiter,
+  authenticate,
+  requirePortalAdmin,
+  h(async (_req, res) => ok(res, await svc.getConfig())),
+);
+
+router.put(
+  '/config',
+  internoLimiter,
+  authenticate,
+  requirePortalAdmin,
+  h(async (req, res) => {
+    const body = configUpdateSchema.shape.body.parse(req.body ?? {});
+    return ok(
+      res,
+      await svc.updateConfig(
+        body as Parameters<typeof svc.updateConfig>[0],
+        actorDe(req),
+      ),
+    );
+  }),
+);
+
+// ─── Exclusiones «No enviar correos» (admin; no cambian el estado) ─────────
+
+router.get(
+  '/exclusiones',
+  internoLimiter,
+  authenticate,
+  requirePortalAdmin,
+  h(async (req, res) =>
+    ok(res, await svc.listarExclusiones(req.query.todas === 'true')),
+  ),
+);
+
+router.post(
+  '/exclusiones',
+  internoLimiter,
+  authenticate,
+  requirePortalAdmin,
+  h(async (req, res) => {
+    const body = exclusionCreateSchema.shape.body.parse(req.body ?? {});
+    return ok(res, await svc.crearExclusion(body, actorDe(req)), 201);
+  }),
+);
+
+router.delete(
+  '/exclusiones/:id(\\d+)',
+  internoLimiter,
+  authenticate,
+  requirePortalAdmin,
+  h(async (req, res) => {
+    const motivoRaw = req.body?.motivo ?? req.query.motivo;
+    const motivo =
+      typeof motivoRaw === 'string' ? motivoRaw.trim().slice(0, 500) : '';
+    return ok(
+      res,
+      await svc.eliminarExclusion(
+        idParam(req),
+        actorDe(req),
+        motivo || undefined,
+      ),
+    );
+  }),
+);
+
+// ─── Validación manual (admin; solo si validacion=manual) ─────────────────
+
+router.post(
+  '/:id(\\d+)/requisitos/:tipo/validar',
+  internoLimiter,
+  authenticate,
+  requirePortalAdmin,
+  h(async (req, res) =>
+    ok(
+      res,
+      await svc.validarManual(
+        idParam(req),
+        String(req.params.tipo),
+        'validar',
+        actorDe(req),
+      ),
+    ),
+  ),
+);
+
+router.post(
+  '/:id(\\d+)/requisitos/:tipo/observar',
+  internoLimiter,
+  authenticate,
+  requirePortalAdmin,
+  h(async (req, res) => {
+    const { body } = observarSchema.parse({ body: req.body ?? {} });
+    return ok(
+      res,
+      await svc.validarManual(
+        idParam(req),
+        String(req.params.tipo),
+        'observar',
+        actorDe(req),
+        body.motivo,
+      ),
+    );
+  }),
 );
 
 export default router;
