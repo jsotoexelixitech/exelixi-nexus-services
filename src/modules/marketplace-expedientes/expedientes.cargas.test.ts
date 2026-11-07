@@ -153,6 +153,10 @@ describe('carga del vendedor', () => {
 
   it('reenvía al OCR con la clave interna; manual deja recibido aunque el OCR coincida', async () => {
     conOcr();
+    await svc.updateConfig(
+      { validacion: 'manual', motivo: 'probar manual' } as any,
+      'portal:1',
+    );
     const id = await crear('P-2');
     const r = await request(app)
       .post(`/api/expedientes/${id}/upload`)
@@ -187,8 +191,10 @@ describe('carga del vendedor', () => {
       .attach('file', JPG, 'c.jpg');
     expect(req(a, 'cedula')).toMatchObject({
       estado: 'validado',
-      validadoPor: 'auto',
+      validadoPor: 'ia',
+      decision: 'ia',
     });
+    expect(req(a, 'cedula').diagnostico.resultado).toBe('coincide');
 
     ocrRespuesta.body.ocr.extraido = {
       documento: '99999999',
@@ -213,7 +219,7 @@ describe('carga del vendedor', () => {
     expect(req(b, 'licencia').estado).toBe('observado');
   });
 
-  it('automática: confianza 0.5 con datos que coinciden → recibido (sin certeza)', async () => {
+  it('automática: confianza 0.5 con datos que coinciden → observado «Revisar» (sin certeza)', async () => {
     conOcr();
     await svc.updateConfig(
       { validacion: 'automatica', motivo: 'probar' } as any,
@@ -226,7 +232,9 @@ describe('carga del vendedor', () => {
       .set(AUTH)
       .field('tipo', 'cedula')
       .attach('file', JPG, 'c.jpg');
-    expect(req(id, 'cedula').estado).toBe('recibido');
+    expect(req(id, 'cedula').estado).toBe('observado');
+    expect(req(id, 'cedula').motivo).toMatch(/^Revisar: /);
+    expect(req(id, 'cedula').diagnostico.resultado).toBe('sin_certeza');
     ocrRespuesta.body.ocr = {
       extraido: {},
       confianza: 0,

@@ -41,6 +41,10 @@ async function correr(
       return tareaDiaria(ahora);
     case 'nocturna':
       return tareaNocturna(ahora);
+    case 'validacion_ia':
+      return {
+        validacionIa: await svc.revisarConIa({ modo: 'completo', ahora }),
+      };
     default:
       throw new Error(`Tarea ${String(job)} no implementada`);
   }
@@ -147,12 +151,57 @@ export async function tickScheduler(
   return corridos;
 }
 
+// ─── Validación automática con IA (fuera del registro diario) ───────────────
+
+/** Reintentos de errores técnicos y documentos recién recibidos: cada 5 minutos. */
+const IA_TICK_MS = 5 * 60 * 1000;
+/** Pasada completa al arrancar, cuando el proceso ya está estable. */
+const IA_ARRANQUE_MS = 30 * 1000;
+let iaCorriendo = false;
+let iaTimer: NodeJS.Timeout | null = null;
+let iaArranque: NodeJS.Timeout | null = null;
+
+/**
+ * Una pasada de la IA (solo con EXPEDIENTES_JOBS_ENABLED). 'recibidos' = lo pendiente y los
+ * reintentos vencidos; 'completo' = además, lo decidido por la IA si cambió el archivo o la póliza.
+ * Nunca se solapa consigo misma; el tope de 2 análisis simultáneos lo pone la cola del servicio.
+ */
+export async function tickIa(
+  modo: 'recibidos' | 'completo' = 'recibidos',
+): Promise<unknown> {
+  if (!expedientesJobsEnabled() || iaCorriendo) return null;
+  iaCorriendo = true;
+  try {
+    const r = await svc.revisarConIa({ modo });
+    if (r.analizados)
+      logger.info(
+        `[expedientes] IA ${modo}: ${r.analizados} analizados, ${r.validados} validados, ${r.observados} observados, ${r.erroresTecnicos} errores técnicos`,
+      );
+    return r;
+  } catch (err) {
+    logger.error(
+      `[expedientes] IA ${modo}: ${err instanceof Error ? err.message : 'error'}`,
+    );
+    return null;
+  } finally {
+    iaCorriendo = false;
+  }
+}
+
 export function iniciarSchedulerExpedientes(): void {
   if (timer || !expedientesJobsEnabled()) return;
   timer = setInterval(() => {
     void tickScheduler();
   }, TICK_MS);
   timer.unref();
+  iaTimer = setInterval(() => {
+    void tickIa('recibidos');
+  }, IA_TICK_MS);
+  iaTimer.unref();
+  iaArranque = setTimeout(() => {
+    void tickIa('completo');
+  }, IA_ARRANQUE_MS);
+  iaArranque.unref();
   logger.info('[expedientes] scheduler de tareas activo (hora Caracas)');
 }
 
@@ -160,6 +209,11 @@ export function iniciarSchedulerExpedientes(): void {
 export function _resetScheduler(): void {
   for (const k of Object.keys(yaCorrio)) delete yaCorrio[k as JobName];
   corriendo = false;
+  iaCorriendo = false;
   if (timer) clearInterval(timer);
+  if (iaTimer) clearInterval(iaTimer);
+  if (iaArranque) clearTimeout(iaArranque);
   timer = null;
+  iaTimer = null;
+  iaArranque = null;
 }

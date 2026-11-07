@@ -483,6 +483,19 @@ model MktExpedienteRequisito {
   validadoEn   DateTime? @map("mreq_validado_en") @db.Timestamp(6)
   validadoPor  String?   @map("mreq_validado_por") @db.VarChar(128)
   updatedAt    DateTime  @updatedAt @map("mreq_updated_at") @db.Timestamp(6)
+  /// Validación automática con IA: { analizadoEn, proveedor, confianza, resultado, campos[], resumen }.
+  diagnostico      Json?     @map("mreq_diagnostico") @db.JsonB
+  /// SHA-256 del archivo analizado (lo devuelve el OCR).
+  archivoHash      String?   @map("mreq_archivo_hash") @db.VarChar(64)
+  /// Huella (SHA-256) de los datos de la póliza con que se comparó: si cambia, se vuelve a comparar.
+  huellaPoliza     String?   @map("mreq_huella_poliza") @db.VarChar(64)
+  /// ref del archivo al que corresponde el diagnóstico (otro ref = archivo nuevo, se analiza).
+  analisisRef      String?   @map("mreq_analisis_ref") @db.Text
+  /// Errores técnicos seguidos (espera creciente entre reintentos).
+  analisisIntentos Int       @default(0) @map("mreq_analisis_intentos")
+  proximoAnalisis  DateTime? @map("mreq_proximo_analisis") @db.Timestamp(6)
+  /// Quién decidió el estado: ia | manual. La decisión manual del administrador prevalece sobre la IA.
+  decision         String?   @map("mreq_decision") @db.VarChar(16)
 
   expediente MktExpediente @relation(fields: [expedienteId], references: [id], onDelete: Cascade, map: "fk_mkt_requisito_expediente")
 

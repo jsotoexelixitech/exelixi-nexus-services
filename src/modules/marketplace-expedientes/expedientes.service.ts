@@ -20,7 +20,6 @@ import {
   areaDesdeVendedor,
   areasEnAlcance,
   calcularEstadoDocumental,
-  compararOcrConSnapshot,
   emailValido,
   esPendiente,
   esTipoActor,
@@ -38,17 +37,41 @@ import {
   TipoActor,
   valorActor,
 } from './expedientes.domain';
-import { expedientesEnabled, linkDias, publicBaseUrl } from './expedientes.env';
 import {
+  expedientesEnabled,
+  linkDias,
+  ocrInternalConfig,
+  publicBaseUrl,
+} from './expedientes.env';
+import {
+  analizarEnOcr,
   ArchivoCargado,
   enviarDocumentoAlOcr,
   formatoTokenValido,
   generarToken,
   hashToken,
+  OcrAnalisisError,
   OcrDocumentoResultado,
+  OcrLectura,
   OcrNoConfiguradoError,
   OcrRechazoError,
 } from './expedientes.files';
+import {
+  ColaConcurrencia,
+  ContextoPoliza,
+  contextoPoliza,
+  Diagnostico,
+  diagnosticar,
+  diagnosticoCorto,
+  diagnosticoErrorTecnico,
+  diagnosticoVigente,
+  esperaReintentoMs,
+  estadoPorDiagnostico,
+  huellaPoliza,
+  MotivoAnalisis,
+  motivoAnalisis,
+  motivoParaAsegurado,
+} from './expedientes.ia';
 import {
   correoCompleto,
   correoObservado,
@@ -62,6 +85,34 @@ import {
 } from './expedientes.schema';
 
 const CONFIG_KEY = 'global';
+
+/** Validación automática con IA: no más de 2 análisis OCR a la vez (cargas con prioridad). */
+export const colaIa = new ColaConcurrencia(2);
+
+export interface ResumenRevisionIa {
+  omitido: string | null;
+  revisados: number;
+  analizados: number;
+  sinCambios: number;
+  validados: number;
+  observados: number;
+  erroresTecnicos: number;
+  motivos: Record<string, number>;
+}
+
+function mensajeErrorOcr(err: unknown): string {
+  if (err instanceof OcrAnalisisError) return err.message;
+  if (err instanceof OcrNoConfiguradoError) return 'OCR no configurado.';
+  const name = (err as { name?: string })?.name;
+  if (name === 'TimeoutError' || name === 'AbortError')
+    return 'el OCR no respondió en 90 s.';
+  return 'OCR no disponible.';
+}
+
+/** Cédula o RIF en el mismo documento solo en patrimoniales (igual que la emisión). */
+function aceptaRifEn(producto: string, tipo: string): boolean {
+  return producto === 'patrimonial' && tipo === 'cedula';
+}
 
 type Exp = MktExpediente;
 type Req = MktExpedienteRequisito;
@@ -239,6 +290,11 @@ function nombreActorDeSnapshot(
 }
 
 export class ExpedientesService {
+  /** Requisitos en análisis ahora mismo (evita analizar dos veces el mismo). */
+  private readonly enAnalisis = new Set<number>();
+  /** Análisis programados en segundo plano (creación del expediente). */
+  private readonly pendientesIa = new Set<Promise<unknown>>();
+
   // ─── Configuración ──────────────────────────────────────────────────────
 
   async getConfig(): Promise<ExpedientesConfig> {
@@ -415,6 +471,8 @@ export class ExpedientesService {
     }
     if (!exp.infoDocumental) await this.cruzarMesaTecnica(exp, config);
     await this.recalcularEstado(exp.id, config);
+    // Validación automática de lo recibido (incluye los documentos del wizard), sin esperar.
+    this.programarAnalisis(exp.id);
     return { id: exp.id, creado };
   }
 
@@ -920,13 +978,23 @@ export class ExpedientesService {
       estadoDocumental: e.estadoDocumental,
       requisitos: aplicables.map((tipo) => {
         const r = porTipo.get(tipo);
+        const estado =
+          r?.estado ?? (e.infoDocumental ? 'faltante' : 'sin_informacion');
         return {
           tipo,
           label: requisitoLabel(tipo),
-          estado:
-            r?.estado ?? (e.infoDocumental ? 'faltante' : 'sin_informacion'),
+          estado,
           motivo: r?.motivo ?? null,
           ref: r?.ref ?? null,
+          /** Bandeja: solo resultado y resumen de la IA (del archivo actual). */
+          diagnostico: r ? diagnosticoCorto(diagnosticoVigente(r)) : null,
+          /** Quién validó u observó: 'ia' o el usuario (manual). */
+          actor:
+            estado === 'validado' || estado === 'observado'
+              ? (r?.validadoPor ?? null)
+              : null,
+          validadoPor: r?.validadoPor ?? null,
+          decision: r?.decision ?? null,
         };
       }),
       intentos: e.intentos,
@@ -954,9 +1022,19 @@ export class ExpedientesService {
     };
   }
 
+  /** Expedientes con algún documento errado (observado: no coincide, ilegible o sin certeza). */
+  private async idsConErrores(): Promise<number[]> {
+    const rows = await prisma.mktExpedienteRequisito.findMany({
+      where: { estado: 'observado' },
+      select: { expedienteId: true },
+    });
+    return Array.from(new Set(rows.map((r) => r.expedienteId)));
+  }
+
   async listar(q: ListQuery) {
     const config = await this.getConfig();
     const where = this.whereLista(q, config);
+    if (q.conErrores) where.id = { in: await this.idsConErrores() };
     const page = q.page ?? 1;
     const pageSize = q.pageSize ?? 25;
     const exclusiones = await this.exclusionesActivas();
@@ -996,6 +1074,7 @@ export class ExpedientesService {
     const exclusiones = await this.exclusionesActivas();
     const conEstado = (e: Exp, estado: string) =>
       (reqs.get(e.id) ?? []).some((r) => r.estado === estado);
+    const automatica = config.validacion === 'automatica';
     return {
       total: exps.length,
       completos: exps.filter((e) => e.estadoDocumental === 'completo').length,
@@ -1009,6 +1088,27 @@ export class ExpedientesService {
       pendientesPago: exps.filter((e) => e.estadoPago === 'pendiente').length,
       porValidar: exps.filter((e) => conEstado(e, 'recibido')).length,
       observados: exps.filter((e) => conEstado(e, 'observado')).length,
+      /** Completos en los que la IA validó todos los documentos (sin intervención manual). */
+      validadosIa: exps.filter(
+        (e) =>
+          e.estadoDocumental === 'completo' &&
+          requisitosAplicables(e.producto, config).every(
+            (t) =>
+              (reqs.get(e.id) ?? []).find((r) => r.tipo === t)?.validadoPor ===
+              'ia',
+          ),
+      ).length,
+      /** Con algún documento errado (no coincide, ilegible o sin certeza): observado. */
+      conErrores: exps.filter((e) => conEstado(e, 'observado')).length,
+      /** Con documentos recibidos que la IA aún no resuelve (incluye reintentos por error técnico). */
+      analizando: automatica
+        ? exps.filter((e) =>
+            (reqs.get(e.id) ?? []).some(
+              (r) =>
+                r.estado === 'recibido' && !!r.ref && r.decision !== 'manual',
+            ),
+          ).length
+        : 0,
       sinCorreo: exps.filter((e) => !emailValido(e.aseguradoEmail)).length,
       noEnviar: exps.filter((e) => estaExcluido(e, exclusiones)).length,
       intentos: exps.reduce((a, e) => a + e.intentos, 0),
@@ -1061,6 +1161,15 @@ export class ExpedientesService {
           recibidoEn: row?.recibidoEn ?? null,
           validadoEn: row?.validadoEn ?? null,
           validadoPor: row?.validadoPor ?? null,
+          /** Detalle: diagnóstico completo de la IA (campo por campo) del archivo actual. */
+          diagnostico: row ? diagnosticoVigente(row) : null,
+          analisis: row
+            ? {
+                intentos: row.analisisIntentos ?? 0,
+                proximoAnalisis: row.proximoAnalisis ?? null,
+                archivoHash: row.archivoHash ?? null,
+              }
+            : null,
         };
       }),
       exclusiones: exclusionesQueAplican(e, exclusiones).map((x) => ({
@@ -1117,8 +1226,13 @@ export class ExpedientesService {
     };
   }
 
-  // ─── Validación manual ──────────────────────────────────────────────────
+  // ─── Validación manual (administrador) ─────────────────────────────────
 
+  /**
+   * Validar u observar a mano. Con validación automática es la excepción del administrador:
+   * queda auditada (actor, motivo y lo que había dicho la IA) y prevalece sobre la IA, que no
+   * vuelve a tocar ese requisito salvo que llegue un archivo nuevo.
+   */
   async validarManual(
     id: number,
     tipo: string,
@@ -1127,12 +1241,7 @@ export class ExpedientesService {
     motivo?: string,
   ) {
     const config = await this.getConfig();
-    if (config.validacion !== 'manual') {
-      throw new AppError(
-        'La validación está configurada como automática.',
-        409,
-      );
-    }
+    const motivoTxt = motivo?.trim() ? motivo.trim().slice(0, 500) : null;
     const exp = await prisma.mktExpediente.findUnique({ where: { id } });
     if (!exp) throw new AppError('Expediente no encontrado.', 404);
     if (!requisitosAplicables(exp.producto, config).includes(tipo)) {
@@ -1144,6 +1253,17 @@ export class ExpedientesService {
     });
     if (!r) throw new AppError('Requisito no encontrado.', 404);
 
+    // Lo que había dicho la IA (si decidió ella), para la auditoría de la excepción.
+    const ia =
+      r.decision === 'ia' ? diagnosticoCorto(diagnosticoVigente(r)) : null;
+    const auditoria = {
+      tipo,
+      anterior: r.estado,
+      manual: true,
+      validacion: config.validacion,
+      sobreIa: !!ia,
+      ia: ia ? { resultado: ia.resultado, resumen: ia.resumen } : null,
+    };
     if (accion === 'validar') {
       if (r.estado !== 'recibido' && r.estado !== 'observado') {
         throw new AppError('Solo se valida un documento recibido.', 409);
@@ -1155,11 +1275,13 @@ export class ExpedientesService {
           motivo: null,
           validadoEn: new Date(),
           validadoPor: actor,
+          decision: 'manual',
+          proximoAnalisis: null,
         },
       });
       await this.evento(id, 'requisito_validado', actor, {
-        tipo,
-        anterior: r.estado,
+        ...auditoria,
+        motivo: motivoTxt,
       });
     } else {
       if (r.estado === 'faltante' || r.estado === 'sin_informacion') {
@@ -1169,15 +1291,16 @@ export class ExpedientesService {
         where: { id: r.id },
         data: {
           estado: 'observado',
-          motivo: motivo ?? null,
+          motivo: motivoTxt,
           validadoEn: null,
           validadoPor: actor,
+          decision: 'manual',
+          proximoAnalisis: null,
         },
       });
       await this.evento(id, 'requisito_observado', actor, {
-        tipo,
-        anterior: r.estado,
-        motivo,
+        ...auditoria,
+        motivo: motivoTxt,
       });
     }
     const { estado, completadoAhora } = await this.recalcularEstado(id, config);
@@ -1189,7 +1312,7 @@ export class ExpedientesService {
       else if (accion === 'observar')
         void this.notificarEvento(actualizado, 'observado', {
           tipo,
-          motivo: motivo ?? '',
+          motivo: motivoTxt ?? '',
         });
     }
     return {
@@ -1197,6 +1320,8 @@ export class ExpedientesService {
       tipo,
       estado: accion === 'validar' ? 'validado' : 'observado',
       estadoDocumental: estado,
+      actor,
+      decision: 'manual',
     };
   }
 
@@ -1229,15 +1354,21 @@ export class ExpedientesService {
       .then((emp) => emp?.nombre ?? null)
       .catch(() => null);
     try {
-      ocrRes = await enviarDocumentoAlOcr({
-        file,
-        tipo,
-        cnpoliza: principal.cnpoliza,
-        cnrecibo: principal.cnrecibo,
-        documento: principal.aseguradoDocumento,
-        empresaId: principal.empresaId,
-        empresaNombre,
-      });
+      // La lectura OCR cuenta en el tope de análisis simultáneos; la carga va primero en la cola.
+      ocrRes = await colaIa.ejecutar(
+        () =>
+          enviarDocumentoAlOcr({
+            file,
+            tipo,
+            cnpoliza: principal.cnpoliza,
+            cnrecibo: principal.cnrecibo,
+            documento: principal.aseguradoDocumento,
+            empresaId: principal.empresaId,
+            empresaNombre,
+            aceptaRif: aceptaRifEn(principal.producto, tipo),
+          }),
+        true,
+      );
     } catch (err) {
       if (err instanceof OcrNoConfiguradoError) {
         ocrDisponible = false;
@@ -1270,7 +1401,9 @@ export class ExpedientesService {
       tipo: string;
       estado: string;
       motivo: string | null;
+      diagnostico: Diagnostico | null;
     }[] = [];
+    const ref = ocrRes?.ref ?? null;
     for (const exp of expedientes) {
       await this.asegurarRequisitos(exp, config);
       const r = await prisma.mktExpedienteRequisito.findUnique({
@@ -1278,25 +1411,14 @@ export class ExpedientesService {
       });
       if (!r) continue;
 
-      let estado = 'recibido';
-      let motivo: string | null = null;
-      if (ocrDisponible && config.validacion === 'automatica') {
-        const cmp = compararOcrConSnapshot(tipo, ocrRes?.ocr, {
-          documento: exp.aseguradoDocumento,
-          nombre: exp.aseguradoNombre,
-          apellido: exp.aseguradoApellido,
-          snapshot: exp.snapshot,
-        });
-        estado = cmp.estado;
-        motivo = cmp.estado === 'observado' ? cmp.motivo : null;
-      }
-      await prisma.mktExpedienteRequisito.update({
+      // Archivo nuevo: queda recibido y sin decisión previa (ni de la IA ni manual).
+      const recibido = await prisma.mktExpedienteRequisito.update({
         where: { id: r.id },
         data: {
-          estado,
-          motivo,
+          estado: 'recibido',
+          motivo: null,
           origen,
-          ref: ocrRes?.ref ?? null,
+          ref,
           ocrDatos: (ocrRes?.ocr?.extraido ?? undefined) as
             | Prisma.InputJsonValue
             | undefined,
@@ -1306,8 +1428,11 @@ export class ExpedientesService {
               ? Number(ocrRes.ocr.confianza)
               : null,
           recibidoEn: new Date(),
-          validadoEn: estado === 'validado' ? new Date() : null,
-          validadoPor: estado === 'validado' ? 'auto' : null,
+          validadoEn: null,
+          validadoPor: null,
+          decision: null,
+          analisisIntentos: 0,
+          proximoAnalisis: null,
         },
       });
       await this.evento(exp.id, 'documento_recibido', actor, {
@@ -1317,16 +1442,41 @@ export class ExpedientesService {
         ubicacion: ocrRes?.ubicacion ?? null,
         tamanoKb: Math.round(file.size / 1024),
       });
-      if (estado === 'validado') {
-        await this.evento(exp.id, 'requisito_validado', 'auto', { tipo });
-      } else if (estado === 'observado') {
-        await this.evento(exp.id, 'requisito_observado', 'auto', {
-          tipo,
-          motivo,
+
+      let estado = 'recibido';
+      let motivo: string | null = null;
+      let diagnostico: Diagnostico | null = null;
+      let completadoAhora = false;
+      if (ocrDisponible && ref && this.iaActiva(config)) {
+        // La lectura ya la hizo la carga: se compara contra la póliza sin otra llamada al OCR.
+        const ctx = contextoPoliza(exp);
+        const diag = diagnosticar(tipo, ocrRes?.ocr, ctx, {
+          motivoAnalisis: 'carga',
         });
+        const res = await this.aplicarDiagnostico(exp, recibido, diag, {
+          ref,
+          hash: ocrRes?.hash ?? null,
+          lectura: ocrRes?.ocr ?? null,
+          ctx,
+          config,
+          carga: true,
+        });
+        if (res) {
+          estado = res.estado;
+          motivo = res.motivo;
+          diagnostico = res.diagnostico;
+          completadoAhora = res.completadoAhora;
+        }
+      } else {
+        ({ completadoAhora } = await this.recalcularEstado(exp.id, config));
       }
-      const { completadoAhora } = await this.recalcularEstado(exp.id, config);
-      resultados.push({ expedienteId: exp.id, tipo, estado, motivo });
+      resultados.push({
+        expedienteId: exp.id,
+        tipo,
+        estado,
+        motivo,
+        diagnostico,
+      });
 
       const actualizado = await prisma.mktExpediente.findUnique({
         where: { id: exp.id },
@@ -1336,12 +1486,303 @@ export class ExpedientesService {
         else if (estado === 'observado')
           void this.notificarEvento(actualizado, 'observado', {
             tipo,
-            motivo: motivo ?? '',
+            // Al asegurado nunca el resumen de la IA (trae datos de la póliza).
+            motivo: diagnostico
+              ? motivoParaAsegurado(diagnostico)
+              : (motivo ?? ''),
           });
         else void this.notificarEvento(actualizado, 'recibido', { tipo });
       }
     }
     return resultados;
+  }
+
+  // ─── Validación automática con IA ───────────────────────────────────────
+
+  /** La IA corre con validación automática y el OCR interno configurado. */
+  iaActiva(config: ExpedientesConfig): boolean {
+    return config.validacion === 'automatica' && !!ocrInternalConfig();
+  }
+
+  /** Analiza en segundo plano lo recibido de un expediente (al crearlo o actualizarlo). */
+  programarAnalisis(expedienteId: number): void {
+    if (!expedientesEnabled() || !ocrInternalConfig()) return;
+    const p: Promise<unknown> = new Promise<void>((resolve) =>
+      setImmediate(resolve),
+    )
+      .then(() => this.revisarConIa({ expedienteIds: [expedienteId] }))
+      .catch((err: unknown) => {
+        logger.warn(
+          `[expedientes] validación IA del expediente ${expedienteId} falló: ${
+            err instanceof Error ? err.message : 'error'
+          }`,
+        );
+      })
+      .finally(() => {
+        this.pendientesIa.delete(p);
+      });
+    this.pendientesIa.add(p);
+  }
+
+  /** Pruebas y apagado ordenado: espera los análisis en segundo plano. */
+  async esperarAnalisisPendientes(): Promise<void> {
+    while (this.pendientesIa.size) {
+      await Promise.allSettled(Array.from(this.pendientesIa));
+    }
+    await colaIa.vacia();
+  }
+
+  /**
+   * Revisión de la IA: analiza todo requisito recibido con archivo (incluidos los del wizard de
+   * emisión y los reintentos por error técnico vencidos) y, en modo completo, vuelve a comparar
+   * lo decidido por la IA si cambió el archivo o los datos de la póliza. Sin cambios no llama al OCR.
+   * Nunca toca decisiones manuales. Máximo 2 análisis simultáneos (colaIa).
+   */
+  async revisarConIa(
+    opts: {
+      modo?: 'completo' | 'recibidos';
+      expedienteIds?: number[];
+      ahora?: Date;
+    } = {},
+  ): Promise<ResumenRevisionIa> {
+    const resumen: ResumenRevisionIa = {
+      omitido: null,
+      revisados: 0,
+      analizados: 0,
+      sinCambios: 0,
+      validados: 0,
+      observados: 0,
+      erroresTecnicos: 0,
+      motivos: {},
+    };
+    if (!expedientesEnabled()) return { ...resumen, omitido: 'apagado' };
+    const config = await this.getConfig();
+    if (config.validacion !== 'automatica')
+      return { ...resumen, omitido: 'validacion_manual' };
+    if (!ocrInternalConfig())
+      return { ...resumen, omitido: 'ocr_no_configurado' };
+    const ahora = opts.ahora ?? new Date();
+
+    const estados: Prisma.MktExpedienteRequisitoWhereInput =
+      opts.modo === 'recibidos'
+        ? { estado: 'recibido' }
+        : {
+            OR: [
+              { estado: 'recibido' },
+              { decision: 'ia', estado: { in: ['validado', 'observado'] } },
+            ],
+          };
+    const reqs = await prisma.mktExpedienteRequisito.findMany({
+      where: {
+        ...estados,
+        ref: { not: null },
+        ...(opts.expedienteIds
+          ? { expedienteId: { in: opts.expedienteIds } }
+          : {}),
+      },
+      orderBy: { id: 'asc' },
+    });
+    if (!reqs.length) return resumen;
+    const exps = await prisma.mktExpediente.findMany({
+      where: {
+        id: { in: Array.from(new Set(reqs.map((r) => r.expedienteId))) },
+        area: { in: areasEnAlcance(config.alcance) },
+      },
+    });
+    const porId = new Map(exps.map((e) => [e.id, e]));
+
+    const trabajos: Promise<void>[] = [];
+    for (const r of reqs) {
+      const exp = porId.get(r.expedienteId);
+      if (!exp || !requisitosAplicables(exp.producto, config).includes(r.tipo))
+        continue;
+      resumen.revisados++;
+      const ctx = contextoPoliza(exp);
+      const motivo = motivoAnalisis(r, huellaPoliza(ctx), ahora);
+      if (!motivo) {
+        resumen.sinCambios++;
+        continue;
+      }
+      resumen.motivos[motivo] = (resumen.motivos[motivo] ?? 0) + 1;
+      trabajos.push(
+        this.analizarRequisito(exp, r, motivo, ctx, config).then((res) => {
+          if (!res) return;
+          resumen.analizados++;
+          if (res.diagnostico.resultado === 'error_tecnico')
+            resumen.erroresTecnicos++;
+          else if (res.estado === 'validado') resumen.validados++;
+          else if (res.estado === 'observado') resumen.observados++;
+        }),
+      );
+    }
+    await Promise.all(trabajos);
+    return resumen;
+  }
+
+  private async analizarRequisito(
+    exp: Exp,
+    r: Req,
+    motivo: MotivoAnalisis,
+    ctx: ContextoPoliza,
+    config: ExpedientesConfig,
+  ) {
+    if (!r.ref || this.enAnalisis.has(r.id)) return null;
+    this.enAnalisis.add(r.id);
+    try {
+      let diag: Diagnostico;
+      let hash: string | null = r.archivoHash ?? null;
+      let lectura: OcrLectura | null | undefined;
+      if (motivo === 'cambio_poliza' && r.analisisRef === r.ref) {
+        // Mismo archivo: se compara de nuevo lo ya leído, sin otra llamada al OCR.
+        if (!r.ocrDatos || typeof r.ocrDatos !== 'object') {
+          await prisma.mktExpedienteRequisito.update({
+            where: { id: r.id },
+            data: { huellaPoliza: huellaPoliza(ctx) },
+          });
+          return null;
+        }
+        const previo = rec(r.diagnostico);
+        diag = diagnosticar(
+          r.tipo,
+          {
+            extraido: r.ocrDatos,
+            confianza: r.ocrConfianza,
+            proveedor: str(previo.proveedor) ?? null,
+          },
+          ctx,
+          { motivoAnalisis: motivo },
+        );
+      } else {
+        try {
+          const res = await colaIa.ejecutar(() =>
+            analizarEnOcr({
+              ref: r.ref as string,
+              tipo: r.tipo,
+              aceptaRif: aceptaRifEn(exp.producto, r.tipo),
+            }),
+          );
+          hash = res.hash;
+          lectura = res.ocr;
+          diag = diagnosticar(r.tipo, res.ocr, ctx, { motivoAnalisis: motivo });
+        } catch (err) {
+          diag = diagnosticoErrorTecnico(r.tipo, mensajeErrorOcr(err), {
+            motivoAnalisis: motivo,
+          });
+        }
+      }
+      return await this.aplicarDiagnostico(exp, r, diag, {
+        ref: r.ref,
+        hash,
+        lectura,
+        ctx,
+        config,
+      });
+    } finally {
+      this.enAnalisis.delete(r.id);
+    }
+  }
+
+  /**
+   * Guarda el diagnóstico y aplica el estado: coincide → validado (actor ia);
+   * no_coincide/ilegible → observado con el resumen; sin_certeza → observado «Revisar»;
+   * error_tecnico → recibido con reintento en espera creciente. Cada análisis queda como
+   * evento de auditoría con el diagnóstico.
+   */
+  private async aplicarDiagnostico(
+    exp: Exp,
+    antes: Req,
+    diag: Diagnostico,
+    d: {
+      ref: string;
+      hash: string | null;
+      /** undefined = no hubo lectura nueva (se conserva la guardada). */
+      lectura?: OcrLectura | null;
+      ctx: ContextoPoliza;
+      config: ExpedientesConfig;
+      carga?: boolean;
+    },
+  ): Promise<{
+    estado: string;
+    motivo: string | null;
+    completadoAhora: boolean;
+    diagnostico: Diagnostico;
+  } | null> {
+    const r = await prisma.mktExpedienteRequisito.findUnique({
+      where: { id: antes.id },
+    });
+    // Llegó otro archivo o el administrador decidió mientras se analizaba: manda lo nuevo.
+    if (!r || r.ref !== d.ref) return null;
+    if (!d.carga && r.decision === 'manual') return null;
+
+    const ahora = new Date();
+    const data: Prisma.MktExpedienteRequisitoUpdateInput = {
+      huellaPoliza: huellaPoliza(d.ctx),
+      analisisRef: d.ref,
+      archivoHash:
+        d.hash ?? (r.analisisRef === d.ref ? (r.archivoHash ?? null) : null),
+    };
+    let estado: string;
+    let motivo: string | null;
+    if (diag.resultado === 'error_tecnico') {
+      const previo = diagnosticoVigente(r);
+      const intento =
+        (previo?.resultado === 'error_tecnico' ? r.analisisIntentos : 0) + 1;
+      const proximo = new Date(ahora.getTime() + esperaReintentoMs(intento));
+      diag.intento = intento;
+      diag.proximoIntento = proximo.toISOString();
+      diag.resumen = `${diag.resumen} Se reintentará automáticamente.`;
+      estado = 'recibido';
+      motivo = null;
+      Object.assign(data, {
+        estado,
+        motivo,
+        validadoEn: null,
+        validadoPor: null,
+        decision: null,
+        analisisIntentos: intento,
+        proximoAnalisis: proximo,
+      });
+    } else {
+      ({ estado, motivo } = estadoPorDiagnostico(diag));
+      Object.assign(data, {
+        estado,
+        motivo,
+        validadoEn: estado === 'validado' ? ahora : null,
+        validadoPor: 'ia',
+        decision: 'ia',
+        analisisIntentos: 0,
+        proximoAnalisis: null,
+      });
+      if (d.lectura !== undefined) {
+        const conf = Number(d.lectura?.confianza);
+        data.ocrDatos = (d.lectura?.extraido ?? undefined) as
+          | Prisma.InputJsonValue
+          | undefined;
+        data.ocrConfianza = Number.isFinite(conf) ? conf : null;
+      }
+    }
+    data.diagnostico = diag as unknown as Prisma.InputJsonValue;
+    await prisma.mktExpedienteRequisito.update({ where: { id: r.id }, data });
+
+    const tipoEvento =
+      estado === r.estado
+        ? 'analisis_ia'
+        : estado === 'validado'
+          ? 'requisito_validado'
+          : estado === 'observado'
+            ? 'requisito_observado'
+            : 'analisis_ia';
+    await this.evento(exp.id, tipoEvento, 'ia', {
+      tipo: r.tipo,
+      anterior: r.estado,
+      nuevo: estado,
+      motivo,
+      resultado: diag.resultado,
+      motivoAnalisis: diag.motivoAnalisis ?? null,
+      diagnostico: diag,
+    });
+    const { completadoAhora } = await this.recalcularEstado(exp.id, d.config);
+    return { estado, motivo, completadoAhora, diagnostico: diag };
   }
 
   async cargarVendedor(
@@ -1458,11 +1899,20 @@ export class ExpedientesService {
           .map((tipo) => {
             const r = porTipo.get(tipo);
             const estado = r?.estado ?? 'faltante';
+            // Solo el resultado de la IA: nunca el resumen ni datos de la póliza.
+            const diag = r ? diagnosticoVigente(r) : null;
+            const deIa = !!diag && r?.decision === 'ia';
             return {
               tipo,
               label: requisitoLabel(tipo),
               estado,
-              motivo: estado === 'observado' ? (r?.motivo ?? null) : null,
+              motivo:
+                estado === 'observado'
+                  ? deIa
+                    ? motivoParaAsegurado(diag)
+                    : (r?.motivo ?? null)
+                  : null,
+              diagnostico: diag ? { resultado: diag.resultado } : null,
             };
           })
           .filter((r) => r.estado !== 'sin_informacion'),
@@ -1546,12 +1996,25 @@ export class ExpedientesService {
         data: { usadoEn: new Date() },
       });
     }
+    const observado = resultados.find((r) => r.estado === 'observado');
     return {
       tipo,
-      estado: resultados.some((r) => r.estado === 'observado')
+      estado: observado
         ? 'observado'
-        : 'recibido',
-      motivo: resultados.find((r) => r.estado === 'observado')?.motivo ?? null,
+        : resultados.length && resultados.every((r) => r.estado === 'validado')
+          ? 'validado'
+          : 'recibido',
+      // Al asegurado nunca el resumen de la IA (trae datos de la póliza).
+      motivo: observado
+        ? observado.diagnostico
+          ? motivoParaAsegurado(observado.diagnostico)
+          : observado.motivo
+        : null,
+      diagnostico: observado?.diagnostico
+        ? { resultado: observado.diagnostico.resultado }
+        : resultados[0]?.diagnostico
+          ? { resultado: resultados[0].diagnostico.resultado }
+          : null,
       enlaceConsumido: !quedan,
     };
   }

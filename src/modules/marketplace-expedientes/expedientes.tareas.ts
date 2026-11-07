@@ -266,8 +266,10 @@ export async function tareaDiaria(ahora: Date) {
   const config = await svc.getConfig();
   const conciliacion = await svc.conciliar();
   const recalculo = await recalcularIncompletos(config);
+  // Revisión periódica de la IA antes de recordar: lo que valide ya no se pide al asegurado.
+  const validacionIa = await svc.revisarConIa({ modo: 'completo', ahora });
   const recordatorios = await enviarRecordatorios(ahora);
-  return { conciliacion, recalculo, recordatorios };
+  return { conciliacion, recalculo, validacionIa, recordatorios };
 }
 
 // ─── Nocturna ───────────────────────────────────────────────────────────────

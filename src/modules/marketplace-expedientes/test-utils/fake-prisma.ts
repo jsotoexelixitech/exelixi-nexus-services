@@ -46,6 +46,13 @@ const DEFAULTS: Record<string, () => Row> = {
     recibidoEn: null,
     validadoEn: null,
     validadoPor: null,
+    diagnostico: null,
+    archivoHash: null,
+    huellaPoliza: null,
+    analisisRef: null,
+    analisisIntentos: 0,
+    proximoAnalisis: null,
+    decision: null,
   }),
   mktExpedienteEvento: () => ({ createdAt: new Date() }),
   mktExpedienteExclusion: () => ({

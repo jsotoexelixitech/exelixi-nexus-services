@@ -374,7 +374,7 @@ describe('lectura', () => {
     expect((await svc.listar({ area: 'C' })).total).toBe(3);
     expect((await svc.listar({ area: 'G' })).total).toBe(0);
     const det = await svc.detalle(item.id);
-    expect(det.validacion).toBe('manual');
+    expect(det.validacion).toBe('automatica');
     expect(det.eventos.length).toBeGreaterThan(0);
     expect(Array.isArray(det.notificaciones)).toBe(true);
     expect(Array.isArray(det.cambios)).toBe(true);

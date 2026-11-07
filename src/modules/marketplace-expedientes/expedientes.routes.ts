@@ -31,6 +31,7 @@ import {
   JobName,
   listQuerySchema,
   observarSchema,
+  validarSchema,
 } from './expedientes.schema';
 import { ejecutarJob } from './expedientes.jobs';
 import { leerMultipart } from './expedientes.files';
@@ -294,24 +295,26 @@ router.delete(
   }),
 );
 
-// ─── Validación manual (admin; solo si validacion=manual) ─────────────────
+// ─── Validación manual (admin; excepción auditada que prevalece sobre la IA) ─
 
 router.post(
   '/:id(\\d+)/requisitos/:tipo/validar',
   internoLimiter,
   sesion,
   admin,
-  h(async (req, res) =>
-    ok(
+  h(async (req, res) => {
+    const { body } = validarSchema.parse({ body: req.body ?? {} });
+    return ok(
       res,
       await svc.validarManual(
         idParam(req),
         String(req.params.tipo),
         'validar',
         actorDe(req),
+        body.motivo || undefined,
       ),
-    ),
-  ),
+    );
+  }),
 );
 
 router.post(

@@ -167,7 +167,7 @@ describe('bloque 2: config, exclusiones y validación manual', () => {
     ).toBe(403);
     const get = await request(app).get('/api/expedientes/config').set(ADMIN);
     expect(get.body.data).toMatchObject({
-      validacion: 'manual',
+      validacion: 'automatica',
       cadenciaDias: [0, 3, 7, 14],
       horaDiaria: '08:00',
       horaResumen: '23:00',
@@ -244,7 +244,7 @@ describe('bloque 2: config, exclusiones y validación manual', () => {
     expect(todas.body.data[0].activo).toBe(false);
   });
 
-  it('validar/observar: admin, motivo en observar y solo con validación manual', async () => {
+  it('validar/observar: admin, motivo en observar, también con validación automática', async () => {
     const r = await crearRcvConCedulaRecibida();
     const base = `/api/expedientes/${r!.id}/requisitos/cedula`;
     expect((await request(app).post(`${base}/validar`).set(AUTH)).status).toBe(
@@ -277,12 +277,35 @@ describe('bloque 2: config, exclusiones y validación manual', () => {
       .set(ADMIN);
     expect(faltante.status).toBe(409);
 
-    await expedientesService.updateConfig(
-      { validacion: 'automatica', motivo: 'probar' } as any,
-      'portal:1',
+    // Validación automática: la excepción del administrador sigue disponible y queda auditada.
+    expect((await expedientesService.getConfig()).validacion).toBe(
+      'automatica',
     );
-    const auto = await request(app).post(`${base}/validar`).set(ADMIN);
-    expect(auto.status).toBe(409);
+    const obsAuto = await request(app)
+      .post(`${base}/observar`)
+      .set(ADMIN)
+      .send({ motivo: 'Foto de otra persona' });
+    expect(obsAuto.status).toBe(200);
+    req = db.mktExpedienteRequisito
+      ._rows()
+      .find((x: any) => x.tipo === 'cedula');
+    expect(req).toMatchObject({ estado: 'observado', decision: 'manual' });
+    const val2 = await request(app)
+      .post(`${base}/validar`)
+      .set(ADMIN)
+      .send({ motivo: 'Revisado con el original' });
+    expect(val2.status).toBe(200);
+    const ev = db.mktExpedienteEvento
+      ._rows()
+      .filter((x: any) => x.tipo === 'requisito_validado')
+      .at(-1);
+    expect(ev.detalle).toMatchObject({
+      manual: true,
+      motivo: 'Revisado con el original',
+      validacion: 'automatica',
+    });
+    const yaValidado = await request(app).post(`${base}/validar`).set(ADMIN);
+    expect(yaValidado.status).toBe(409);
   });
 });
 

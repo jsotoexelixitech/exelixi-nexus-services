@@ -141,17 +141,23 @@ export async function leerMultipart(
 
 // ─── OCR interno ────────────────────────────────────────────────────────────
 
+export interface OcrLectura {
+  extraido?: Record<string, unknown>;
+  /** 0 | 0.5 | 1 */
+  confianza?: number;
+  motivo?: string;
+  proveedor?: string;
+  /** 'tecnica' = sin lectura real (se reintenta); 'tipo_documento' = no es el documento pedido. */
+  falla?: string;
+}
+
 export interface OcrDocumentoResultado {
   ref: string | null;
+  /** SHA-256 del archivo guardado (OCR v1.2; null si el OCR aún no lo envía). */
+  hash?: string | null;
   /** 'poliza' = carpeta de la póliza; 'pendiente' = carpeta temporal del OCR. */
   ubicacion: string | null;
-  ocr: {
-    extraido?: Record<string, unknown>;
-    /** 0 | 0.5 | 1 */
-    confianza?: number;
-    motivo?: string;
-    proveedor?: string;
-  } | null;
+  ocr: OcrLectura | null;
 }
 
 export class OcrNoConfiguradoError extends Error {
@@ -190,6 +196,8 @@ export async function enviarDocumentoAlOcr(params: {
   documento?: string | null;
   empresaId: number;
   empresaNombre?: string | null;
+  /** Cédula o RIF en el mismo documento (patrimoniales). */
+  aceptaRif?: boolean;
 }): Promise<OcrDocumentoResultado> {
   const cfg = ocrInternalConfig();
   if (!cfg) throw new OcrNoConfiguradoError();
@@ -207,6 +215,7 @@ export async function enviarDocumentoAlOcr(params: {
   form.append('documento', params.documento ?? '');
   form.append('empresaId', String(params.empresaId));
   if (params.empresaNombre) form.append('empresaNombre', params.empresaNombre);
+  if (params.aceptaRif) form.append('aceptaRif', '1');
 
   const res = await fetch(`${cfg.url}/api/internal/expedientes/documento`, {
     method: 'POST',
@@ -233,7 +242,70 @@ export async function enviarDocumentoAlOcr(params: {
       : null;
   return {
     ref: typeof body.ref === 'string' ? body.ref : null,
+    hash: typeof body.hash === 'string' ? body.hash : null,
     ubicacion: typeof body.ubicacion === 'string' ? body.ubicacion : null,
     ocr,
+  };
+}
+
+/** Error del análisis de un documento ya guardado (técnico: se reintenta con espera creciente). */
+export class OcrAnalisisError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string | null,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export interface OcrAnalisisResultado {
+  ref: string;
+  hash: string | null;
+  ocr: OcrLectura | null;
+}
+
+/**
+ * Validación automática con IA: POST {OCR_INTERNAL_URL}/api/internal/expedientes/analizar
+ * JSON { ref, tipo, aceptaRif? } con x-expediente-key. El OCR lee el archivo YA guardado en
+ * EXPEDIENTES_ROOT/ref (sin copiarlo ni moverlo) y responde { ok, ref, hash, ocr }.
+ * Timeout 90 s por llamada. Cualquier respuesta no 200 es error técnico (OcrAnalisisError).
+ */
+export async function analizarEnOcr(params: {
+  ref: string;
+  tipo: string;
+  aceptaRif?: boolean;
+}): Promise<OcrAnalisisResultado> {
+  const cfg = ocrInternalConfig();
+  if (!cfg) throw new OcrNoConfiguradoError();
+  const res = await fetch(`${cfg.url}/api/internal/expedientes/analizar`, {
+    method: 'POST',
+    headers: {
+      'x-expediente-key': cfg.key,
+      'content-type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      ref: params.ref,
+      tipo: params.tipo,
+      ...(params.aceptaRif ? { aceptaRif: true } : {}),
+    }),
+    signal: AbortSignal.timeout(90_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok || body.ok !== true) {
+    throw new OcrAnalisisError(
+      res.status,
+      typeof body.code === 'string' ? body.code.slice(0, 64) : null,
+      mensajeOcr(body, `OCR respondió HTTP ${res.status}`),
+    );
+  }
+  return {
+    ref: params.ref,
+    hash: typeof body.hash === 'string' ? body.hash.slice(0, 64) : null,
+    ocr:
+      body.ocr && typeof body.ocr === 'object'
+        ? (body.ocr as OcrLectura)
+        : null,
   };
 }

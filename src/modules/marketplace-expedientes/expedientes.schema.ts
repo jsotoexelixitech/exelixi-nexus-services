@@ -165,6 +165,11 @@ export const actoresQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
 });
 
+/** Validar a mano: motivo opcional (queda en la auditoría de la excepción). */
+export const validarSchema = z.object({
+  body: z.object({ motivo: str(500).optional() }).passthrough(),
+});
+
 export const observarSchema = z.object({
   body: z.object({ motivo: str(500).min(3, 'El motivo es obligatorio') }),
 });
@@ -186,6 +191,16 @@ export const listQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
   vendedor: z.string().trim().max(100).optional(),
   agrupar: z.enum(['poliza', 'asegurado']).optional(),
+  /** Solo pólizas con algún documento errado (no coincide, ilegible, sin certeza: observado). */
+  conErrores: z.preprocess(
+    (v) =>
+      v === true || v === 'true' || v === '1'
+        ? true
+        : v === false || v === 'false' || v === '0'
+          ? false
+          : undefined,
+    z.boolean().optional(),
+  ),
   page: z.coerce.number().int().min(1).max(10_000).optional(),
   pageSize: z.coerce.number().int().min(1).max(200).optional(),
 });
@@ -198,5 +213,10 @@ export const indicadoresQuerySchema = listQuerySchema.pick({
   hasta: true,
 });
 
-export const JOBS = ['diaria', 'nocturna', 'conciliacion'] as const;
+export const JOBS = [
+  'diaria',
+  'nocturna',
+  'conciliacion',
+  'validacion_ia',
+] as const;
 export type JobName = (typeof JOBS)[number];
