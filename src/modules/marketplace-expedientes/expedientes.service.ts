@@ -79,6 +79,7 @@ import {
   correoCompleto,
   correoObservado,
   correoRecibido,
+  correoSolicitudInicial,
   entregarCorreo,
 } from './expedientes.mail';
 import {
@@ -2169,6 +2170,59 @@ export class ExpedientesService {
         `[expedientes] aviso ${tipo} expediente ${exp.id} no registrado: ${err instanceof Error ? err.message : err}`,
       );
     }
+  }
+
+  /**
+   * QA: envía la solicitud de documentos de un expediente, con un enlace real a la página del
+   * asegurado, a un correo que no es el de la póliza (para mostrar el flujo). La ruta solo existe
+   * fuera de producción y entregarCorreo sigue exigiendo la lista blanca. No suma intentos ni
+   * avanza la cadencia; queda como notificación tipo 'prueba' y evento de auditoría.
+   */
+  async enviarPrueba(id: number, email: string, actor: string) {
+    const destino = String(email ?? '')
+      .trim()
+      .toLowerCase();
+    if (!emailValido(destino))
+      throw new AppError('Indique un correo válido.', 400);
+    const exp = await prisma.mktExpediente.findUnique({ where: { id } });
+    if (!exp) throw new AppError('Expediente no encontrado.', 404);
+    const [config, reqs] = await Promise.all([
+      this.getConfig(),
+      prisma.mktExpedienteRequisito.findMany({ where: { expedienteId: id } }),
+    ]);
+    const pendientes = requisitosAplicables(exp.producto, config)
+      .filter((t) =>
+        esPendiente(reqs.find((r) => r.tipo === t)?.estado ?? 'faltante'),
+      )
+      .map(requisitoLabel);
+    const link = await this.crearEnlace(exp.aseguradoKey, [exp.id]);
+    const nombre = primerNombre(exp);
+    const base = correoSolicitudInicial({
+      nombre,
+      polizaOResumen: polizaOResumen([exp]),
+      pendientes: pendientes.length ? pendientes : ['documentos en validación'],
+      enlace: link.url,
+    });
+    const content = { ...base, subject: `[Prueba QA] ${base.subject}` };
+    const r = await entregarCorreo([destino], nombre, content);
+    await this.registrarNotificacion({
+      expedienteId: exp.id,
+      aseguradoKey: exp.aseguradoKey,
+      tipo: 'prueba',
+      resultado: r.resultado,
+      destinatarioMasked: r.destinatarioMasked,
+      error: r.error ?? null,
+    });
+    await this.evento(exp.id, 'envio_prueba', actor, {
+      resultado: r.resultado,
+      destinatario: r.destinatarioMasked,
+    });
+    return {
+      resultado: r.resultado,
+      destinatario: r.destinatarioMasked,
+      enlace: link.url,
+      expiraEn: link.expiraEn,
+    };
   }
 
   // ─── Exclusiones («No enviar correos») ─────────────────────────────────

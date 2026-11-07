@@ -308,7 +308,7 @@ export async function tareaNocturna(ahora: Date) {
   const notifs = await prisma.mktExpedienteNotificacion.findMany({
     where: {
       createdAt: { gte: inicio, lt: fin },
-      tipo: { not: 'resumen_nocturno' },
+      tipo: { notIn: ['resumen_nocturno', 'prueba'] },
     },
   });
   const errores = await prisma.mktExpedienteEvento.count({

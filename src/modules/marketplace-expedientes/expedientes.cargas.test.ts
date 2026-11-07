@@ -412,3 +412,75 @@ describe('enlace público del asegurado', () => {
     expect(r.body.data.polizas).toHaveLength(1);
   });
 });
+
+describe('envío de prueba (QA)', () => {
+  // Acceso libre de QA = administrador ficticio (aquí requirePortalAdmin siempre responde 403).
+  beforeEach(() => {
+    process.env.EXPEDIENTES_ACCESO_LIBRE = 'true';
+  });
+  afterEach(() => {
+    delete process.env.EXPEDIENTES_ACCESO_LIBRE;
+  });
+
+  it('manda el enlace real a un correo de la lista blanca sin sumar intentos', async () => {
+    process.env.EXPEDIENTES_MAIL_WHITELIST = 'demo@test.com';
+    process.env.NEST_API_KEY = 'k';
+    const id = await crear('P-71');
+    const r = await request(app)
+      .post(`/api/expedientes/${id}/enviar-prueba`)
+      .send({ email: 'Demo@Test.com' });
+    expect(r.status).toBe(200);
+    expect(r.body.data.resultado).toBe('enviado');
+    expect(r.body.data.enlace).toMatch(
+      /^https:\/\/portal\.test\/portal-lm\/expediente\?t=/,
+    );
+    const mail = fetchMock.mock.calls.find(([u]) =>
+      String(u).includes('/api/v1/mail/send'),
+    );
+    const body = JSON.parse(mail![1].body);
+    expect(JSON.stringify(body)).toContain('demo@test.com');
+    expect(JSON.stringify(body)).not.toContain('luis@test.com');
+    expect(JSON.stringify(body)).toContain('[Prueba QA]');
+    const exp = db.mktExpediente._rows().find((x: any) => x.id === id);
+    expect(exp.intentos ?? 0).toBe(0);
+    delete process.env.NEST_API_KEY;
+  });
+
+  it('fuera de la lista blanca no se envía', async () => {
+    process.env.EXPEDIENTES_MAIL_WHITELIST = 'demo@test.com';
+    process.env.NEST_API_KEY = 'k';
+    const id = await crear('P-72');
+    const r = await request(app)
+      .post(`/api/expedientes/${id}/enviar-prueba`)
+      .send({ email: 'otro@test.com' });
+    expect(r.body.data.resultado).toBe('bloqueado_whitelist');
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).includes('/mail/send')),
+    ).toBe(false);
+    delete process.env.NEST_API_KEY;
+  });
+
+  it('vendedor sin rol admin: 403', async () => {
+    delete process.env.EXPEDIENTES_ACCESO_LIBRE;
+    const id = await crear('P-73');
+    const r = await request(app)
+      .post(`/api/expedientes/${id}/enviar-prueba`)
+      .set(AUTH)
+      .send({ email: 'demo@test.com' });
+    expect(r.status).toBe(403);
+  });
+
+  it('en producción declarada no se envía nada', async () => {
+    process.env.EXPEDIENTES_ENTORNO = 'produccion';
+    process.env.NEST_API_KEY = 'k';
+    const id = await crear('P-74');
+    const r = await request(app)
+      .post(`/api/expedientes/${id}/enviar-prueba`)
+      .send({ email: 'demo@test.com' });
+    expect(r.status).not.toBe(200);
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).includes('/mail/send')),
+    ).toBe(false);
+    delete process.env.NEST_API_KEY;
+  });
+});

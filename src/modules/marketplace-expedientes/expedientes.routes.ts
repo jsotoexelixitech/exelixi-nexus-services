@@ -149,6 +149,20 @@ const internoLimiter = rateLimit({
 
 // ─── Jobs (solo fuera de producción) ───────────────────────────────────────
 
+// QA: correo de prueba con enlace real a un correo de la lista blanca (nunca en producción).
+router.post(
+  '/:id(\\d+)/enviar-prueba',
+  internoLimiter,
+  sesion,
+  admin,
+  h(async (req, res) => {
+    if (!expedientesJobsManualPermitido())
+      return fail(res, 404, 'Ruta no encontrada');
+    const email = typeof req.body?.email === 'string' ? req.body.email : '';
+    return ok(res, await svc.enviarPrueba(idParam(req), email, actorDe(req)));
+  }),
+);
+
 router.post(
   '/jobs/:job/ejecutar',
   internoLimiter,
