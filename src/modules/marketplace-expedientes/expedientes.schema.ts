@@ -57,6 +57,25 @@ export const expedientePayloadSchema = z
             recibido: optBool,
             ref: optStr(500),
             url: optStr(1000),
+            /** v1.3: lo que el OCR leyó del documento al emitir (campos clave normalizados). */
+            ocrLeido: z
+              .object({
+                tipoDoc: optStr(2),
+                documento: optStr(32),
+                nombre: optStr(150),
+                apellido: optStr(150),
+                placa: optStr(20),
+                serial: optStr(40),
+                serialMotor: optStr(40),
+                marca: optStr(80),
+                modelo: optStr(120),
+                anio: optStr(4),
+                vencimiento: optStr(20),
+              })
+              .partial()
+              .optional()
+              .nullable()
+              .catch(null),
           })
           .partial()
           .nullable()
@@ -193,6 +212,16 @@ export const listQuerySchema = z.object({
   agrupar: z.enum(['poliza', 'asegurado']).optional(),
   /** Solo pólizas con algún documento errado (no coincide, ilegible, sin certeza: observado). */
   conErrores: z.preprocess(
+    (v) =>
+      v === true || v === 'true' || v === '1'
+        ? true
+        : v === false || v === 'false' || v === '0'
+          ? false
+          : undefined,
+    z.boolean().optional(),
+  ),
+  /** v1.3: solo pólizas con datos cambiados en el formulario respecto al OCR al emitir. */
+  datosModificados: z.preprocess(
     (v) =>
       v === true || v === 'true' || v === '1'
         ? true

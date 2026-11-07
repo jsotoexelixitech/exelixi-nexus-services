@@ -37,6 +37,7 @@ import {
   esperaReintentoMs,
   maskDocumento,
   motivoParaAsegurado,
+  VERSION_COMPARADOR,
 } from './expedientes.ia';
 import { ejecutarJob } from './expedientes.jobs';
 
@@ -136,7 +137,11 @@ const SNAPSHOT = {
 
 async function crearRcv(
   poliza: string,
-  opts: { snapshot?: any; documentos?: string[] } = {},
+  opts: {
+    snapshot?: any;
+    documentos?: string[];
+    ocrLeido?: Record<string, any>;
+  } = {},
 ) {
   const docs = opts.documentos ?? ['cedula', 'licencia', 'certificado'];
   const r = await svc.registrarDesdeEmision(
@@ -162,7 +167,12 @@ async function crearRcv(
         documentos: Object.fromEntries(
           docs.map((t) => [
             t,
-            { recibido: true, ref: (REF as any)[t], url: `/files/${t}` },
+            {
+              recibido: true,
+              ref: (REF as any)[t],
+              url: `/files/${t}`,
+              ...(opts.ocrLeido?.[t] ? { ocrLeido: opts.ocrLeido[t] } : {}),
+            },
           ]),
         ),
       },
@@ -1003,7 +1013,7 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
       resultado: 'coincide',
       comparadoCon: 'tomador',
       rolEsperado: 'tomador',
-      comparador: 2,
+      comparador: VERSION_COMPARADOR,
     });
   });
 
@@ -1200,11 +1210,11 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     });
     expect(req(id, 'cedula').diagnostico).toMatchObject({
       resultado: 'coincide',
-      comparador: 2,
+      comparador: VERSION_COMPARADOR,
       motivoAnalisis: 'cambio_comparador',
     });
     // Sin datos leídos: solo se marca con la versión nueva (no queda en bucle).
-    expect(req(id, 'licencia').diagnostico.comparador).toBe(2);
+    expect(req(id, 'licencia').diagnostico.comparador).toBe(VERSION_COMPARADOR);
     expect(req(id, 'licencia').estado).toBe('observado');
     const otra = await svc.revisarConIa({ modo: 'completo' });
     expect(otra.motivos).toEqual({});
@@ -1223,5 +1233,284 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
       estado: 'validado',
       decision: 'manual',
     });
+  });
+});
+
+describe('v3: datos cambiados en el formulario (ocrLeido de la emisión)', () => {
+  // Caso real QA, expediente 417 (póliza 18-27-0000137414): el OCR leyó del certificado la placa
+  // AC124KB y el serial JTEBU5JRXG5303643; el usuario los cambió a mano en el formulario.
+  const SNAP_417 = {
+    ...SNAPSHOT,
+    vehiculo: {
+      placa: 'WDSFG3G3',
+      marca: 'Toyota',
+      modelo: '4Runner',
+      anio: 2016,
+      serial: '3G34G23FRWDV2EV53G23',
+    },
+  };
+  const CERT_417 = {
+    placa: 'AC124KB',
+    marca: 'TOYOTA',
+    modelo: '4RUNNER',
+    anio: '2016',
+    serial: 'JTEBU5JRXG5303643',
+  };
+  const OCR_LEIDO_417 = {
+    placa: 'AC124KB',
+    serial: 'JTEBU5JRXG5303643',
+    marca: 'Toyota',
+    modelo: '4Runner',
+    anio: '2016',
+  };
+
+  it('caso 417: placa y serial cambiados en el formulario → datos_modificados (observado) con lo leído y lo emitido', async () => {
+    lee(REF.certificado, CERT_417);
+    const id = await crearRcv('18-27-0000137414', {
+      snapshot: SNAP_417,
+      documentos: ['certificado'],
+      ocrLeido: { certificado: OCR_LEIDO_417 },
+    });
+    const r = req(id, 'certificado');
+    expect(r.estado).toBe('observado');
+    expect(r.diagnostico.resultado).toBe('datos_modificados');
+    expect(r.diagnostico.comparador).toBe(VERSION_COMPARADOR);
+    expect(r.diagnostico.resumen).toBe(
+      'Datos cambiados en el formulario: el OCR leyó la placa AC124KB del certificado, ' +
+        'pero la póliza se emitió con WDSFG3G3; el serial de carrocería JTEBU5JRXG5303643, ' +
+        'pero la póliza se emitió con 3G34G23FRWDV2EV53G23.',
+    );
+    expect(r.motivo).toBe(r.diagnostico.resumen);
+    const campo = (c: string) =>
+      r.diagnostico.campos.find((x: any) => x.campo === c);
+    expect(campo('placa')).toMatchObject({
+      estado: 'modificado_en_formulario',
+      coincide: false,
+      enOcrAlEmitir: 'AC124KB',
+      enPoliza: 'WDSFG3G3',
+      enDocumento: 'AC124KB',
+    });
+    expect(campo('serialCarroceria')).toMatchObject({
+      estado: 'modificado_en_formulario',
+      enOcrAlEmitir: 'JTEBU5JRXG5303643',
+      enPoliza: '3G34G23FRWDV2EV53G23',
+    });
+    expect(campo('marca')).toMatchObject({
+      estado: 'coincide',
+      enOcrAlEmitir: 'Toyota',
+    });
+    expect(exp(id).estadoDocumental).toBe('incompleto');
+
+    // Bandeja: indicador propio, filtro y también cuenta en conErrores.
+    const lista = await request(app).get('/api/expedientes').set(AUTH);
+    const item = lista.body.data.items.find((i: any) => i.id === id);
+    expect(item.datosModificados).toBe(true);
+    expect(
+      item.requisitos.find((x: any) => x.tipo === 'certificado').diagnostico,
+    ).toMatchObject({ resultado: 'datos_modificados' });
+    const filtro = await request(app)
+      .get('/api/expedientes?datosModificados=true')
+      .set(AUTH);
+    expect(filtro.body.data.items.map((i: any) => i.id)).toEqual([id]);
+    const ind = await svc.indicadores({});
+    expect(ind).toMatchObject({ datosModificados: 1, conErrores: 1 });
+
+    // Detalle: campo por campo con lo leído al emitir.
+    const det = await request(app).get(`/api/expedientes/${id}`).set(AUTH);
+    const cert = det.body.data.requisitos.find(
+      (x: any) => x.tipo === 'certificado',
+    );
+    expect(cert.diagnostico.resultado).toBe('datos_modificados');
+    expect(
+      cert.diagnostico.campos.find((x: any) => x.campo === 'placa'),
+    ).toMatchObject({
+      estado: 'modificado_en_formulario',
+      enOcrAlEmitir: 'AC124KB',
+    });
+
+    // El asegurado no ve datos de la póliza ni se le pide reenviar.
+    expect(motivoParaAsegurado(r.diagnostico)).not.toMatch(/AC124KB|WDSFG3G3/);
+  });
+
+  it('igual a lo leído (el formulario no cambió nada) → validado, con lo leído al emitir a la vista', async () => {
+    const id = await crearRcv('P-70', {
+      ocrLeido: {
+        cedula: {
+          tipoDoc: 'V',
+          documento: '12345678',
+          nombre: 'Maria',
+          apellido: 'Perez',
+        },
+        certificado: {
+          placa: 'AB123CD',
+          serial: '9BWZZZ377VT004251',
+          serialMotor: 'MTR123456',
+          marca: 'Toyota',
+          modelo: 'Corolla',
+          anio: '2020',
+        },
+      },
+    });
+    expect(exp(id).estadoDocumental).toBe('completo');
+    for (const t of ['cedula', 'licencia', 'certificado'])
+      expect(req(id, t).diagnostico.resultado).toBe('coincide');
+    const placa = req(id, 'certificado').diagnostico.campos.find(
+      (x: any) => x.campo === 'placa',
+    );
+    expect(placa).toMatchObject({
+      estado: 'coincide',
+      enOcrAlEmitir: 'AB123CD',
+    });
+    const doc = req(id, 'cedula').diagnostico.campos.find(
+      (x: any) => x.campo === 'documento',
+    );
+    expect(doc.enOcrAlEmitir).toBe('V-****5678');
+    expect((await svc.indicadores({})).datosModificados).toBe(0);
+  });
+
+  it('sin ocrLeido (emisiones viejas) → no_coincide como hoy', async () => {
+    lee(REF.certificado, CERT_417);
+    const id = await crearRcv('P-71', {
+      snapshot: SNAP_417,
+      documentos: ['certificado'],
+    });
+    const r = req(id, 'certificado');
+    expect(r.estado).toBe('observado');
+    expect(r.diagnostico.resultado).toBe('no_coincide');
+    expect(r.diagnostico.resumen).toContain(
+      'La placa del certificado (AC124KB) no coincide con la del vehículo asegurado (WDSFG3G3).',
+    );
+    expect(
+      r.diagnostico.campos.every((c: any) => !('enOcrAlEmitir' in c)),
+    ).toBe(true);
+    const lista = await request(app).get('/api/expedientes').set(AUTH);
+    expect(
+      lista.body.data.items.find((i: any) => i.id === id).datosModificados,
+    ).toBe(false);
+    const filtro = await request(app)
+      .get('/api/expedientes?datosModificados=true')
+      .set(AUTH);
+    expect(filtro.body.data.items).toEqual([]);
+  });
+
+  it('el OCR leyó al emitir algo distinto a lo que lee ahora → no_coincide (no se afirma que se cambió)', async () => {
+    lee(REF.certificado, CERT_417);
+    const id = await crearRcv('P-72', {
+      snapshot: SNAP_417,
+      documentos: ['certificado'],
+      ocrLeido: {
+        certificado: {
+          ...OCR_LEIDO_417,
+          placa: 'XY999ZZ',
+          serial: 'OTRO1234567890XYZ',
+        },
+      },
+    });
+    const r = req(id, 'certificado');
+    expect(r.diagnostico.resultado).toBe('no_coincide');
+    expect(
+      r.diagnostico.campos.find((x: any) => x.campo === 'placa'),
+    ).toMatchObject({ estado: 'no_coincide', enOcrAlEmitir: 'XY999ZZ' });
+  });
+
+  it('dato que la IA no leyó ahora: se usa lo leído al emitir', () => {
+    const ctx = contextoPoliza({
+      producto: 'rcv',
+      snapshot: { ...SNAP_417, ocrLeido: { certificado: OCR_LEIDO_417 } },
+    });
+    const d = diagnosticar(
+      'certificado',
+      {
+        extraido: { serial: '3G34G23FRWDV2EV53G23', marca: 'TOYOTA' },
+        confianza: 1,
+      },
+      ctx,
+    );
+    expect(d.resultado).toBe('datos_modificados');
+    expect(d.campos.find((x) => x.campo === 'placa')).toMatchObject({
+      estado: 'modificado_en_formulario',
+      enDocumento: null,
+      enOcrAlEmitir: 'AC124KB',
+      enPoliza: 'WDSFG3G3',
+    });
+    // El serial se lee igual a la póliza: ese no se cambió.
+    expect(d.campos.find((x) => x.campo === 'serialCarroceria')?.estado).toBe(
+      'coincide',
+    );
+  });
+
+  it('cédula cambiada en el formulario: números enmascarados (últimos 4)', () => {
+    const ctx = contextoPoliza({
+      producto: 'personas',
+      snapshot: {
+        tomador: {
+          tipoDoc: 'V',
+          documento: '99887766',
+          nombre: 'María José',
+          apellido: 'Pérez Gómez',
+        },
+        ocrLeido: {
+          cedula: {
+            tipoDoc: 'V',
+            documento: '12345678',
+            nombre: 'MARIA JOSE',
+            apellido: 'PEREZ GOMEZ',
+          },
+        },
+      },
+    });
+    const d = diagnosticar(
+      'cedula',
+      { extraido: LECTURA_OK.cedula, confianza: 1 },
+      ctx,
+    );
+    expect(d.resultado).toBe('datos_modificados');
+    expect(d.resumen).toBe(
+      'Datos cambiados en el formulario: el OCR leyó el número V-****5678 de la cédula, ' +
+        'pero la póliza se emitió con V-****7766.',
+    );
+    expect(JSON.stringify(d)).not.toMatch(/12345678|99887766/);
+  });
+
+  it('al desplegar: la revisión completa recalcula con ocrLeido sin volver a llamar al OCR', async () => {
+    lee(REF.certificado, CERT_417);
+    const id = await crearRcv('P-73', {
+      snapshot: SNAP_417,
+      documentos: ['certificado'],
+      ocrLeido: { certificado: OCR_LEIDO_417 },
+    });
+    const llamadas = llamadasAnalizar().length;
+    // Como lo dejó el comparador v2 en QA: «no coincide».
+    const fila = req(id, 'certificado');
+    fila.diagnostico = {
+      ...fila.diagnostico,
+      comparador: 2,
+      resultado: 'no_coincide',
+    };
+    const r = await svc.revisarConIa({ modo: 'completo' });
+    expect(r.motivos).toEqual({ cambio_comparador: 1 });
+    expect(llamadasAnalizar()).toHaveLength(llamadas);
+    expect(req(id, 'certificado').diagnostico).toMatchObject({
+      resultado: 'datos_modificados',
+      comparador: VERSION_COMPARADOR,
+      motivoAnalisis: 'cambio_comparador',
+    });
+  });
+
+  it('un reenvío de la emisión sin ocrLeido no borra lo leído al emitir', async () => {
+    lee(REF.certificado, CERT_417);
+    const id = await crearRcv('P-74', {
+      snapshot: SNAP_417,
+      documentos: ['certificado'],
+      ocrLeido: { certificado: OCR_LEIDO_417 },
+    });
+    await crearRcv('P-74', {
+      snapshot: SNAP_417,
+      documentos: ['certificado'],
+    });
+    expect(exp(id).snapshot.ocrLeido.certificado.placa).toBe('AC124KB');
+    expect(req(id, 'certificado').diagnostico.resultado).toBe(
+      'datos_modificados',
+    );
   });
 });

@@ -58,6 +58,7 @@ import {
 } from './expedientes.files';
 import {
   ColaConcurrencia,
+  conDatosModificados,
   ContextoPoliza,
   contextoPoliza,
   Diagnostico,
@@ -71,6 +72,7 @@ import {
   MotivoAnalisis,
   motivoAnalisis,
   motivoParaAsegurado,
+  ocrLeidoDe,
   VERSION_COMPARADOR,
 } from './expedientes.ia';
 import {
@@ -588,16 +590,24 @@ export class ExpedientesService {
       str(p.producto),
     );
     const cramoRaw = p.cramo ?? Number(jd.cramo);
-    const snapshot =
-      p.snapshot ??
-      ({
-        tomador: {
-          nombre: nombreTomador ?? null,
-          identificacion: str(jd.tomadorIdentificacion) ?? null,
-        },
-        plan: str(extra.planNombre) ?? str(jd.planNombre) ?? null,
-        prima: extra.monto ?? (jd.monto != null ? Number(jd.monto) : null),
-      } as Record<string, unknown>);
+    // v1.3: lo que el OCR leyó al emitir, por requisito (snapshot.ocrLeido[tipo], sin migración).
+    const ocrLeido = ocrLeidoDe(
+      Object.fromEntries(
+        Object.entries(p.documentos ?? {}).map(([t, d]) => [t, d?.ocrLeido]),
+      ),
+    );
+    const snapshot = {
+      ...(p.snapshot ??
+        ({
+          tomador: {
+            nombre: nombreTomador ?? null,
+            identificacion: str(jd.tomadorIdentificacion) ?? null,
+          },
+          plan: str(extra.planNombre) ?? str(jd.planNombre) ?? null,
+          prima: extra.monto ?? (jd.monto != null ? Number(jd.monto) : null),
+        } as Record<string, unknown>)),
+      ...(ocrLeido ? { ocrLeido } : {}),
+    };
 
     return {
       // Sin campo `expediente` (registros viejos) o personas sin documentos en el
@@ -685,7 +695,17 @@ export class ExpedientesService {
       out.area = datos.area;
     if (!exp.aseguradoKey && datos.aseguradoKey)
       out.aseguradoKey = datos.aseguradoKey;
-    if (p.snapshot) out.snapshot = datos.snapshot;
+    // v1.3: un reenvío sin `ocrLeido` no borra lo que el OCR leyó al emitir.
+    const ocrNuevo = rec(rec(datos.snapshot).ocrLeido);
+    const hayOcrNuevo = Object.keys(ocrNuevo).length > 0;
+    if (p.snapshot || hayOcrNuevo) {
+      const base = p.snapshot ? rec(datos.snapshot) : rec(exp.snapshot);
+      const ocrLeido = hayOcrNuevo ? ocrNuevo : rec(rec(exp.snapshot).ocrLeido);
+      out.snapshot = {
+        ...base,
+        ...(Object.keys(ocrLeido).length ? { ocrLeido } : {}),
+      };
+    }
     if (p.producto && exp.producto !== datos.producto)
       out.producto = datos.producto;
     if (p.estadoPago && exp.estadoPago !== datos.estadoPago)
@@ -1019,6 +1039,11 @@ export class ExpedientesService {
       })),
       sinCorreo: !emailValido(e.aseguradoEmail),
       cambiosDetectados: e.cambiosDetectados,
+      /** v1.3: algún documento con datos cambiados en el formulario respecto al OCR al emitir. */
+      datosModificados: aplicables.some((tipo) => {
+        const r = porTipo.get(tipo);
+        return !!r && conDatosModificados(r);
+      }),
       emitidaEn: e.emitidaEn,
     };
   }
@@ -1032,10 +1057,35 @@ export class ExpedientesService {
     return Array.from(new Set(rows.map((r) => r.expedienteId)));
   }
 
+  /** v1.3: expedientes con datos cambiados en el formulario (observado `datos_modificados`). */
+  private async idsDatosModificados(): Promise<number[]> {
+    const rows = await prisma.mktExpedienteRequisito.findMany({
+      where: { estado: 'observado' },
+      select: {
+        expedienteId: true,
+        estado: true,
+        diagnostico: true,
+        analisisRef: true,
+        ref: true,
+      },
+    });
+    return Array.from(
+      new Set(
+        rows.filter((r) => conDatosModificados(r)).map((r) => r.expedienteId),
+      ),
+    );
+  }
+
   async listar(q: ListQuery) {
     const config = await this.getConfig();
     const where = this.whereLista(q, config);
-    if (q.conErrores) where.id = { in: await this.idsConErrores() };
+    let ids: number[] | null = null;
+    if (q.conErrores) ids = await this.idsConErrores();
+    if (q.datosModificados) {
+      const dm = await this.idsDatosModificados();
+      ids = ids ? ids.filter((i) => dm.includes(i)) : dm;
+    }
+    if (ids) where.id = { in: ids };
     const page = q.page ?? 1;
     const pageSize = q.pageSize ?? 25;
     const exclusiones = await this.exclusionesActivas();
@@ -1101,6 +1151,14 @@ export class ExpedientesService {
       ).length,
       /** Con algún documento errado (no coincide, ilegible o sin certeza): observado. */
       conErrores: exps.filter((e) => conEstado(e, 'observado')).length,
+      /** v1.3: con datos cambiados en el formulario respecto a lo que leyó el OCR al emitir. */
+      datosModificados: exps.filter((e) =>
+        (reqs.get(e.id) ?? []).some(
+          (r) =>
+            requisitosAplicables(e.producto, config).includes(r.tipo) &&
+            conDatosModificados(r),
+        ),
+      ).length,
       /** Con documentos recibidos que la IA aún no resuelve (incluye reintentos por error técnico). */
       analizando: automatica
         ? exps.filter((e) =>

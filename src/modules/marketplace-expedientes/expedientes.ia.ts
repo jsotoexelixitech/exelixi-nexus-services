@@ -6,6 +6,8 @@
  * - coincide (confianza alta)          → validado (actor `ia`)
  * - no_coincide | ilegible              → observado con el resumen como motivo
  * - sin_certeza                         → observado con «Revisar: …»
+ * - datos_modificados (v3)              → observado: el dato se cambió a mano en el formulario
+ *                                         respecto a lo que el OCR leyó del documento al emitir
  * - error_tecnico                       → sigue recibido; se reintenta con espera creciente
  */
 import { createHash } from 'crypto';
@@ -17,6 +19,7 @@ export const RESULTADOS_IA = [
   'ilegible',
   'sin_certeza',
   'error_tecnico',
+  'datos_modificados',
 ] as const;
 export type ResultadoIa = (typeof RESULTADOS_IA)[number];
 
@@ -32,8 +35,9 @@ export type MotivoAnalisis =
  * Versión de las reglas de comparación. Al subirla, los diagnósticos guardados con una versión
  * anterior se vuelven a COMPARAR con lo ya extraído (sin llamar otra vez al OCR).
  * v2 (7-nov): comparación por rol del documento y posible error de lectura de un dígito.
+ * v3 (7-nov): datos cambiados en el formulario (`ocrLeido` de la emisión vs documento vs póliza).
  */
-export const VERSION_COMPARADOR = 2;
+export const VERSION_COMPARADOR = 3;
 
 /** Persona de la póliza según su papel. */
 export type RolPersona = 'tomador' | 'asegurado' | 'beneficiario' | 'conductor';
@@ -45,7 +49,9 @@ export type EstadoCampo =
   | 'sin_dato_poliza'
   | 'sin_dato_documento'
   | 'parecido'
-  | 'no_aplica';
+  | 'no_aplica'
+  /** v3: la póliza no dice lo que el OCR leyó del documento al emitir (se cambió a mano). */
+  | 'modificado_en_formulario';
 
 export interface CampoDiagnostico {
   campo: string;
@@ -55,6 +61,8 @@ export interface CampoDiagnostico {
   /** null = no se pudo comparar (sin dato en la póliza o en el documento). */
   coincide: boolean | null;
   estado: EstadoCampo;
+  /** v3: lo que el OCR leyó de este dato al emitir (documentos enmascarados). */
+  enOcrAlEmitir?: string | null;
 }
 
 export interface Diagnostico {
@@ -102,6 +110,11 @@ export interface PersonaPoliza {
 export interface ContextoPoliza {
   personas: PersonaPoliza[];
   vehiculo: Record<string, unknown> | null;
+  /**
+   * v3: lo que el OCR leyó de cada documento al emitir (`expediente.documentos[tipo].ocrLeido`
+   * de Emisión), por requisito. Ausente en emisiones viejas.
+   */
+  ocrLeido?: Record<string, Record<string, unknown>>;
 }
 
 /** Confianza mínima para validar sin intervención humana. */
@@ -338,10 +351,44 @@ export function contextoPoliza(exp: {
     personas.push({ ...p, roles: [...p.roles] });
   }
   const veh = rec(snap.vehiculo);
+  const ocrLeido = ocrLeidoDe(snap.ocrLeido);
   return {
     personas,
     vehiculo: Object.keys(veh).length ? veh : null,
+    ...(ocrLeido ? { ocrLeido } : {}),
   };
+}
+
+/** Claves de `ocrLeido` (contrato v1.3). */
+export const CLAVES_OCR_LEIDO = [
+  'tipoDoc',
+  'documento',
+  'nombre',
+  'apellido',
+  'placa',
+  'serial',
+  'serialMotor',
+  'marca',
+  'modelo',
+  'anio',
+  'vencimiento',
+] as const;
+
+/** `ocrLeido` por requisito: solo claves conocidas con valor; null si no queda nada. */
+export function ocrLeidoDe(
+  v: unknown,
+): Record<string, Record<string, unknown>> | null {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [tipo, campos] of Object.entries(rec(v))) {
+    const r = rec(campos);
+    const limpio: Record<string, unknown> = {};
+    for (const k of CLAVES_OCR_LEIDO) {
+      const t = texto(r[k]);
+      if (t) limpio[k] = t;
+    }
+    if (Object.keys(limpio).length) out[tipo] = limpio;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 function estable(v: unknown): unknown {
@@ -372,8 +419,20 @@ export function huellaPoliza(ctx: ContextoPoliza): string {
       'identificacionPropietario',
     ].map((k) => [k, texto(v[k])]),
   );
+  // v3: lo leído al emitir también cuenta (si llega después, se vuelve a comparar). Sin él, la
+  // huella es la misma de antes (no reanaliza emisiones viejas por esto).
+  const ocrLeido =
+    ctx.ocrLeido && Object.keys(ctx.ocrLeido).length ? ctx.ocrLeido : null;
   return createHash('sha256')
-    .update(JSON.stringify(estable({ personas: ctx.personas, vehiculo })))
+    .update(
+      JSON.stringify(
+        estable({
+          personas: ctx.personas,
+          vehiculo,
+          ...(ocrLeido ? { ocrLeido } : {}),
+        }),
+      ),
+    )
     .digest('hex');
 }
 
@@ -545,7 +604,15 @@ interface ComparacionPersona {
   aviso: string | null;
   /** Aclaración para el resumen (p. ej. se comparó con la persona de respaldo). */
   nota: string | null;
+  /** v3: valores sin enmascarar por campo (póliza y documento) para detectar datos cambiados. */
+  crudos: Crudos;
+  conDv: boolean;
+  /** Se comparó con la persona de respaldo (la esperada no está en la póliza). */
+  respaldo: boolean;
 }
+
+/** Valores sin enmascarar de cada campo comparado: póliza y lo que lee ahora el documento. */
+type Crudos = Record<string, { pol: string | null; doc: string | null }>;
 
 function compararPersona(
   tipo: string,
@@ -718,13 +785,37 @@ function compararPersona(
     if (docCampo.coincide === false) aviso = sinRol;
     else nota = sinRol;
   }
-  return { campos, rol, rolEsperado, aviso, nota };
+  const crudos: Crudos = {
+    tipoDoc: { pol: persona?.tipoDoc ?? null, doc: tipoOcr ?? null },
+    documento: {
+      pol: persona ? docDe(persona) || null : null,
+      doc: docOcr || null,
+    },
+    nombre: {
+      pol: persona?.nombre ?? null,
+      doc: original(['nombre', 'nombres', 'razonSocial']),
+    },
+    apellido: {
+      pol: persona?.apellido ?? null,
+      doc: original(['apellido', 'apellidos']),
+    },
+  };
+  return {
+    campos,
+    rol,
+    rolEsperado,
+    aviso,
+    nota,
+    crudos,
+    conDv,
+    respaldo: !!respaldo,
+  };
 }
 
 function compararVehiculo(
   ex: Record<string, unknown>,
   ctx: ContextoPoliza,
-): CampoDiagnostico[] {
+): { campos: CampoDiagnostico[]; crudos: Crudos } {
   const v = ctx.vehiculo ?? {};
   const serialIgual =
     (a: string, b: string, largoMin: number) => (): boolean | 'parecido' => {
@@ -820,7 +911,193 @@ function compararVehiculo(
       ),
     );
   }
-  return campos;
+  const crudos: Crudos = {
+    placa: { pol: placaPol, doc: placaDoc },
+    serialCarroceria: { pol: carrPol, doc: carrDoc },
+    serialMotor: { pol: motorPol, doc: motorDoc },
+    marca: { pol: marcaPol, doc: marcaDoc },
+    modelo: { pol: modeloPol, doc: modeloDoc },
+    anio: { pol: anioPol, doc: anioDoc },
+  };
+  return { campos, crudos };
+}
+
+// ─── v3: datos cambiados en el formulario ──────────────────────────────────
+
+/** Campo del diagnóstico → clave de `ocrLeido` (lo que el OCR leyó al emitir). */
+const CLAVE_OCR_LEIDO: Record<string, string> = {
+  tipoDoc: 'tipoDoc',
+  documento: 'documento',
+  nombre: 'nombre',
+  apellido: 'apellido',
+  placa: 'placa',
+  serialCarroceria: 'serial',
+  serialMotor: 'serialMotor',
+  marca: 'marca',
+  modelo: 'modelo',
+  anio: 'anio',
+};
+
+/**
+ * ¿Es el mismo dato? Mismas tolerancias del comparador: documentos sin prefijo (RIF con o sin
+ * dígito verificador), nombres sin acentos ni orden, placa y seriales sin separadores (un carácter
+ * distinto en un serial largo se toma como la misma lectura), marca y modelo con una palabra común.
+ */
+function mismoDato(
+  c: string,
+  a: string,
+  b: string,
+  o: { tipo: string; conDv: boolean },
+): boolean {
+  switch (c) {
+    case 'tipoDoc':
+      return (
+        a.trim().toUpperCase().slice(0, 1) ===
+        b.trim().toUpperCase().slice(0, 1)
+      );
+    case 'documento': {
+      const n = (v: string) =>
+        o.tipo === 'pasaporte'
+          ? normSerial(v).replace(/^0+(?=.)/, '')
+          : numeroDocumento(v);
+      return documentosIguales(n(a), n(b), o.conDv);
+    }
+    case 'nombre':
+    case 'apellido':
+      return contenido(tokens(a), tokens(b));
+    case 'placa':
+      return normSerial(a) === normSerial(b);
+    case 'serialCarroceria':
+    case 'serialMotor': {
+      const x = normSerial(a);
+      const y = normSerial(b);
+      const largo = c === 'serialCarroceria' ? 10 : 8;
+      return (
+        x === y ||
+        (Math.min(x.length, y.length) >= largo && levenshtein(x, y) === 1)
+      );
+    }
+    case 'marca':
+    case 'modelo':
+      return comparte(tokens(a), tokens(b));
+    case 'anio': {
+      const x = Number(a.replace(/\D/g, ''));
+      const y = Number(b.replace(/\D/g, ''));
+      return Number.isFinite(x) && x > 0 && x === y;
+    }
+    default:
+      return false;
+  }
+}
+
+/** Texto de lo leído al emitir: documentos enmascarados; placas y seriales completos. */
+function mostrarOcrLeido(
+  c: string,
+  v: string,
+  ol: Record<string, unknown>,
+  tipo: string,
+): string | null {
+  if (c === 'documento') {
+    if (tipo === 'pasaporte') {
+      const n = normSerial(v);
+      return n.length <= 4 ? '****' : `****${n.slice(-4)}`;
+    }
+    return maskDocumento(texto(ol.tipoDoc), v);
+  }
+  if (c === 'tipoDoc') return v.toUpperCase().slice(0, 1);
+  return v;
+}
+
+/**
+ * Marca `modificado_en_formulario` cada campo en que el documento (lo que lee ahora la IA o, si
+ * no lo leyó, lo que leyó el OCR al emitir) difiere de la póliza Y lo leído al emitir coincide con
+ * el documento: el dato se cambió a mano en el formulario. Agrega `enOcrAlEmitir` a todo campo con
+ * lectura al emitir. Devuelve los campos modificados.
+ */
+function marcarModificados(
+  tipo: string,
+  campos: CampoDiagnostico[],
+  crudos: Crudos,
+  ol: Record<string, unknown>,
+  o: { conDv: boolean; detectar: boolean },
+): CampoDiagnostico[] {
+  const out: CampoDiagnostico[] = [];
+  for (const c of campos) {
+    const clave = CLAVE_OCR_LEIDO[c.campo];
+    const leido = clave ? texto(ol[clave]) : null;
+    if (!leido) continue;
+    c.enOcrAlEmitir = mostrarOcrLeido(c.campo, leido, ol, tipo);
+    const cr = crudos[c.campo];
+    if (!o.detectar || !cr?.pol) continue;
+    const igual = (a: string, b: string) =>
+      mismoDato(c.campo, a, b, { tipo, conDv: o.conDv });
+    const difiere = cr.doc
+      ? c.estado === 'no_coincide'
+      : c.estado === 'sin_dato_documento' && !igual(cr.pol, leido);
+    if (!difiere) continue;
+    // Lo leído al emitir es lo que dice el documento: no es una lectura distinta del OCR.
+    if (cr.doc && !igual(cr.doc, leido)) continue;
+    c.estado = 'modificado_en_formulario';
+    c.coincide = false;
+    out.push(c);
+  }
+  return out;
+}
+
+/** «del certificado», «de la cédula»… para el resumen. */
+const DEL_DOCUMENTO: Record<string, string> = {
+  certificado: 'del certificado',
+  cedula: 'de la cédula',
+  cedula_titular: 'de la cédula del titular',
+  cedula_beneficiario: 'de la cédula del beneficiario',
+  licencia: 'de la licencia',
+  rif: 'del RIF',
+  pasaporte: 'del pasaporte',
+};
+
+function articuloCampo(tipo: string, c: CampoDiagnostico): string {
+  switch (c.campo) {
+    case 'documento':
+      // «el número V-****5678 de la cédula»; en la licencia es la cédula del titular.
+      return tipo === 'licencia' ? 'la cédula' : 'el número';
+    case 'tipoDoc':
+      return 'el tipo de documento';
+    case 'nombre':
+      return 'el nombre';
+    case 'apellido':
+      return 'el apellido';
+    case 'placa':
+      return 'la placa';
+    case 'serialCarroceria':
+      return 'el serial de carrocería';
+    case 'serialMotor':
+      return 'el serial de motor';
+    case 'marca':
+      return 'la marca';
+    case 'modelo':
+      return 'el modelo';
+    case 'anio':
+      return 'el año';
+    default:
+      return c.etiqueta.toLowerCase();
+  }
+}
+
+/**
+ * «Datos cambiados en el formulario: el OCR leyó la placa AC124KB del certificado, pero la póliza
+ * se emitió con WDSFG3G3; el serial de carrocería …, pero la póliza se emitió con ….»
+ */
+function resumenModificados(
+  tipo: string,
+  modificados: CampoDiagnostico[],
+): string {
+  const del = DEL_DOCUMENTO[tipo] ?? `del documento`;
+  const partes = modificados.map((c, i) => {
+    const dato = `${articuloCampo(tipo, c)} ${c.enOcrAlEmitir ?? 'sin dato'}`;
+    const pol = `pero la póliza se emitió con ${c.enPoliza ?? 'otro dato'}`;
+    return i === 0 ? `el OCR leyó ${dato} ${del}, ${pol}` : `${dato}, ${pol}`;
+  });
+  return `Datos cambiados en el formulario: ${partes.join('; ')}.`;
 }
 
 function listaEtiquetas(campos: CampoDiagnostico[]): string {
@@ -912,8 +1189,13 @@ export function diagnosticar(
   let clave: string[] = [];
   let aviso: string | null = null;
   let nota: string | null = null;
+  let crudos: Crudos = {};
+  let conDv = false;
+  let respaldo = false;
   if (tipo === 'certificado') {
-    campos = compararVehiculo(ex, ctx);
+    const r = compararVehiculo(ex, ctx);
+    campos = r.campos;
+    crudos = r.crudos;
     rol = 'vehiculo';
     clave = ['placa', 'serialCarroceria'];
   } else if (TIPOS_PERSONA.has(tipo)) {
@@ -923,14 +1205,45 @@ export function diagnosticar(
     base.rolEsperado = r.rolEsperado;
     aviso = r.aviso;
     nota = r.nota;
+    crudos = r.crudos;
+    conDv = r.conDv;
+    respaldo = r.respaldo;
     clave = ['documento'];
   }
   const conNota = (t: string) => (nota ? `${t} ${nota}` : t);
+
+  // v3: lo que el OCR leyó al emitir. Sin él (emisiones viejas) todo sigue como antes. Con la
+  // persona de respaldo o un documento de otra persona de la póliza no se afirma que se cambió.
+  const ol = rec(ctx.ocrLeido?.[tipo]);
+  const modificados = Object.keys(ol).length
+    ? marcarModificados(tipo, campos, crudos, ol, {
+        conDv,
+        detectar:
+          !aviso && !respaldo && !(tipo === 'certificado' && !ctx.vehiculo),
+      })
+    : [];
 
   const fallan = campos.filter((c) => c.coincide === false);
   const parecidos = campos.filter((c) => c.estado === 'parecido');
   const coinciden = campos.filter((c) => c.coincide === true);
   const rolTexto = rol === 'vehiculo' || !rol ? 'asegurado' : rol;
+
+  if (modificados.length) {
+    const otros = fallan.filter((c) => c.estado === 'no_coincide');
+    const frases = [
+      resumenModificados(tipo, modificados),
+      ...otros.slice(0, 2).map((c) => fraseDiferencia(tipo, c, rolTexto)),
+    ];
+    if (otros.length > 2)
+      frases.push(`Hay ${otros.length - 2} diferencia(s) más.`);
+    return {
+      ...base,
+      resultado: 'datos_modificados',
+      campos,
+      resumen: conNota(frases.join(' ')),
+      comparadoCon: rol,
+    };
+  }
 
   if (aviso) {
     // Documento de otra persona de la póliza, sin la persona esperada o un dígito distinto:
@@ -1067,6 +1380,7 @@ export function estadoPorDiagnostico(d: Diagnostico): {
       return { estado: 'validado', motivo: null };
     case 'no_coincide':
     case 'ilegible':
+    case 'datos_modificados':
       return { estado: 'observado', motivo: d.resumen };
     case 'sin_certeza':
       return { estado: 'observado', motivo: `Revisar: ${d.resumen}` };
@@ -1086,6 +1400,9 @@ export function motivoParaAsegurado(
     return 'No se pudo leer el documento. Envíe una imagen más nítida y completa.';
   if (d.resultado === 'sin_certeza')
     return 'No se pudo confirmar el documento. Envíe una imagen más nítida y completa.';
+  // El dato se cambió en el formulario: lo revisa el equipo, el asegurado no tiene que reenviar.
+  if (d.resultado === 'datos_modificados')
+    return 'Estamos revisando los datos de su póliza con el documento recibido.';
   if (d.resultado === 'no_coincide') {
     const tipoMal = d.campos.some(
       (c) => c.campo === 'tipoDocumento' && c.coincide === false,
@@ -1130,6 +1447,19 @@ export function diagnosticoVigente(r: {
   return diagnosticoCorto(r.diagnostico)
     ? (r.diagnostico as Diagnostico)
     : null;
+}
+
+/** v3: requisito observado porque un dato se cambió en el formulario respecto al OCR al emitir. */
+export function conDatosModificados(r: {
+  estado: string;
+  diagnostico?: unknown;
+  analisisRef?: string | null;
+  ref?: string | null;
+}): boolean {
+  return (
+    r.estado === 'observado' &&
+    diagnosticoVigente(r)?.resultado === 'datos_modificados'
+  );
 }
 
 /**
