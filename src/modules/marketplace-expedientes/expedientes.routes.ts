@@ -26,6 +26,7 @@ import {
   observarSchema,
 } from './expedientes.schema';
 import { ejecutarJob } from './expedientes.jobs';
+import { leerMultipart } from './expedientes.files';
 
 const router = Router();
 
@@ -267,6 +268,91 @@ router.post(
         body.motivo,
       ),
     );
+  }),
+);
+
+// ─── Cargas ────────────────────────────────────────────────────────────────
+
+const TIPO_RE = /^[a-z_]{2,32}$/;
+
+function tipoCampo(fields: Record<string, string>): string {
+  const tipo = String(fields.tipo ?? '').trim();
+  if (!TIPO_RE.test(tipo))
+    throw new AppError('Indique el tipo de documento.', 400);
+  return tipo;
+}
+
+const cargaLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    status: 'error',
+    success: false,
+    message: 'Demasiadas cargas. Espere un minuto.',
+  },
+});
+
+/** Carga del vendedor autenticado desde el detalle (multipart file, tipo). */
+router.post(
+  '/:id(\\d+)/upload',
+  cargaLimiter,
+  authenticate,
+  h(async (req, res) => {
+    const id = idParam(req);
+    const { file, fields } = await leerMultipart(req);
+    const tipo = tipoCampo(fields);
+    return ok(res, await svc.cargarVendedor(id, tipo, file, actorDe(req)), 201);
+  }),
+);
+
+// ─── Público: enlace firmado del asegurado (sin sesión) ───────────────────
+
+const publicoLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    status: 'error',
+    success: false,
+    message: 'Demasiadas peticiones.',
+  },
+});
+
+const publicoCargaLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 15,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    status: 'error',
+    success: false,
+    message: 'Demasiadas cargas. Espere un minuto.',
+  },
+});
+
+/** Solo nombre, póliza enmascarada y requisitos pendientes/recibidos. */
+router.get(
+  '/publico/:token',
+  publicoLimiter,
+  h(async (req, res) =>
+    ok(res, await svc.vistaPublica(String(req.params.token))),
+  ),
+);
+
+router.post(
+  '/publico/:token/upload',
+  publicoCargaLimiter,
+  h(async (req, res) => {
+    const token = String(req.params.token);
+    // Enlace inválido/vencido/usado se rechaza antes de leer el archivo.
+    await svc.resolverEnlace(token);
+    const { file, fields } = await leerMultipart(req);
+    const tipo = tipoCampo(fields);
+    const poliza = fields.poliza ? String(fields.poliza).trim() : undefined;
+    return ok(res, await svc.cargaPublica(token, tipo, poliza, file), 201);
   }),
 );
 
