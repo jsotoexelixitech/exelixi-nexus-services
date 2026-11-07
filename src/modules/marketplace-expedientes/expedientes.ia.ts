@@ -25,7 +25,18 @@ export type MotivoAnalisis =
   | 'reintento'
   | 'cambio_poliza'
   | 'cambio_archivo'
+  | 'cambio_comparador'
   | 'carga';
+
+/**
+ * Versión de las reglas de comparación. Al subirla, los diagnósticos guardados con una versión
+ * anterior se vuelven a COMPARAR con lo ya extraído (sin llamar otra vez al OCR).
+ * v2 (7-nov): comparación por rol del documento y posible error de lectura de un dígito.
+ */
+export const VERSION_COMPARADOR = 2;
+
+/** Persona de la póliza según su papel. */
+export type RolPersona = 'tomador' | 'asegurado' | 'beneficiario' | 'conductor';
 
 /** Estado de cada dato comparado (además de `coincide`). */
 export type EstadoCampo =
@@ -56,8 +67,12 @@ export interface Diagnostico {
   resultado: ResultadoIa;
   campos: CampoDiagnostico[];
   resumen: string;
-  /** Persona de la póliza contra la que se comparó (tomador o asegurado). */
-  comparadoCon?: 'tomador' | 'asegurado' | 'vehiculo' | null;
+  /** Versión de las reglas de comparación (ausente = 1). */
+  comparador?: number;
+  /** Persona de la póliza contra la que se comparó (puede ser la siguiente disponible). */
+  comparadoCon?: RolPersona | 'vehiculo' | null;
+  /** Persona a la que debe pertenecer el documento según su tipo. */
+  rolEsperado?: RolPersona | null;
   motivoAnalisis?: MotivoAnalisis;
   /** Solo error_tecnico: número de intento y cuándo se reintenta. */
   intento?: number;
@@ -74,7 +89,10 @@ export interface LecturaOcr {
 }
 
 export interface PersonaPoliza {
-  rol: 'tomador' | 'asegurado';
+  /** Papel principal (el primero con que aparece). */
+  rol: RolPersona;
+  /** Todos sus papeles en la póliza (el tomador puede ser también el asegurado). */
+  roles: RolPersona[];
   tipoDoc: string | null;
   documento: string | null;
   nombre: string | null;
@@ -231,10 +249,7 @@ export function maskDocumento(
 
 // ─── Contexto de la póliza ────────────────────────────────────────────────
 
-function personaDe(
-  v: unknown,
-  rol: PersonaPoliza['rol'],
-): PersonaPoliza | null {
+function personaDe(v: unknown, rol: RolPersona): PersonaPoliza | null {
   const r = rec(v);
   if (!Object.keys(r).length) return null;
   const ident = pick(r, ['identificacion', 'cedula', 'rif']);
@@ -244,6 +259,7 @@ function personaDe(
     tipoDocDe(ident);
   const p: PersonaPoliza = {
     rol,
+    roles: [rol],
     tipoDoc: tipoDoc ?? null,
     documento: documento ? numeroDocumento(documento) || null : null,
     nombre: pick(r, ['nombre', 'nombres', 'razonSocial']),
@@ -252,9 +268,13 @@ function personaDe(
   return p.documento || p.nombre || p.apellido ? p : null;
 }
 
+function lista(v: unknown): unknown[] {
+  return Array.isArray(v) ? v : v ? [v] : [];
+}
+
 /**
- * Personas de la póliza en orden de preferencia: en RCV el documento es del tomador; en
- * personas y patrimoniales, del asegurado (titular). Sin repetir la misma cédula.
+ * Personas de la póliza con sus papeles: tomador, asegurado (titular), beneficiario y conductor
+ * habitual. La misma cédula en varios papeles es una sola persona con varios roles.
  */
 export function contextoPoliza(exp: {
   producto: string;
@@ -274,12 +294,29 @@ export function contextoPoliza(exp: {
     },
     'asegurado',
   );
-  const tomador = personaDe(snap.tomador, 'tomador');
-  const asegurado = personaDe(snap.asegurado, 'asegurado');
-  const orden =
-    exp.producto === 'rcv'
-      ? [tomador, asegurado, guardado]
-      : [asegurado, guardado, tomador];
+  const fuentes: [unknown, RolPersona][] = [
+    [snap.tomador, 'tomador'],
+    [snap.asegurado, 'asegurado'],
+    [snap.titular, 'asegurado'],
+    ...lista(snap.asegurados).map((a): [unknown, RolPersona] => [
+      a,
+      'asegurado',
+    ]),
+    ...lista(snap.beneficiario).map((b): [unknown, RolPersona] => [
+      b,
+      'beneficiario',
+    ]),
+    ...lista(snap.beneficiarios).map((b): [unknown, RolPersona] => [
+      b,
+      'beneficiario',
+    ]),
+    ...[snap.conductor, snap.conductorHabitual, snap.conductor_habitual].map(
+      (c): [unknown, RolPersona] => [c, 'conductor'],
+    ),
+  ];
+  const orden = fuentes.map(([v, rol]) => personaDe(v, rol));
+  // El asegurado guardado va después del tomador y el asegurado del snapshot (completa lo que falte).
+  orden.splice(2, 0, guardado);
   const personas: PersonaPoliza[] = [];
   for (const p of orden) {
     if (!p) continue;
@@ -295,9 +332,10 @@ export function contextoPoliza(exp: {
       igual.tipoDoc ??= p.tipoDoc;
       igual.nombre ??= p.nombre;
       igual.apellido ??= p.apellido;
+      if (!igual.roles.includes(p.rol)) igual.roles.push(p.rol);
       continue;
     }
-    personas.push({ ...p });
+    personas.push({ ...p, roles: [...p.roles] });
   }
   const veh = rec(snap.vehiculo);
   return {
@@ -467,12 +505,54 @@ const TIPOS_PERSONA = new Set([
   'pasaporte',
 ]);
 
+/**
+ * A quién pertenece cada documento (como lo usa la emisión: `cedula` = tomador, `cedula_titular`
+ * = titular) y con quién se compara si la póliza no trae a esa persona. RCV no fija de quién es la
+ * licencia (conductor habitual, tomador o titular): vale cualquiera de ellos.
+ */
+const ROLES_DOCUMENTO: Record<
+  string,
+  { esperados: RolPersona[]; respaldo: RolPersona[] }
+> = {
+  cedula: { esperados: ['tomador'], respaldo: ['asegurado'] },
+  rif: { esperados: ['tomador'], respaldo: ['asegurado'] },
+  pasaporte: { esperados: ['tomador'], respaldo: ['asegurado'] },
+  cedula_titular: { esperados: ['asegurado'], respaldo: ['tomador'] },
+  cedula_beneficiario: {
+    esperados: ['beneficiario'],
+    respaldo: ['asegurado', 'tomador'],
+  },
+  licencia: { esperados: ['conductor', 'tomador', 'asegurado'], respaldo: [] },
+};
+
+function textoRoles(roles: RolPersona[]): string {
+  if (roles.length <= 1) return roles[0] ?? 'titular';
+  return `${roles.slice(0, -1).join(', ')} ni ${roles[roles.length - 1]}`;
+}
+
+/** Un solo dígito distinto (lectura dudosa del OCR) en un número de 6 o más dígitos. */
+function casiIgual(a: string, b: string): boolean {
+  return (
+    Math.min(a.length, b.length) >= 6 && a !== b && levenshtein(a, b) === 1
+  );
+}
+
+interface ComparacionPersona {
+  campos: CampoDiagnostico[];
+  rol: RolPersona | null;
+  rolEsperado: RolPersona | null;
+  /** Diferencia que no basta para decir «no coincide»: el resultado es sin_certeza. */
+  aviso: string | null;
+  /** Aclaración para el resumen (p. ej. se comparó con la persona de respaldo). */
+  nota: string | null;
+}
+
 function compararPersona(
   tipo: string,
   ex: Record<string, unknown>,
   ctx: ContextoPoliza,
   hoy: string,
-): { campos: CampoDiagnostico[]; rol: PersonaPoliza['rol'] | null } {
+): ComparacionPersona {
   const rifOcr = pick(ex, ['rif']);
   const docRaw =
     pick(ex, [
@@ -494,21 +574,47 @@ function compararPersona(
     tipo === 'rif' ||
     !!rifOcr ||
     ['J', 'G', 'C'].includes(String(tipoOcr ?? ''));
+  const docDe = (p: PersonaPoliza) =>
+    tipo === 'pasaporte' ? normSerial(p.documento ?? '') : (p.documento ?? '');
 
-  const personas = ctx.personas;
+  // Personas a las que debe pertenecer el documento; si la póliza no las trae, la de respaldo.
+  const reglas = ROLES_DOCUMENTO[tipo] ?? ROLES_DOCUMENTO.cedula;
+  const conRol = (roles: RolPersona[]) => {
+    const out: PersonaPoliza[] = [];
+    for (const r of roles)
+      for (const p of ctx.personas)
+        if (p.documento && p.roles.includes(r) && !out.includes(p)) out.push(p);
+    return out;
+  };
+  let objetivos = conRol(reglas.esperados);
+  let respaldo: RolPersona | null = null;
+  if (!objetivos.length) {
+    for (const r of reglas.respaldo) {
+      const o = conRol([r]);
+      if (o.length) {
+        objetivos = o;
+        respaldo = r;
+        break;
+      }
+    }
+  }
+  const rolesValidos = respaldo ? [respaldo] : reglas.esperados;
+  const rolDe = (p: PersonaPoliza) =>
+    rolesValidos.find((r) => p.roles.includes(r)) ?? p.rol;
+
+  const exacto = docOcr
+    ? (ctx.personas.find(
+        (p) => p.documento && documentosIguales(docDe(p), docOcr, conDv),
+      ) ?? null)
+    : null;
   const persona =
-    personas.find((p) =>
-      documentosIguales(
-        tipo === 'pasaporte'
-          ? normSerial(p.documento ?? '')
-          : (p.documento ?? ''),
-        docOcr,
-        conDv,
-      ),
-    ) ??
-    personas.find((p) => p.documento) ??
-    personas[0] ??
-    null;
+    exacto && objetivos.includes(exacto)
+      ? exacto
+      : (objetivos[0] ??
+        ctx.personas.find((p) => p.documento) ??
+        ctx.personas[0] ??
+        null);
+  const rol = persona ? rolDe(persona) : null;
 
   const campos: CampoDiagnostico[] = [];
   const etiquetaDoc = ETIQUETA_DOC[tipo] ?? 'Número de documento';
@@ -525,20 +631,14 @@ function compararPersona(
   }
 
   const docPol = persona?.documento ?? null;
-  campos.push(
-    campo(
-      'documento',
-      etiquetaDoc,
-      docPol ? maskDocumento(persona?.tipoDoc, docPol) : null,
-      docOcr ? maskDocumento(tipoOcr, docOcr) : null,
-      () =>
-        documentosIguales(
-          tipo === 'pasaporte' ? normSerial(docPol ?? '') : (docPol ?? ''),
-          docOcr,
-          conDv,
-        ),
-    ),
+  const docCampo = campo(
+    'documento',
+    etiquetaDoc,
+    docPol ? maskDocumento(persona?.tipoDoc, docPol) : null,
+    docOcr ? maskDocumento(tipoOcr, docOcr) : null,
+    () => (persona ? documentosIguales(docDe(persona), docOcr, conDv) : false),
   );
+  campos.push(docCampo);
 
   const nOcr = tokens(pick(ex, ['nombre', 'nombres', 'razonSocial']));
   const aOcr = tokens(pick(ex, ['apellido', 'apellidos']));
@@ -587,7 +687,38 @@ function compararPersona(
       });
     }
   }
-  return { campos, rol: persona?.rol ?? null };
+
+  const rolEsperado = reglas.esperados[0] ?? null;
+  const esperadoTexto = textoRoles(reglas.esperados);
+  const nombres = campos.filter(
+    (c) => c.campo === 'nombre' || c.campo === 'apellido',
+  );
+  const nombreOk =
+    nombres.some((c) => c.coincide === true) &&
+    nombres.every((c) => c.coincide !== false);
+  let aviso: string | null = null;
+  let nota: string | null = null;
+  if (exacto && !objetivos.includes(exacto)) {
+    // Es de otra persona de la póliza: no es un documento falso, pero tampoco el pedido.
+    aviso = `El documento corresponde al ${exacto.rol}, no al ${esperadoTexto}.`;
+  } else if (
+    !exacto &&
+    docCampo.coincide === false &&
+    persona &&
+    casiIgual(docOcr, docDe(persona)) &&
+    nombreOk
+  ) {
+    docCampo.coincide = null;
+    docCampo.estado = 'parecido';
+    aviso =
+      `Posible error de lectura: el número del documento (${docCampo.enDocumento}) ` +
+      `difiere en un dígito del ${rol ?? 'titular'} (${docCampo.enPoliza}) y el nombre coincide.`;
+  } else if (respaldo) {
+    const sinRol = `La póliza no trae la cédula del ${esperadoTexto}; se comparó con la del ${respaldo}.`;
+    if (docCampo.coincide === false) aviso = sinRol;
+    else nota = sinRol;
+  }
+  return { campos, rol, rolEsperado, aviso, nota };
 }
 
 function compararVehiculo(
@@ -724,6 +855,8 @@ export function diagnosticar(
     analizadoEn: ahora.toISOString(),
     proveedor: texto(ocr?.proveedor),
     confianza,
+    comparador: VERSION_COMPARADOR,
+    rolEsperado: null as RolPersona | null,
     motivoAnalisis: opts.motivoAnalisis,
   };
   const motivoOcr = texto(ocr?.motivo)?.slice(0, 300) ?? null;
@@ -777,6 +910,8 @@ export function diagnosticar(
   let campos: CampoDiagnostico[] = [];
   let rol: Diagnostico['comparadoCon'] = null;
   let clave: string[] = [];
+  let aviso: string | null = null;
+  let nota: string | null = null;
   if (tipo === 'certificado') {
     campos = compararVehiculo(ex, ctx);
     rol = 'vehiculo';
@@ -785,13 +920,34 @@ export function diagnosticar(
     const r = compararPersona(tipo, ex, ctx, hoy);
     campos = r.campos;
     rol = r.rol;
+    base.rolEsperado = r.rolEsperado;
+    aviso = r.aviso;
+    nota = r.nota;
     clave = ['documento'];
   }
+  const conNota = (t: string) => (nota ? `${t} ${nota}` : t);
 
   const fallan = campos.filter((c) => c.coincide === false);
   const parecidos = campos.filter((c) => c.estado === 'parecido');
   const coinciden = campos.filter((c) => c.coincide === true);
   const rolTexto = rol === 'vehiculo' || !rol ? 'asegurado' : rol;
+
+  if (aviso) {
+    // Documento de otra persona de la póliza, sin la persona esperada o un dígito distinto:
+    // no se afirma que no coincide; revisar. Lo demás que falle (p. ej. vencida) sí es error.
+    const identidad = ['tipoDoc', 'documento', 'nombre', 'apellido'];
+    const otros = fallan.filter((c) => !identidad.includes(c.campo));
+    return {
+      ...base,
+      resultado: otros.length ? 'no_coincide' : 'sin_certeza',
+      campos,
+      resumen: [
+        aviso,
+        ...otros.map((c) => fraseDiferencia(tipo, c, rolTexto)),
+      ].join(' '),
+      comparadoCon: rol,
+    };
+  }
 
   if (fallan.length) {
     const frases = fallan
@@ -803,7 +959,7 @@ export function diagnosticar(
       ...base,
       resultado: 'no_coincide',
       campos,
-      resumen: frases.join(' '),
+      resumen: conNota(frases.join(' ')),
       comparadoCon: rol,
     };
   }
@@ -858,11 +1014,12 @@ export function diagnosticar(
     ...base,
     resultado: 'coincide',
     campos,
-    resumen:
+    resumen: conNota(
       `Coincide con la póliza: ${listaEtiquetas(coinciden)}.` +
-      (sinDato.length
-        ? ` Sin dato en la póliza: ${listaEtiquetas(sinDato)}.`
-        : ''),
+        (sinDato.length
+          ? ` Sin dato en la póliza: ${listaEtiquetas(sinDato)}.`
+          : ''),
+    ),
     comparadoCon: rol,
   };
 }
@@ -890,6 +1047,7 @@ export function diagnosticoErrorTecnico(
     proveedor: opts.proveedor ?? null,
     confianza: null,
     resultado: 'error_tecnico',
+    comparador: VERSION_COMPARADOR,
     campos: [],
     resumen: `No se pudo analizar el documento: ${motivo.slice(0, 200)}`,
     comparadoCon: null,
@@ -1005,6 +1163,7 @@ export function motivoAnalisis(
         ? 'reintento'
         : null;
     }
+    if ((diag.comparador ?? 1) < VERSION_COMPARADOR) return 'cambio_comparador';
     return r.huellaPoliza !== huella ? 'cambio_poliza' : null;
   }
   if (
@@ -1012,6 +1171,7 @@ export function motivoAnalisis(
     r.decision === 'ia'
   ) {
     if (!diag) return 'cambio_archivo';
+    if ((diag.comparador ?? 1) < VERSION_COMPARADOR) return 'cambio_comparador';
     if (r.huellaPoliza !== huella) return 'cambio_poliza';
   }
   return null;

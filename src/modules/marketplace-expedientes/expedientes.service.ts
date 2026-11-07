@@ -71,6 +71,7 @@ import {
   MotivoAnalisis,
   motivoAnalisis,
   motivoParaAsegurado,
+  VERSION_COMPARADOR,
 } from './expedientes.ia';
 import {
   correoCompleto,
@@ -1632,12 +1633,22 @@ export class ExpedientesService {
       let diag: Diagnostico;
       let hash: string | null = r.archivoHash ?? null;
       let lectura: OcrLectura | null | undefined;
-      if (motivo === 'cambio_poliza' && r.analisisRef === r.ref) {
+      if (
+        (motivo === 'cambio_poliza' || motivo === 'cambio_comparador') &&
+        r.analisisRef === r.ref
+      ) {
         // Mismo archivo: se compara de nuevo lo ya leído, sin otra llamada al OCR.
         if (!r.ocrDatos || typeof r.ocrDatos !== 'object') {
+          // Ilegible o de otro tipo: no hay datos que comparar; solo se marca como revisado.
           await prisma.mktExpedienteRequisito.update({
             where: { id: r.id },
-            data: { huellaPoliza: huellaPoliza(ctx) },
+            data: {
+              huellaPoliza: huellaPoliza(ctx),
+              diagnostico: {
+                ...rec(r.diagnostico),
+                comparador: VERSION_COMPARADOR,
+              } as Prisma.InputJsonValue,
+            },
           });
           return null;
         }

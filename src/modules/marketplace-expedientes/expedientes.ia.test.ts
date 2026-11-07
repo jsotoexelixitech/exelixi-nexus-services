@@ -944,3 +944,284 @@ describe('reglas del diagnóstico', () => {
     expect(maskDocumento('J', 'J-40123456-7')).toBe('J-****4567');
   });
 });
+
+describe('v2: comparación por rol y recálculo al desplegar (falsos errores en QA)', () => {
+  const REF_P = 'La Mundial de Seguros/11225322/2321234-26-11-77/cedula.webp';
+
+  async function crearPersonas(poliza: string, snapshot: any, asegurado: any) {
+    const r = await svc.registrarDesdeEmision(
+      {
+        id: Number(poliza.replace(/\D/g, '')) || 1,
+        empresaId: 7,
+        polizaNumero: poliza,
+        jsonData: { producto: 'personas' },
+      },
+      {
+        expediente: {
+          centidad: 'C',
+          ccanalalt: '900',
+          producto: 'personas',
+          asegurado: { ...asegurado, email: 'a@test.com' },
+          snapshot,
+          documentos: { cedula: { recibido: true, ref: REF_P } },
+        },
+      },
+    );
+    await svc.esperarAnalisisPendientes();
+    return r!.id;
+  }
+
+  const TOMADOR = {
+    tipoDoc: 'V',
+    documento: '11225322',
+    nombre: 'Carlos',
+    apellido: 'Mendoza',
+  };
+  const ASEGURADO = {
+    tipoDoc: 'V',
+    documento: '20304050',
+    nombre: 'Ana',
+    apellido: 'Mendoza',
+  };
+  const LECTURA_TOMADOR = {
+    identificacion: '11225322',
+    tipoDoc: 'V',
+    nombre: 'CARLOS',
+    apellido: 'MENDOZA',
+  };
+
+  it('personas: la cédula (del tomador) se compara con el tomador, no con el asegurado', async () => {
+    lee(REF_P, LECTURA_TOMADOR);
+    const id = await crearPersonas(
+      'PP-1',
+      { tomador: TOMADOR, asegurado: ASEGURADO },
+      ASEGURADO,
+    );
+    const r = req(id, 'cedula');
+    expect(r.estado).toBe('validado');
+    expect(r.diagnostico).toMatchObject({
+      resultado: 'coincide',
+      comparadoCon: 'tomador',
+      rolEsperado: 'tomador',
+      comparador: 2,
+    });
+  });
+
+  it('caso 5322: la póliza no trae al tomador → se compara con el asegurado y queda sin_certeza, no no_coincide', async () => {
+    lee(REF_P, LECTURA_TOMADOR);
+    const id = await crearPersonas('PP-2', { asegurado: ASEGURADO }, ASEGURADO);
+    const r = req(id, 'cedula');
+    expect(r.estado).toBe('observado');
+    expect(r.diagnostico).toMatchObject({
+      resultado: 'sin_certeza',
+      comparadoCon: 'asegurado',
+      rolEsperado: 'tomador',
+    });
+    expect(r.diagnostico.resumen).toBe(
+      'La póliza no trae la cédula del tomador; se comparó con la del asegurado.',
+    );
+    expect(r.motivo).toMatch(/^Revisar: /);
+  });
+
+  it('documento de otra persona de la póliza → sin_certeza «corresponde al asegurado, no al tomador»', async () => {
+    lee(REF_P, {
+      identificacion: '20304050',
+      tipoDoc: 'V',
+      nombre: 'ANA',
+      apellido: 'MENDOZA',
+    });
+    const id = await crearPersonas(
+      'PP-3',
+      { tomador: TOMADOR, asegurado: ASEGURADO },
+      ASEGURADO,
+    );
+    const d = req(id, 'cedula').diagnostico;
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toBe(
+      'El documento corresponde al asegurado, no al tomador.',
+    );
+    expect(d.comparadoCon).toBe('tomador');
+  });
+
+  it('roles: cedula_titular → asegurado; cedula_beneficiario → beneficiario o el siguiente disponible', () => {
+    const ctx = contextoPoliza({
+      producto: 'personas',
+      snapshot: {
+        tomador: TOMADOR,
+        asegurado: ASEGURADO,
+        beneficiarios: [
+          {
+            tipoDoc: 'V',
+            documento: '30111222',
+            nombre: 'Luis',
+            apellido: 'Mendoza',
+          },
+        ],
+      },
+    });
+    const lect = (doc: string, nombre: string) => ({
+      extraido: {
+        identificacion: doc,
+        tipoDoc: 'V',
+        nombre,
+        apellido: 'MENDOZA',
+      },
+      confianza: 1,
+    });
+    expect(
+      diagnosticar('cedula_titular', lect('20304050', 'ANA'), ctx),
+    ).toMatchObject({ resultado: 'coincide', comparadoCon: 'asegurado' });
+    expect(
+      diagnosticar('cedula_titular', lect('11225322', 'CARLOS'), ctx).resumen,
+    ).toBe('El documento corresponde al tomador, no al asegurado.');
+    expect(
+      diagnosticar('cedula_beneficiario', lect('30111222', 'LUIS'), ctx),
+    ).toMatchObject({ resultado: 'coincide', comparadoCon: 'beneficiario' });
+    const sinBenef = contextoPoliza({
+      producto: 'personas',
+      snapshot: { asegurado: ASEGURADO },
+    });
+    expect(
+      diagnosticar('cedula_beneficiario', lect('20304050', 'ANA'), sinBenef),
+    ).toMatchObject({
+      resultado: 'coincide',
+      comparadoCon: 'asegurado',
+      rolEsperado: 'beneficiario',
+    });
+  });
+
+  it('licencia (RCV): vale la del conductor habitual, el tomador o el titular', () => {
+    const ctx = contextoPoliza({
+      producto: 'rcv',
+      snapshot: {
+        tomador: TOMADOR,
+        asegurado: ASEGURADO,
+        conductor: {
+          tipoDoc: 'V',
+          documento: '15999888',
+          nombre: 'Pedro',
+          apellido: 'Rojas',
+        },
+      },
+    });
+    for (const [doc, nombre, apellido, rol] of [
+      ['15999888', 'PEDRO', 'ROJAS', 'conductor'],
+      ['11225322', 'CARLOS', 'MENDOZA', 'tomador'],
+      ['20304050', 'ANA', 'MENDOZA', 'asegurado'],
+    ]) {
+      expect(
+        diagnosticar(
+          'licencia',
+          { extraido: { identificacion: doc, nombre, apellido }, confianza: 1 },
+          ctx,
+        ),
+      ).toMatchObject({ resultado: 'coincide', comparadoCon: rol });
+    }
+  });
+
+  it('caso 274: un dígito distinto (8127 vs 5127) con el mismo nombre → sin_certeza «posible error de lectura»', () => {
+    const ctx = contextoPoliza({
+      producto: 'personas',
+      snapshot: {
+        tomador: {
+          tipoDoc: 'V',
+          documento: '17345127',
+          nombre: 'Rosa',
+          apellido: 'Díaz',
+        },
+      },
+    });
+    const d = diagnosticar(
+      'cedula',
+      {
+        extraido: {
+          identificacion: '17348127',
+          tipoDoc: 'V',
+          nombre: 'ROSA',
+          apellido: 'DIAZ',
+        },
+        confianza: 1,
+      },
+      ctx,
+    );
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toBe(
+      'Posible error de lectura: el número del documento (V-****8127) difiere en un dígito del tomador (V-****5127) y el nombre coincide.',
+    );
+    expect(d.campos.find((c) => c.campo === 'documento')).toMatchObject({
+      coincide: null,
+      estado: 'parecido',
+    });
+    // Con otro nombre sí es otra persona.
+    const otra = diagnosticar(
+      'cedula',
+      {
+        extraido: {
+          identificacion: '17348127',
+          tipoDoc: 'V',
+          nombre: 'JUAN',
+          apellido: 'PEREZ',
+        },
+        confianza: 1,
+      },
+      ctx,
+    );
+    expect(otra.resultado).toBe('no_coincide');
+  });
+
+  it('al desplegar: diagnósticos del comparador anterior se vuelven a comparar con lo ya leído, sin OCR', async () => {
+    const id = await crearRcv('P-60');
+    const llamadas = llamadasAnalizar().length;
+    // Simula lo guardado por la v1 en QA: falso error con el comparador anterior.
+    const fila = req(id, 'cedula');
+    fila.estado = 'observado';
+    fila.motivo = 'falso error v1';
+    fila.diagnostico = {
+      ...fila.diagnostico,
+      comparador: undefined,
+      resultado: 'no_coincide',
+    };
+    const ilegible = req(id, 'licencia');
+    ilegible.estado = 'observado';
+    ilegible.ocrDatos = null;
+    ilegible.diagnostico = {
+      ...ilegible.diagnostico,
+      comparador: undefined,
+      resultado: 'ilegible',
+    };
+    exp(id).estadoDocumental = 'incompleto';
+
+    const r = await svc.revisarConIa({ modo: 'completo' });
+    expect(r.motivos).toEqual({ cambio_comparador: 2 });
+    expect(llamadasAnalizar()).toHaveLength(llamadas);
+    expect(req(id, 'cedula')).toMatchObject({
+      estado: 'validado',
+      motivo: null,
+    });
+    expect(req(id, 'cedula').diagnostico).toMatchObject({
+      resultado: 'coincide',
+      comparador: 2,
+      motivoAnalisis: 'cambio_comparador',
+    });
+    // Sin datos leídos: solo se marca con la versión nueva (no queda en bucle).
+    expect(req(id, 'licencia').diagnostico.comparador).toBe(2);
+    expect(req(id, 'licencia').estado).toBe('observado');
+    const otra = await svc.revisarConIa({ modo: 'completo' });
+    expect(otra.motivos).toEqual({});
+    expect(llamadasAnalizar()).toHaveLength(llamadas);
+  });
+
+  it('al desplegar no toca decisiones manuales', async () => {
+    lee(REF.cedula, { ...LECTURA_OK.cedula, identificacion: '11111111' });
+    const id = await crearRcv('P-61', { documentos: ['cedula'] });
+    await svc.validarManual(id, 'cedula', 'validar', 'portal:9', 'Visto');
+    const fila = req(id, 'cedula');
+    fila.diagnostico = { ...fila.diagnostico, comparador: undefined };
+    const r = await svc.revisarConIa({ modo: 'completo' });
+    expect(r.motivos).toEqual({});
+    expect(req(id, 'cedula')).toMatchObject({
+      estado: 'validado',
+      decision: 'manual',
+    });
+  });
+});
