@@ -2211,7 +2211,6 @@ export class ExpedientesService {
           documento: requisitoLabel(extra.tipo ?? ''),
           motivo,
           enlace: link?.url ?? null,
-          expiraEn: link?.expiraEn ?? null,
         });
       }
       const r = await entregarCorreo([exp.aseguradoEmail], nombre, content);
@@ -2255,7 +2254,6 @@ export class ExpedientesService {
       polizas: [exp.cnpoliza],
       documentos: documentosCorreo([exp], new Map([[exp.id, reqs]]), config),
       enlace: link.url,
-      expiraEn: link.expiraEn,
     });
     const content = { ...base, subject: `[Prueba QA] ${base.subject}` };
     const r = await entregarCorreo([destino], nombre, content);

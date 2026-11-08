@@ -122,11 +122,10 @@ describe('lista blanca', () => {
     expect(body.template).toBe('expediente-documentos');
     expect(body.data.tipo).toBe('solicitud');
     expect(body.data.subject).toBe(
-      'La Mundial | Completa la documentación de tu póliza',
+      'La Mundial de Seguros | Complete la documentación de su póliza N.º P-1',
     );
-    expect(body.data.poliza).toBe('P-1');
+    expect(body.data.polizas).toEqual(['P-1']);
     expect(body.data.documentos.length).toBeGreaterThan(0);
-    expect(body.data.venceEn).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(body.data.enlace).toMatch(
       /^https:\/\/nexusqa\.test\/portal-lm\/expediente\?t=[\w-]{43}$/,
     );
@@ -167,7 +166,7 @@ describe('cadencia 0/3/7/14', () => {
     await enviarRecordatorios(new Date(BASE.getTime() + 3 * DIA + 1000));
     expect(mailCalls()).toHaveLength(2);
     expect(bodyDe(mailCalls()[1]).data.subject).toBe(
-      'La Mundial | Aún necesitamos un documento de tu expediente',
+      'Recordatorio: La Mundial de Seguros | Complete la documentación de su póliza N.º P-1',
     );
 
     await enviarRecordatorios(new Date(BASE.getTime() + 7 * DIA));
@@ -206,7 +205,7 @@ describe('agrupación, exclusiones y sin correo', () => {
     await enviarRecordatorios(BASE);
     expect(mailCalls()).toHaveLength(1);
     const data = bodyDe(mailCalls()[0]).data;
-    expect(data.poliza).toBe('P-1, P-2');
+    expect(data.polizas).toEqual(['P-1', 'P-2']);
     const polizasDocs = new Set(data.documentos.map((d: any) => d.poliza));
     expect([...polizasDocs].sort()).toEqual(['P-1', 'P-2']);
     const enviados = notifs('enviado');

@@ -5,6 +5,7 @@ vi.mock('../../utils/logger', () => ({
 }));
 
 import {
+  asuntoExpediente,
   BrandedContent,
   correoCompleto,
   correoObservado,
@@ -17,7 +18,6 @@ import {
 } from './expedientes.mail';
 
 const ENLACE = 'https://nexusqa.test/portal-lm/expediente?t=abc';
-const VENCE = new Date('2026-11-14T15:00:00.000Z');
 
 function datos(enlace: string | null = ENLACE): DatosCorreoAsegurado {
   return {
@@ -33,7 +33,6 @@ function datos(enlace: string | null = ENLACE): DatosCorreoAsegurado {
       { nombre: 'Certificado de circulación', estado: 'aprobado' },
     ],
     enlace,
-    expiraEn: VENCE,
   };
 }
 
@@ -89,7 +88,7 @@ describe('correos al asegurado: datos para expediente-documentos', () => {
     expect(estadoDocCorreo('sin_informacion')).toBeNull();
   });
 
-  it('envía la plantilla nueva con tipo, nombre, póliza, documentos, enlace y vencimiento', async () => {
+  it('envía la plantilla nueva con tipo, nombre, pólizas, documentos y enlace', async () => {
     const r = await entregarCorreo(
       ['luis@test.com'],
       'Luis',
@@ -102,10 +101,13 @@ describe('correos al asegurado: datos para expediente-documentos', () => {
     expect(b.data).toMatchObject({
       tipo: 'solicitud',
       nombre: 'Luis',
-      poliza: '18-1-0000078926',
+      polizas: ['18-1-0000078926'],
       enlace: ENLACE,
-      venceEn: VENCE.toISOString(),
     });
+    expect(b.data.venceEn).toBeUndefined();
+    expect(b.data.subject).toBe(
+      'La Mundial de Seguros | Complete la documentación de su póliza N.º 18-1-0000078926',
+    );
     expect(b.data.documentos[1]).toEqual({
       nombre: 'Licencia de conducir',
       estado: 'corregir',
@@ -113,11 +115,10 @@ describe('correos al asegurado: datos para expediente-documentos', () => {
     });
   });
 
-  it('recibido y completo no llevan enlace ni vencimiento', () => {
+  it('recibido y completo no llevan enlace', () => {
     const [, , , recibido, completo] = todos(ENLACE);
     for (const c of [recibido, completo]) {
       expect(c.expediente!.enlace).toBeNull();
-      expect(c.expediente!.expiraEn).toBeNull();
       expect(c.ctaUrl).toBeUndefined();
     }
   });
@@ -149,16 +150,22 @@ describe('respaldo branded', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
       const [, b] = bodies();
       expect(b.template).toBe('branded');
-      expect(b.data.eyebrow).toBe('Documentos de tu póliza');
-      expect(b.data.title).toBe('Completa tu expediente: faltan 2 documentos');
+      expect(b.data.eyebrow).toBe('Control documental');
+      expect(b.data.title).toBe('Complete la documentación de su póliza');
+      expect(b.data.intro).toBe(
+        'Estimado(a) Luis: le confirmamos que su póliza ha sido emitida exitosamente. ' +
+          'Aún se encuentra pendiente completar la siguiente documentación: ' +
+          'Cédula de identidad; Licencia de conducir (La licencia está vencida).',
+      );
       expect(b.data.fields).toEqual([
-        { label: 'Póliza', value: '18-1-0000078926' },
+        { label: 'Póliza', value: 'N.º 18-1-0000078926' },
         { label: 'Pendientes', value: '2' },
-        { label: 'Vence', value: '14/11/2026' },
       ]);
-      expect(b.data.ctaLabel).toBe('Subir mis documentos');
+      expect(b.data.ctaLabel).toBe('Completar mi expediente');
       expect(b.data.ctaUrl).toBe(ENLACE);
-      expect(b.data.extraNote).toContain('asesor de seguros');
+      expect(b.data.extraNote).toContain(
+        '¿Ya entregó estos documentos a La Mundial de Seguros?',
+      );
     },
   );
 
@@ -191,13 +198,38 @@ describe('respaldo branded', () => {
       expect(c.extraNote ?? '').not.toContain(c.intro);
       expect(c.fields![0]).toEqual({
         label: 'Póliza',
-        value: '18-1-0000078926',
+        value: 'N.º 18-1-0000078926',
       });
     }
   });
 });
 
 describe('vocabulario al asegurado', () => {
+  it('asuntos oficiales de usted; el recordatorio lleva «Recordatorio:» delante', () => {
+    const [sol, rec] = todos(ENLACE);
+    expect(sol.subject).toBe(
+      'La Mundial de Seguros | Complete la documentación de su póliza N.º 18-1-0000078926',
+    );
+    expect(rec.subject).toBe(`Recordatorio: ${sol.subject}`);
+    expect(asuntoExpediente('solicitud', ['A', 'B'])).toBe(
+      'La Mundial de Seguros | Complete la documentación de sus pólizas N.º A y N.º B',
+    );
+  });
+
+  it('ningún correo al asegurado tutea (de usted)', async () => {
+    for (const enlace of [ENLACE, null]) {
+      for (const c of todos(enlace)) {
+        fetchMock.mockClear();
+        fetchMock.mockResolvedValueOnce(status(400));
+        await entregarCorreo(['luis@test.com'], 'Luis', c);
+        const enviado = JSON.stringify(bodies());
+        expect(enviado).not.toMatch(
+          /\btu\s|\btus\s|envíanos|Toma una foto|Subir mis|\bpuedes\b|\bnecesitas\b|\bCompleta\b/i,
+        );
+      }
+    }
+  });
+
   it('ningún correo al asegurado dice «vendedor»', async () => {
     for (const enlace of [ENLACE, null]) {
       for (const c of todos(enlace)) {

@@ -239,7 +239,6 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
       polizas: paraEnlace.map((e) => e.cnpoliza),
       documentos: documentosCorreo(paraEnlace, reqs, config),
       enlace: link.url,
-      expiraEn: link.expiraEn,
     };
     const content = inicial
       ? correoSolicitudInicial(datos)

@@ -1,10 +1,10 @@
 /**
  * Correos del monitor de expedientes vía nest-api `POST /api/v1/mail/send`.
- * Al asegurado (correos 1 a 5): plantilla `expediente-documentos` (lista de documentos con
- * su estado, botón y vencimiento del enlace). Si nest-api aún no la conoce (400/422), se
+ * Al asegurado (correos 1 a 5): plantilla `expediente-documentos` con el texto oficial de
+ * La Mundial (de usted, póliza en negrita, documentos pendientes y botón). Si nest-api aún no la conoce (400/422), se
  * reintenta una vez con `branded`. Correo 6 (resumen a La Mundial): `branded`.
  * Textos: documento 03_Correos_y_Reporte_Nocturno. Al asegurado nunca se le dice
- * «vendedor» (es «asesor de seguros»). Nunca se registran correos ni nombres en logs.
+ * «vendedor» ni se le tutea. Nunca se registran correos ni nombres en logs.
  */
 import logger from '../../utils/logger';
 import { nestMailAccepted } from '../funeral-submission/nest-mail-result';
@@ -45,7 +45,6 @@ export interface DatosExpedienteCorreo {
   polizas: string[];
   documentos: DocumentoCorreo[];
   enlace: string | null;
-  expiraEn: Date | null;
 }
 
 export interface BrandedContent {
@@ -91,28 +90,6 @@ export function estadoDocCorreo(estado: string): EstadoDocCorreo | null {
       return 'aprobado';
     default:
       return null;
-  }
-}
-
-/** "sábado, 14 de noviembre de 2026" en hora de Caracas. */
-export function fechaVence(d: Date, corta = false): string {
-  try {
-    if (corta)
-      return d.toLocaleDateString('es-VE', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        timeZone: 'America/Caracas',
-      });
-    return d.toLocaleDateString('es-VE', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-      timeZone: 'America/Caracas',
-    });
-  } catch {
-    return d.toISOString().slice(0, 10);
   }
 }
 
@@ -177,7 +154,7 @@ function datosExpediente(
     subject,
     tipo: e.tipo,
     nombre: recortar(e.nombre, 80),
-    poliza: recortar(e.polizas.join(', '), 200),
+    polizas: e.polizas.slice(0, 10).map((x) => recortar(x, 60)),
     documentos: e.documentos.slice(0, 30).map((d) => ({
       nombre: recortar(d.nombre, 120),
       estado: d.estado,
@@ -185,7 +162,6 @@ function datosExpediente(
       ...(d.poliza ? { poliza: recortar(d.poliza, 60) } : {}),
     })),
     ...(e.enlace ? { enlace: e.enlace } : {}),
-    ...(e.enlace && e.expiraEn ? { venceEn: e.expiraEn.toISOString() } : {}),
   };
 }
 
@@ -257,22 +233,55 @@ export async function entregarCorreo(
 
 // ─── Plantillas (correos 1 a 6) ────────────────────────────────────────────
 //
-// Cada mensaje va una sola vez: la firma y el aviso de correo automático ya los
-// pone el pie de la plantilla; la póliza va en `fields` (sale en negrita en
-// `branded`) y en el texto de `expediente-documentos`.
+// Texto oficial de La Mundial, de usted. Cada mensaje va una sola vez: firma y
+// pie los pone la plantilla. En `branded` (respaldo) no hay negrita: la póliza
+// va en `fields`.
 
 export interface DatosCorreoAsegurado {
   nombre: string;
   polizas: string[];
   documentos: DocumentoCorreo[];
   enlace: string | null;
-  expiraEn?: Date | null;
 }
 
-const NOTA_ASESOR_CON_ENLACE =
-  'Si ya los entregaste a tu asesor de seguros, no tienes que enviarlos de nuevo: los estamos validando.';
-const NOTA_ASESOR_SIN_ENLACE =
-  'Puedes entregarlos a tu asesor de seguros. Si ya lo hiciste, no tienes que enviarlos de nuevo: los estamos validando.';
+const MARCA = 'La Mundial de Seguros';
+
+/** «N.º X», «N.º X y N.º Y». */
+export function listaPolizas(polizas: string[]): string {
+  return enLista(polizas.map((p) => `N.º ${p}`));
+}
+
+function refPolizas(polizas: string[]): string {
+  const su = polizas.length > 1 ? 'sus pólizas' : 'su póliza';
+  return polizas.length ? `${su} ${listaPolizas(polizas)}` : su;
+}
+
+/** Asunto oficial (el recordatorio lleva «Recordatorio:» delante). */
+export function asuntoExpediente(
+  tipo: TipoCorreoAsegurado,
+  polizas: string[],
+): string {
+  const ref = refPolizas(polizas);
+  switch (tipo) {
+    case 'recordatorio':
+      return `Recordatorio: ${MARCA} | Complete la documentación de ${ref}`;
+    case 'observado':
+      return `${MARCA} | Necesitamos corregir un documento de ${ref}`;
+    case 'recibido':
+      return `${MARCA} | Documento recibido de ${ref}`;
+    case 'completo':
+      return `${MARCA} | Expediente completo de ${ref}`;
+    default:
+      return `${MARCA} | Complete la documentación de ${ref}`;
+  }
+}
+
+/** «Licencia de conducir (La licencia está vencida)». */
+function lineaDoc(d: DocumentoCorreo, conPoliza: boolean): string {
+  const motivo = d.motivo ? d.motivo.replace(/[.\s]+$/, '') : '';
+  const pol = conPoliza && d.poliza ? ` de la póliza N.º ${d.poliza}` : '';
+  return `${d.nombre}${pol}${motivo ? ` (${motivo})` : ''}`;
+}
 
 function pendientesDeLista(docs: DocumentoCorreo[]): DocumentoCorreo[] {
   return docs.filter(
@@ -280,98 +289,88 @@ function pendientesDeLista(docs: DocumentoCorreo[]): DocumentoCorreo[] {
   );
 }
 
-function cuantos(n: number): string {
-  return n === 1 ? '1 documento' : `${n} documentos`;
-}
+const NOTA_ENTREGADOS =
+  '¿Ya entregó estos documentos a La Mundial de Seguros? Si los entregó previamente por alguno de ' +
+  'nuestros canales autorizados, no necesita cargarlos nuevamente. Esta gestión no afecta la emisión de su póliza.';
+const NO_AFECTA = 'Esta gestión no afecta la emisión de su póliza.';
 
-/** Datos para `expediente-documentos` + campos del respaldo `branded`. */
+/** Datos para `expediente-documentos` + respaldo `branded`. */
 function armar(
   tipo: TipoCorreoAsegurado,
   p: DatosCorreoAsegurado,
-  branded: Omit<BrandedContent, 'fields' | 'expediente'>,
+  branded: Pick<BrandedContent, 'title' | 'intro' | 'extraNote'>,
 ): BrandedContent {
   const enlace = tipo === 'recibido' || tipo === 'completo' ? null : p.enlace;
-  const expiraEn = enlace ? (p.expiraEn ?? null) : null;
   const pendientes = pendientesDeLista(p.documentos);
   const fields = [
     ...(p.polizas.length
       ? [
           {
             label: p.polizas.length > 1 ? 'Pólizas' : 'Póliza',
-            value: p.polizas.join(', '),
+            value: listaPolizas(p.polizas),
           },
         ]
       : []),
     ...(tipo === 'recibido' || tipo === 'completo'
       ? []
       : [{ label: 'Pendientes', value: String(pendientes.length) }]),
-    ...(expiraEn
-      ? [{ label: 'Vence', value: fechaVence(expiraEn, true) }]
-      : []),
   ];
   return {
+    subject: asuntoExpediente(tipo, p.polizas),
+    eyebrow: 'Control documental',
     ...branded,
     fields,
-    ...(enlace
-      ? { ctaLabel: 'Subir mis documentos', ctaUrl: enlace }
-      : { ctaLabel: undefined, ctaUrl: undefined }),
+    ...(enlace ? { ctaLabel: 'Completar mi expediente', ctaUrl: enlace } : {}),
     expediente: {
       tipo,
       nombre: p.nombre,
       polizas: p.polizas,
       documentos: p.documentos,
       enlace,
-      expiraEn,
     },
   };
+}
+
+function cuerpoSolicitud(
+  tipo: 'solicitud' | 'recordatorio',
+  p: DatosCorreoAsegurado,
+): BrandedContent {
+  const pend = pendientesDeLista(p.documentos);
+  const varias = p.polizas.length > 1;
+  return armar(tipo, p, {
+    title: `Complete la documentación de ${varias ? 'sus pólizas' : 'su póliza'}`,
+    intro:
+      `Estimado(a) ${p.nombre}: le confirmamos que ${varias ? 'sus pólizas han sido emitidas' : 'su póliza ha sido emitida'} ` +
+      'exitosamente. ' +
+      (pend.length
+        ? `Aún se encuentra pendiente completar la siguiente documentación: ${pend
+            .map((d) => lineaDoc(d, varias))
+            .join('; ')}.`
+        : 'Estamos validando su documentación.'),
+    extraNote: NOTA_ENTREGADOS,
+  });
 }
 
 export function correoSolicitudInicial(
   p: DatosCorreoAsegurado,
 ): BrandedContent {
-  const pend = pendientesDeLista(p.documentos);
-  return armar('solicitud', p, {
-    subject: 'La Mundial | Completa la documentación de tu póliza',
-    eyebrow: 'Documentos de tu póliza',
-    title: pend.length
-      ? `Completa tu expediente: falta${pend.length === 1 ? '' : 'n'} ${cuantos(pend.length)}`
-      : 'Completa la documentación de tu póliza',
-    intro:
-      `Hola ${p.nombre}. Tu póliza ya está emitida. ` +
-      (pend.length
-        ? `Para completar tu expediente necesitamos: ${enLista(pend.map((d) => d.nombre))}.`
-        : 'Estamos validando tus documentos.'),
-    extraNote: p.enlace ? NOTA_ASESOR_CON_ENLACE : NOTA_ASESOR_SIN_ENLACE,
-  });
+  return cuerpoSolicitud('solicitud', p);
 }
 
 export function correoRecordatorio(p: DatosCorreoAsegurado): BrandedContent {
-  const pend = pendientesDeLista(p.documentos);
-  return armar('recordatorio', p, {
-    subject: 'La Mundial | Aún necesitamos un documento de tu expediente',
-    eyebrow: 'Recordatorio',
-    title: pend.length
-      ? `Aún falta${pend.length === 1 ? '' : 'n'} ${cuantos(pend.length)} de tu expediente`
-      : 'Aún necesitamos un documento de tu expediente',
-    intro:
-      `Hola ${p.nombre}. ` +
-      (pend.length
-        ? `Todavía necesitamos: ${enLista(pend.map((d) => d.nombre))}.`
-        : 'Estamos validando tus documentos.'),
-    extraNote: p.enlace ? NOTA_ASESOR_CON_ENLACE : NOTA_ASESOR_SIN_ENLACE,
-  });
+  return cuerpoSolicitud('recordatorio', p);
 }
 
 export function correoObservado(
   p: DatosCorreoAsegurado & { documento: string; motivo: string },
 ): BrandedContent {
+  const motivo = p.motivo.replace(/[.\s]+$/, '');
   return armar('observado', p, {
-    subject: 'La Mundial | Necesitamos corregir un documento',
-    eyebrow: 'Revisión de documentos',
-    title: 'Necesitamos que envíes un documento de nuevo',
+    title: 'Necesitamos corregir un documento',
     intro:
-      `Hola ${p.nombre}. Envía de nuevo: ${p.documento}. Motivo: ${p.motivo}. ` +
-      'Tu póliza sigue emitida.',
+      `Estimado(a) ${p.nombre}: revisamos la documentación recibida y necesitamos que cargue ` +
+      `nuevamente el siguiente documento: ${p.documento}${motivo ? ` (${motivo})` : ''}.`,
+    extraNote: NO_AFECTA,
   });
 }
 
@@ -379,21 +378,19 @@ export function correoRecibido(
   p: DatosCorreoAsegurado & { documento: string },
 ): BrandedContent {
   return armar('recibido', p, {
-    subject: 'La Mundial | Documento recibido',
-    eyebrow: 'Documento recibido',
-    title: 'Recibimos tu documento',
+    title: 'Documento recibido',
     intro:
-      `Hola ${p.nombre}. Recibimos ${p.documento}. Lo estamos revisando y te avisaremos ` +
-      'si hace falta corregir algo.',
+      `Estimado(a) ${p.nombre}: le confirmamos que recibimos el documento ${p.documento}. ` +
+      'Lo estamos verificando y le informaremos si hace falta alguna corrección.',
   });
 }
 
 export function correoCompleto(p: DatosCorreoAsegurado): BrandedContent {
   return armar('completo', p, {
-    subject: 'La Mundial | Tu expediente está completo',
-    eyebrow: 'Expediente completo',
-    title: 'Tu expediente está completo',
-    intro: `Hola ${p.nombre}. Validamos toda la documentación de tu póliza. No necesitas hacer nada más.`,
+    title: 'Su expediente está completo',
+    intro:
+      `Estimado(a) ${p.nombre}: le confirmamos que hemos completado y validado la documentación ` +
+      `de ${p.polizas.length > 1 ? 'sus pólizas' : 'su póliza'}. No necesita realizar ninguna otra gestión para este expediente.`,
   });
 }
 
