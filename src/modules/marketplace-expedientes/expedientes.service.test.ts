@@ -372,7 +372,8 @@ describe('lectura', () => {
     expect(orden.slice(1).sort()).toEqual(['P-1', 'P-2']);
     // Filtro de área con el código del SSO.
     expect((await svc.listar({ area: 'C' })).total).toBe(3);
-    expect((await svc.listar({ area: 'G' })).total).toBe(0);
+    // G (gestor) es el mismo filtro que C: los gestores trabajan para los canales.
+    expect((await svc.listar({ area: 'G' })).total).toBe(3);
     const det = await svc.detalle(item.id);
     expect(det.validacion).toBe('automatica');
     expect(det.eventos.length).toBeGreaterThan(0);

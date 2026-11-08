@@ -10,6 +10,7 @@ import type {
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import prisma from '../../config/prisma';
+import { catalogoCanales } from './expedientes.canales';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/app-error';
 import {
@@ -19,8 +20,14 @@ import {
   aseguradoKey,
   areaDesdeVendedor,
   areasEnAlcance,
+  areaVisible,
+  canalDeExpediente,
+  grupoArea,
+  productorDeExpediente,
+  SIN_IDENTIFICAR,
   calcularEstadoDocumental,
   emailValido,
+  ESTADO_DESCARTADA,
   esPendiente,
   esTipoActor,
   ExpedientesConfig,
@@ -50,6 +57,7 @@ import {
   formatoTokenValido,
   generarToken,
   hashToken,
+  localizarEnOcr,
   OcrAnalisisError,
   OcrDocumentoResultado,
   OcrLectura,
@@ -154,6 +162,90 @@ function rec(v: unknown): Record<string, unknown> {
     : {};
 }
 
+/** Claves de un JSON que pueden traer la cédula / RIF del titular o del tomador. */
+const RE_CLAVE_CEDULA = /(cedula|documento|identificacion|^rif|rif$|^ci$)/i;
+
+/**
+ * Cédulas candidatas (solo dígitos, 5-12) para buscar el expediente en el OCR: valores sueltos
+ * y claves tipo cedula / documento / identificacion / rif del JSON (hasta 3 niveles). Un RIF
+ * natural (V-12345678-9) aporta también la cédula sin el dígito verificador.
+ */
+export function cedulasCandidatas(
+  valores: unknown[],
+  ...jsons: unknown[]
+): string[] {
+  const out: string[] = [];
+  const agregar = (v: unknown) => {
+    if (typeof v !== 'string' && typeof v !== 'number') return;
+    const s = String(v).trim();
+    const d = s.replace(/\D/g, '');
+    if (d.length < 5 || d.length > 12) return;
+    if (!out.includes(d)) out.push(d);
+    const rif =
+      d.length >= 9
+        ? /^[VEJPG]-?(\d{8,9})-?\d$/i.exec(s.replace(/[.\s]/g, ''))
+        : null;
+    if (rif && !out.includes(rif[1])) out.push(rif[1]);
+  };
+  for (const v of valores) agregar(v);
+  const recorrer = (o: unknown, nivel: number) => {
+    if (nivel > 3 || !o || typeof o !== 'object') return;
+    for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+      if (k === 'expediente' || k === 'documents' || k === 'documentos')
+        continue;
+      if (v && typeof v === 'object') recorrer(v, nivel + 1);
+      else if (RE_CLAVE_CEDULA.test(k)) agregar(v);
+    }
+  };
+  for (const j of jsons) recorrer(j, 0);
+  return out.slice(0, 10);
+}
+
+/** Documentos del OCR → requisitos: la cédula puede venir como cédula del titular o pasaporte. */
+export function documentosDesdeOcr(
+  docs: Record<string, string>,
+): Record<string, { recibido: true; ref: string }> {
+  const out: Record<string, { recibido: true; ref: string }> = {};
+  for (const [tipo, ref] of Object.entries(docs))
+    out[tipo] = { recibido: true, ref };
+  const cedula = docs.cedula ?? docs.cedula_titular ?? docs.pasaporte;
+  if (cedula && !out.cedula) out.cedula = { recibido: true, ref: cedula };
+  return out;
+}
+
+/** Quién vendió, desde la sesión guardada en la mesa técnica (metadataCanal del SSO). */
+function vendedorDeSnapshot(snap: Record<string, unknown>) {
+  const fuentes = [
+    rec(snap.metadataCanal),
+    rec(rec(snap.data).metadataCanal),
+    rec(snap.nexusMetadata),
+  ];
+  const pick = (...keys: string[]) => {
+    for (const k of keys)
+      for (const f of fuentes) {
+        const v = str(f[k]);
+        if (v) return v;
+      }
+    return undefined;
+  };
+  const out: Record<string, string> = {};
+  const campos: [string, string[], number][] = [
+    ['centidad', ['centidad'], 1],
+    ['citem', ['citem'], 32],
+    ['cgestor', ['cgestor', 'cgestor_in'], 50],
+    ['ccanalalt', ['ccanalalt', 'ccanalalt_in'], 32],
+    ['cusuario', ['cusuario'], 32],
+    ['xlogin', ['xlogin', 'login'], 100],
+    ['cproductor', ['cproductor'], 32],
+  ];
+  for (const [campo, keys, max] of campos) {
+    const v = pick(...keys);
+    if (v) out[campo] = campo === 'centidad' ? v.toUpperCase() : v;
+    if (out[campo]) out[campo] = out[campo].slice(0, max);
+  }
+  return out;
+}
+
 export function primerNombre(e: Pick<Exp, 'aseguradoNombre'>): string {
   const n = String(e.aseguradoNombre ?? '').trim();
   return n ? n.split(/\s+/)[0] : 'cliente';
@@ -203,17 +295,21 @@ export function polizaOResumen(exps: Pick<Exp, 'cnpoliza'>[]): string {
   return `de tus ${exps.length} pólizas`;
 }
 
+/** Área visible: el gestor se muestra como canal (C). */
 const AREA_CODIGO: Record<string, string> = {
   canal: 'C',
-  gestor: 'G',
+  gestor: 'C',
   productor: 'P',
 };
 
-/** Filtro de área: acepta C/G/P (centidad del SSO) o el nombre. */
+/**
+ * Filtro de área: acepta C/P (centidad del SSO) o el nombre. Los gestores trabajan para los
+ * canales: G / gestor es el mismo filtro que canal (incluye las pólizas con area = gestor).
+ */
 export function areaDesdeFiltro(v: string): string {
   const s = v.trim().toUpperCase();
   if (s === 'C' || s.startsWith('CANAL')) return 'canal';
-  if (s === 'G' || s.startsWith('GESTOR')) return 'gestor';
+  if (s === 'G' || s.startsWith('GESTOR')) return 'canal';
   if (s === 'P' || s.startsWith('PRODUCTOR')) return 'productor';
   if (s.startsWith('DESCONOCID')) return 'desconocida';
   return '__ninguna__';
@@ -433,7 +529,7 @@ export class ExpedientesService {
   async registrarDesdeEmision(
     emision: EmisionFuente,
     extra: RegistroEmisionExtra = {},
-    origen: 'emision' | 'conciliacion' = 'emision',
+    origen: 'emision' | 'conciliacion' | 'conciliacion_ocr' = 'emision',
   ): Promise<{ id: number; creado: boolean } | null> {
     if (!expedientesEnabled()) return null;
     const cnpoliza = String(emision.polizaNumero ?? '').trim();
@@ -513,7 +609,12 @@ export class ExpedientesService {
 
     await this.asegurarRequisitos(exp, config);
     if (payload.documentos) {
-      await this.aplicarDocumentosEmision(exp, payload.documentos, config);
+      await this.aplicarDocumentosEmision(
+        exp,
+        payload.documentos,
+        config,
+        origen === 'conciliacion_ocr' ? 'conciliacion_ocr' : 'emision',
+      );
     }
     if (!exp.infoDocumental) await this.cruzarMesaTecnica(exp, config);
     await this.recalcularEstado(exp.id, config);
@@ -547,7 +648,12 @@ export class ExpedientesService {
     if (!documents) return false;
     await prisma.mktExpediente.update({
       where: { id: exp.id },
-      data: { infoDocumental: true },
+      data: {
+        infoDocumental: true,
+        ...(exp.estadoDocumental === ESTADO_DESCARTADA
+          ? { estadoDocumental: 'incompleto' }
+          : {}),
+      },
     });
     await prisma.mktExpedienteRequisito.updateMany({
       where: { expedienteId: exp.id, estado: 'sin_informacion' },
@@ -753,7 +859,12 @@ export class ExpedientesService {
       out.producto = datos.producto;
     if (p.estadoPago && exp.estadoPago !== datos.estadoPago)
       out.estadoPago = datos.estadoPago;
-    if (!exp.infoDocumental && datos.infoDocumental) out.infoDocumental = true;
+    if (!exp.infoDocumental && datos.infoDocumental) {
+      out.infoDocumental = true;
+      // Llegaron datos del expediente: una descartada vuelve al monitor.
+      if (exp.estadoDocumental === ESTADO_DESCARTADA)
+        out.estadoDocumental = 'incompleto';
+    }
     return out as Prisma.MktExpedienteUpdateInput;
   }
 
@@ -784,6 +895,7 @@ export class ExpedientesService {
     exp: Exp,
     documentos: NonNullable<ExpedientePayload['documentos']>,
     config: ExpedientesConfig,
+    origenDoc: 'emision' | 'conciliacion_ocr' = 'emision',
   ) {
     const aplicables = new Set(requisitosAplicables(exp.producto, config));
     for (const [tipo, d] of Object.entries(documentos)) {
@@ -797,14 +909,14 @@ export class ExpedientesService {
         where: { id: r.id },
         data: {
           estado: 'recibido',
-          origen: 'emision',
+          origen: origenDoc,
           ref: d.ref ?? d.url ?? null,
           recibidoEn: new Date(),
         },
       });
-      await this.evento(exp.id, 'documento_recibido', 'emision', {
+      await this.evento(exp.id, 'documento_recibido', origenDoc, {
         tipo,
-        origen: 'emision',
+        origen: origenDoc,
       });
     }
   }
@@ -819,6 +931,10 @@ export class ExpedientesService {
       where: { id: expedienteId },
     });
     if (!exp) throw new AppError('Expediente no encontrado.', 404);
+    // Descartada (no pasó por el OCR): solo sale de ahí si llegan datos del expediente.
+    if (exp.estadoDocumental === ESTADO_DESCARTADA) {
+      return { estado: ESTADO_DESCARTADA, completadoAhora: false };
+    }
     await this.asegurarRequisitos(exp, cfg);
     const reqs = await prisma.mktExpedienteRequisito.findMany({
       where: { expedienteId },
@@ -844,11 +960,143 @@ export class ExpedientesService {
     return { estado, completadoAhora: estado === 'completo' };
   }
 
-  /** Conciliación: expediente para toda fila de `emision` que no lo tenga. */
+  /**
+   * Póliza registrada sin datos del expediente: busca en el OCR lo que se guardó al emitir.
+   * - Con rastro (carpeta de la póliza o {cédula}/pendiente): expediente con esos documentos como
+   *   recibidos, infoDocumental = true y origen `conciliacion_ocr` (la IA los valida después).
+   * - Sin rastro: no pasó por el OCR → `descartada` (fila conservada, fuera del monitor).
+   * - OCR sin respuesta: 'sin_respuesta', no se descarta nada (se reintenta en la próxima corrida).
+   * `existente`: expediente `sin_informacion` ya creado que se reprocesa.
+   */
+  private async conciliarConOcr(
+    e: EmisionFuente,
+    existente: Exp | null,
+  ): Promise<'expediente' | 'descartada' | 'sin_respuesta'> {
+    const cnpoliza = String(e.polizaNumero ?? '').trim();
+    const jd = rec(e.jsonData);
+    let snap: Record<string, unknown> = {};
+    let tomadorRif: string | null = null;
+    try {
+      const sub = await prisma.funeralSubmission.findFirst({
+        where: { empresaId: e.empresaId, cnpoliza },
+        orderBy: { createdAt: 'desc' },
+      });
+      snap = rec(sub?.snapshotJson);
+      tomadorRif = sub?.tomadorRif ?? null;
+    } catch {
+      /* sin mesa técnica */
+    }
+    const cedulas = cedulasCandidatas(
+      [existente?.aseguradoDocumento, jd.tomadorIdentificacion, tomadorRif],
+      jd,
+      rec(snap.tomador),
+      rec(rec(snap.data).tomador),
+    );
+    let loc;
+    try {
+      loc = await localizarEnOcr({
+        cnpoliza,
+        cnrecibo: existente?.cnrecibo ?? str(jd.cnrecibo) ?? null,
+        cedulas,
+        empresaId: e.empresaId,
+      });
+    } catch (err) {
+      await this.eventoTecnico(
+        {
+          etapa: 'conciliacion_ocr',
+          emisionId: e.id ?? null,
+          error: err instanceof Error ? err.message.slice(0, 300) : 'error',
+        },
+        existente?.id ?? null,
+      );
+      return 'sin_respuesta';
+    }
+
+    if (!loc.ubicacion) {
+      await this.descartar(e, existente);
+      return 'descartada';
+    }
+    const payload = {
+      ...vendedorDeSnapshot(snap),
+      documentos: documentosDesdeOcr(loc.documentos),
+      ...(loc.ubicacion === 'poliza' && loc.carpeta
+        ? { carpetaExpediente: loc.carpeta }
+        : {}),
+    };
+    const r = await this.registrarDesdeEmision(
+      e,
+      { expediente: payload },
+      'conciliacion_ocr',
+    );
+    if (r && existente) {
+      await prisma.mktExpediente.update({
+        where: { id: r.id },
+        data: { origen: 'conciliacion_ocr' },
+      });
+    }
+    if (r) {
+      await this.evento(r.id, 'expediente_conciliado_ocr', 'conciliacion', {
+        ubicacion: loc.ubicacion,
+        documentos: Object.keys(loc.documentos),
+      });
+    }
+    return 'expediente';
+  }
+
+  /** Sin rastro en el OCR: estado `descartada`. Nunca borra filas. */
+  private async descartar(e: EmisionFuente, existente: Exp | null) {
+    if (existente) {
+      if (existente.estadoDocumental === ESTADO_DESCARTADA) return;
+      await prisma.mktExpediente.update({
+        where: { id: existente.id },
+        data: { estadoDocumental: ESTADO_DESCARTADA, completadoEn: null },
+      });
+      await this.evento(existente.id, 'expediente_descartado', 'conciliacion', {
+        anterior: existente.estadoDocumental,
+        motivo: 'sin_rastro_ocr',
+      });
+      return;
+    }
+    if (!expedientesEnabled()) return;
+    const cnpoliza = String(e.polizaNumero ?? '').trim();
+    const jd = rec(e.jsonData);
+    const datos = await this.construirDatos(e, {}, jd, {});
+    try {
+      const exp = await prisma.mktExpediente.create({
+        data: {
+          ...datos,
+          infoDocumental: false,
+          estadoDocumental: ESTADO_DESCARTADA,
+          empresaId: e.empresaId,
+          cnpoliza,
+          emisionId: e.id ?? null,
+          emitidaEn: e.createdAt ?? new Date(),
+          origen: 'conciliacion',
+        },
+      });
+      await this.evento(exp.id, 'expediente_descartado', 'conciliacion', {
+        motivo: 'sin_rastro_ocr',
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'P2002') throw err;
+    }
+  }
+
+  /**
+   * Conciliación: expediente para toda fila de `emision` que no lo tenga. Las que no traen el
+   * bloque `expediente` se buscan en el OCR (ver conciliarConOcr); las `sin_informacion` que ya
+   * existían se reprocesan igual. Si el OCR no responde, no se descarta nada en esta corrida.
+   */
   async conciliar(): Promise<{
     revisadas: number;
     creadas: number;
     errores: number;
+    ocr: {
+      conExpediente: number;
+      descartadas: number;
+      reprocesadas: number;
+      sinRespuesta: number;
+    };
     noCubiertos: { producto: string; motivo: string }[];
   }> {
     const existentes = await prisma.mktExpediente.findMany({
@@ -860,6 +1108,27 @@ export class ExpedientesService {
     let revisadas = 0;
     let creadas = 0;
     let errores = 0;
+    const ocr = {
+      conExpediente: 0,
+      descartadas: 0,
+      reprocesadas: 0,
+      sinRespuesta: 0,
+    };
+    // Tras la primera falla técnica del OCR no se le vuelve a llamar en esta corrida.
+    let ocrCaido = false;
+    const conOcr = async (e: EmisionFuente, existente: Exp | null) => {
+      if (ocrCaido) {
+        ocr.sinRespuesta++;
+        return 'sin_respuesta' as const;
+      }
+      const r = await this.conciliarConOcr(e, existente);
+      if (r === 'sin_respuesta') {
+        ocrCaido = true;
+        ocr.sinRespuesta++;
+      } else if (r === 'descartada') ocr.descartadas++;
+      else ocr.conExpediente++;
+      return r;
+    };
     let cursor = 0;
     for (;;) {
       const lote = await prisma.emision.findMany({
@@ -881,8 +1150,16 @@ export class ExpedientesService {
         if (claves.has(`${e.empresaId}|${String(e.polizaNumero).trim()}`))
           continue;
         try {
-          const r = await this.registrarDesdeEmision(e, {}, 'conciliacion');
-          if (r?.creado) creadas++;
+          const conBloque = rec(e.jsonData).expediente != null;
+          const viaOcr = conBloque ? null : await conOcr(e, null);
+          if (viaOcr === 'expediente' || viaOcr === 'descartada') {
+            if (viaOcr === 'expediente') creadas++;
+          } else {
+            // Con bloque `expediente`, o el OCR no respondió: registro de siempre
+            // (sin datos → sin_informacion, se reprocesa en la próxima corrida).
+            const r = await this.registrarDesdeEmision(e, {}, 'conciliacion');
+            if (r?.creado) creadas++;
+          }
           claves.add(`${e.empresaId}|${String(e.polizaNumero).trim()}`);
         } catch (err) {
           errores++;
@@ -895,10 +1172,49 @@ export class ExpedientesService {
       }
       if (lote.length < 500) break;
     }
+
+    // Expedientes `sin_informacion` ya creados (antes del monitor o con el OCR caído).
+    const sinInfo = ocrCaido
+      ? []
+      : await prisma.mktExpediente.findMany({
+          where: {
+            infoDocumental: false,
+            estadoDocumental: 'sin_informacion',
+          },
+          orderBy: { id: 'asc' },
+        });
+    for (const x of sinInfo) {
+      if (ocrCaido) break;
+      try {
+        const em = x.emisionId
+          ? await prisma.emision.findUnique({ where: { id: x.emisionId } })
+          : null;
+        const fuente: EmisionFuente = {
+          id: em?.id ?? (null as unknown as number),
+          empresaId: x.empresaId,
+          polizaNumero: x.cnpoliza,
+          jsonData: em?.jsonData ?? {},
+          createdAt: x.emitidaEn,
+        };
+        const r = await conOcr(fuente, x);
+        if (r !== 'sin_respuesta') ocr.reprocesadas++;
+      } catch (err) {
+        errores++;
+        await this.eventoTecnico(
+          {
+            etapa: 'conciliacion_ocr',
+            error: err instanceof Error ? err.message.slice(0, 300) : 'error',
+          },
+          x.id,
+        );
+      }
+    }
+
     return {
       revisadas,
       creadas,
       errores,
+      ocr,
       // Patrimonial no registra en POST /api/emisiones: no llega al feed.
       noCubiertos: [
         {
@@ -929,8 +1245,12 @@ export class ExpedientesService {
   private whereLista(q: Partial<ListQuery>, config: ExpedientesConfig) {
     const areas = areasEnAlcance(config.alcance) as string[];
     const area = q.area ? areaDesdeFiltro(q.area) : null;
+    // Canal incluye las pólizas de gestores (trabajan para los canales).
+    const delFiltro = area === 'canal' ? ['canal', 'gestor'] : [area];
     const where: Prisma.MktExpedienteWhereInput = {
-      area: { in: area ? areas.filter((a) => a === area) : areas },
+      area: { in: area ? areas.filter((a) => delFiltro.includes(a)) : areas },
+      // Descartadas (no pasaron por el OCR): fuera de la bandeja, indicadores y KPI.
+      estadoDocumental: { not: ESTADO_DESCARTADA },
     };
     if (q.estadoDoc) where.estadoDocumental = q.estadoDoc;
     if (q.estadoPago) where.estadoPago = q.estadoPago;
@@ -1008,7 +1328,8 @@ export class ExpedientesService {
     const vendedor =
       e.xlogin ||
       (e.cusuario ? `Usuario ${e.cusuario}` : null) ||
-      (e.cgestor ? `Gestor ${e.cgestor}` : null) ||
+      // El gestor no se muestra como área ni como vendedor: se muestra el canal.
+      (e.ccanalalt ? `Canal ${e.ccanalalt}` : null) ||
       (e.citem ? `${e.centidad ?? ''}${e.citem}` : null);
     const noEnviarPor = exclusionesQueAplican(e, exclusiones);
     return {
@@ -1017,7 +1338,7 @@ export class ExpedientesService {
       cnpoliza: e.cnpoliza,
       cnrecibo: e.cnrecibo,
       producto: e.producto,
-      area: e.area,
+      area: areaVisible(e.area),
       areaCodigo: AREA_CODIGO[e.area] ?? null,
       vendedor,
       vendedorDetalle: {
@@ -1119,6 +1440,50 @@ export class ExpedientesService {
     );
   }
 
+  /**
+   * Ids de un canal concreto del ranking (incluye gestores y puntos de comercialización de ese
+   * canal, resueltos igual que en los KPI) o de un productor. SIN_IDENTIFICAR = sin canal resoluble.
+   */
+  private async idsDeActor(
+    where: Prisma.MktExpedienteWhereInput,
+    canal?: string,
+    productor?: string,
+  ): Promise<number[]> {
+    const rows = await prisma.mktExpediente.findMany({
+      where,
+      select: {
+        id: true,
+        area: true,
+        centidad: true,
+        citem: true,
+        cgestor: true,
+        ccanalalt: true,
+        cproductor: true,
+      },
+    });
+    const cod = normalizarCodigoActor(canal ?? productor);
+    if (!cod) return [];
+    if (productor) {
+      return rows
+        .filter(
+          (r) =>
+            grupoArea(r.area) === 'productor' &&
+            productorDeExpediente(r) === cod,
+        )
+        .map((r) => r.id);
+    }
+    const canales = rows.filter((r) => grupoArea(r.area) === 'canal');
+    const necesitaCatalogo = canales.some(
+      (r) =>
+        canalDeExpediente(r) === SIN_IDENTIFICAR &&
+        !!(r.cgestor || r.centidad === 'G'),
+    );
+    const catalogo = necesitaCatalogo ? await catalogoCanales() : null;
+    return canales
+      .filter((r) => canalDeExpediente(r, catalogo?.gestorCanal) === cod)
+      .map((r) => r.id);
+  }
+
   async listar(q: ListQuery) {
     const config = await this.getConfig();
     const where = this.whereLista(q, config);
@@ -1127,6 +1492,10 @@ export class ExpedientesService {
     if (q.datosModificados) {
       const dm = await this.idsDatosModificados();
       ids = ids ? ids.filter((i) => dm.includes(i)) : dm;
+    }
+    if (q.canal || q.productor) {
+      const delActor = await this.idsDeActor(where, q.canal, q.productor);
+      ids = ids ? ids.filter((i) => delActor.includes(i)) : delActor;
     }
     if (ids) where.id = { in: ids };
     const page = q.page ?? 1;

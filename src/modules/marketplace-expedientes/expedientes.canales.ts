@@ -1,0 +1,72 @@
+/**
+ * Catálogo de canales alternos y gestores (nest-api GET /api/v1/canal/actores, apikey de Nexus).
+ * Sirve para llevar las pólizas de un gestor sin ccanalalt al canal al que pertenece y para
+ * mostrar el nombre del canal. Caché de 10 minutos; nunca lanza (sin catálogo → null).
+ */
+import logger from '../../utils/logger';
+import { normalizarCodigoActor } from './expedientes.domain';
+import { nestMailConfig } from './expedientes.env';
+
+export interface CatalogoCanales {
+  /** ccanalalt → nombre del canal. */
+  nombres: Map<string, string>;
+  /** cgestor → ccanalalt del canal al que pertenece. */
+  gestorCanal: Map<string, string>;
+}
+
+const TTL_MS = 10 * 60 * 1000;
+let cache: { en: number; valor: CatalogoCanales | null } | null = null;
+
+export async function catalogoCanales(
+  ahora: number = Date.now(),
+): Promise<CatalogoCanales | null> {
+  if (cache && ahora - cache.en < TTL_MS) return cache.valor;
+  const { url, apiKey } = nestMailConfig();
+  if (!apiKey) return null;
+  let valor: CatalogoCanales | null = null;
+  try {
+    const res = await fetch(`${url}/api/v1/canal/actores`, {
+      headers: { Accept: 'application/json', apikey: apiKey },
+      signal: AbortSignal.timeout(5_000),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      data?: { canales?: unknown[]; gestores?: unknown[] };
+    };
+    if (res.ok && body.data) {
+      valor = { nombres: new Map(), gestorCanal: new Map() };
+      for (const raw of body.data.canales ?? []) {
+        const c = (raw ?? {}) as Record<string, unknown>;
+        const cod = normalizarCodigoActor(
+          c.ccanalalt == null ? null : String(c.ccanalalt),
+        );
+        const nombre =
+          typeof c.xcanalalt === 'string' ? c.xcanalalt.trim() : '';
+        if (cod && nombre) valor.nombres.set(cod, nombre.slice(0, 120));
+      }
+      for (const raw of body.data.gestores ?? []) {
+        const g = (raw ?? {}) as Record<string, unknown>;
+        const gestor = normalizarCodigoActor(
+          g.cgestor == null ? null : String(g.cgestor),
+        );
+        const canal = normalizarCodigoActor(
+          g.ccanalalt == null ? null : String(g.ccanalalt),
+        );
+        if (gestor && canal) valor.gestorCanal.set(gestor, canal);
+      }
+    } else {
+      logger.warn(`[expedientes] catálogo de canales: HTTP ${res.status}`);
+    }
+  } catch (err) {
+    logger.warn(
+      `[expedientes] catálogo de canales no disponible: ${err instanceof Error ? err.name : 'error'}`,
+    );
+  }
+  // Un fallo también se guarda (1 minuto) para no reintentar en cada consulta.
+  cache = { en: valor ? ahora : ahora - TTL_MS + 60_000, valor };
+  return valor;
+}
+
+/** Solo pruebas. */
+export function _resetCatalogoCanales(valor?: CatalogoCanales | null): void {
+  cache = valor === undefined ? null : { en: Date.now(), valor };
+}

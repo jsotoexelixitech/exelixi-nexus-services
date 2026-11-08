@@ -13,8 +13,19 @@ export const ESTADOS_REQUISITO = [
 ] as const;
 export type EstadoRequisito = (typeof ESTADOS_REQUISITO)[number];
 
-/** sin_informacion: no hay datos para saber si falta algo; no es incompleto ni recibe recordatorios. */
-export type EstadoDocumental = 'completo' | 'incompleto' | 'sin_informacion';
+/**
+ * sin_informacion: no hay datos para saber si falta algo; no es incompleto ni recibe recordatorios.
+ * descartada: póliza registrada sin datos del expediente que no pasó por el OCR (conciliación):
+ * no se muestra ni cuenta en la bandeja, indicadores, KPI, recordatorios ni resumen. La fila se conserva.
+ */
+export type EstadoDocumental =
+  | 'completo'
+  | 'incompleto'
+  | 'sin_informacion'
+  | 'descartada';
+
+/** Estado documental de las pólizas descartadas por la conciliación con el OCR. */
+export const ESTADO_DESCARTADA = 'descartada';
 export type EstadoPago = 'pagada' | 'pendiente';
 export type ProductoExpediente = 'rcv' | 'personas' | 'patrimonial';
 export type AreaExpediente = 'canal' | 'gestor' | 'productor' | 'desconocida';
@@ -73,12 +84,25 @@ export function requisitoLabel(tipo: string): string {
   return REQUISITO_LABELS[tipo] ?? tipo;
 }
 
+/** Los gestores trabajan para los canales: su alcance es el de canales. */
+function gestoresSiguenCanales(a: AlcanceConfig): AlcanceConfig {
+  return { ...a, gestores: a.canales };
+}
+
+/** Área visible: gestor cuenta como canal (el dato guardado no cambia). */
+export function areaVisible(area: string): string {
+  return area === 'gestor' ? 'canal' : area;
+}
+
 export function mergeConfig(raw: unknown): ExpedientesConfig {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<
     ExpedientesConfig & { alcance: Partial<AlcanceConfig> }
   >;
   return {
-    alcance: { ...DEFAULT_CONFIG.alcance, ...(r.alcance ?? {}) },
+    alcance: gestoresSiguenCanales({
+      ...DEFAULT_CONFIG.alcance,
+      ...(r.alcance ?? {}),
+    }),
     validacion:
       r.validacion === 'automatica' || r.validacion === 'manual'
         ? r.validacion
@@ -115,7 +139,10 @@ export function normalizarProducto(
   return 'personas';
 }
 
-/** C = canal alterno, G = gestor, P = productor (P con cgestor = gestor). */
+/**
+ * C = canal alterno, G = gestor, P = productor (P con cgestor = gestor). Desde el SSO y el feed
+ * llegan C, G y P; cualquier otra entidad informada se toma como de canal. Sin datos: desconocida.
+ */
 export function areaDesdeVendedor(v: {
   centidad?: string | null;
   cgestor?: string | null;
@@ -129,13 +156,19 @@ export function areaDesdeVendedor(v: {
   if (c === 'P') return v.cgestor ? 'gestor' : 'productor';
   if (v.cgestor) return 'gestor';
   if (v.ccanalalt) return 'canal';
+  // Puntos de comercialización, subcanales u otra entidad de canal: cuentan en Canales.
+  if (c) return 'canal';
   return 'desconocida';
 }
 
+/**
+ * Solo hay dos áreas visibles: Canales y Productores. Los gestores trabajan para los canales:
+ * sus pólizas (area = gestor, dato guardado sin cambios) cuentan como canal y siguen el alcance
+ * de canales. `alcance.gestores` se ignora.
+ */
 export function areasEnAlcance(alcance: AlcanceConfig): AreaExpediente[] {
   const out: AreaExpediente[] = [];
-  if (alcance.canales) out.push('canal');
-  if (alcance.gestores) out.push('gestor');
+  if (alcance.canales) out.push('canal', 'gestor');
   if (alcance.productores) out.push('productor');
   if (alcance.desconocida) out.push('desconocida');
   return out;
@@ -194,6 +227,39 @@ export function valorActor(e: VendedorActores, tipo: TipoActor): string | null {
   if (tipo === 'gestor')
     return normalizarCodigoActor(e.cgestor ?? porEntidad('G'));
   return normalizarCodigoActor(e.cproductor ?? porEntidad('P'));
+}
+
+// ─── Áreas visibles: Canales y Productores ──────────────────────────────────
+
+/** Código del grupo «Canal sin identificar» / «Productor sin identificar». */
+export const SIN_IDENTIFICAR = 'SIN_IDENTIFICAR';
+
+/** Grupo visible del área guardada: gestor → canal. */
+export function grupoArea(area: string): 'canal' | 'productor' | 'desconocida' {
+  if (area === 'canal' || area === 'gestor') return 'canal';
+  if (area === 'productor') return 'productor';
+  return 'desconocida';
+}
+
+/**
+ * Canal al que pertenece una póliza de área canal o gestor: ccanalalt (o citem si centidad = C);
+ * si es de un gestor sin ccanalalt, el canal del gestor en el catálogo de nest-api. Si no se
+ * puede resolver: SIN_IDENTIFICAR (nunca se descarta).
+ */
+export function canalDeExpediente(
+  e: VendedorActores,
+  gestorCanal?: Map<string, string> | null,
+): string {
+  const directo = valorActor(e, 'canal');
+  if (directo) return directo;
+  const gestor = valorActor(e, 'gestor');
+  const delCatalogo = gestor ? gestorCanal?.get(gestor) : undefined;
+  return normalizarCodigoActor(delCatalogo) ?? SIN_IDENTIFICAR;
+}
+
+/** Productor (intermediario) de una póliza de área productor, o SIN_IDENTIFICAR. */
+export function productorDeExpediente(e: VendedorActores): string {
+  return valorActor(e, 'intermediario') ?? SIN_IDENTIFICAR;
 }
 
 // ─── Estados ────────────────────────────────────────────────────────────────

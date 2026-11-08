@@ -270,8 +270,8 @@ const RE_ILEGIBLE = /leer|legib|nitid|borros/i;
 function areasLabel(config: ExpedientesConfig): string {
   const a = config.alcance;
   const partes = [
+    // Los gestores trabajan para los canales: no son un área aparte.
     a.canales ? 'Canales' : null,
-    a.gestores ? 'Gestores' : null,
     a.productores ? 'Productores' : null,
   ].filter(Boolean) as string[];
   if (!partes.length) return 'Marketplace';
@@ -287,7 +287,11 @@ export async function tareaNocturna(ahora: Date) {
   const inicio = caracasInicioDia(fecha);
   const fin = new Date(inicio.getTime() + 86_400_000);
   const todos = await prisma.mktExpediente.findMany({
-    where: { area: { in: areasEnAlcance(config.alcance) } },
+    where: {
+      area: { in: areasEnAlcance(config.alcance) },
+      // Descartadas (no pasaron por el OCR): no cuentan en el resumen.
+      estadoDocumental: { not: 'descartada' },
+    },
   });
   const hoy = todos.filter((e) => e.emitidaEn >= inicio && e.emitidaEn < fin);
   const reqs = await requisitosPorExpediente(hoy.map((e) => e.id));

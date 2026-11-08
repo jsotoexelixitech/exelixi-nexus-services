@@ -5,18 +5,33 @@
  */
 import type { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
-import { caracasInicioDia, caracasParts } from './expedientes.domain';
+import { CatalogoCanales, catalogoCanales } from './expedientes.canales';
+import {
+  canalDeExpediente,
+  caracasInicioDia,
+  caracasParts,
+  grupoArea,
+  productorDeExpediente,
+  SIN_IDENTIFICAR,
+  VendedorActores,
+} from './expedientes.domain';
 
 const DIA_MS = 86_400_000;
 /** Correos de la cadencia (la notificación «prueba» y los avisos de evento no cuentan). */
 export const TIPOS_RECORDATORIO = ['solicitud_inicial', 'recordatorio'];
-const TOP = 5;
+/** Filas máximas por ranking (canales o productores). */
+const MAX_RANKING = 50;
 const DIAS_TENDENCIA = 30;
 
-export interface TopItem {
+export interface RankingItem {
+  /** ccanalalt / cproductor, o SIN_IDENTIFICAR. */
   codigo: string;
-  incompletos: number;
+  nombre: string | null;
   total: number;
+  completos: number;
+  incompletos: number;
+  /** incompletos / total, 0..1. */
+  pctIncompletos: number | null;
 }
 
 export interface KpisExpedientes {
@@ -51,11 +66,9 @@ export interface KpisExpedientes {
     observado: number;
     validado: number;
   }[];
-  topIncompletos: {
-    canales: TopItem[];
-    gestores: TopItem[];
-    productores: TopItem[];
-  };
+  /** Por canal (gestores y puntos de comercialización van a su canal) y por productor. */
+  porCanal: RankingItem[];
+  porProductor: RankingItem[];
   /** Últimos 30 días (hora Caracas) que terminan en `hasta` o hoy. */
   tendencia: { fecha: string; emitidas: number; completadas: number }[];
 }
@@ -65,33 +78,53 @@ const ratio = (n: number, d: number) =>
 
 type GrupoCount = { _count: { _all: number } };
 
-async function topPor(
-  campo: 'ccanalalt' | 'cgestor' | 'cproductor',
-  where: Prisma.MktExpedienteWhereInput,
-): Promise<TopItem[]> {
-  const rows = (await prisma.mktExpediente.groupBy({
-    by: [campo, 'estadoDocumental'],
-    where: { AND: [where, { [campo]: { not: null } }] },
-    _count: { _all: true },
-  })) as unknown as (GrupoCount & Record<string, string | null>)[];
-  const m = new Map<string, TopItem>();
+/**
+ * Ranking por canal (o por productor): dónde quedan pólizas sin documentos. Las de gestores,
+ * puntos de comercialización y subcanales van a su canal (ccanalalt, o el del gestor en el
+ * catálogo); sin canal resoluble → SIN_IDENTIFICAR. Orden: % de incompletos y luego cantidad.
+ */
+export function rankingPorActor(
+  rows: (VendedorActores & { area: string; estadoDocumental: string })[],
+  grupo: 'canal' | 'productor',
+  catalogo?: CatalogoCanales | null,
+): RankingItem[] {
+  const m = new Map<string, RankingItem>();
   for (const r of rows) {
-    const codigo = String(r[campo] ?? '').trim();
-    if (!codigo) continue;
-    const it = m.get(codigo) ?? { codigo, incompletos: 0, total: 0 };
-    it.total += r._count._all;
-    if (r.estadoDocumental === 'incompleto') it.incompletos += r._count._all;
+    if (grupoArea(r.area) !== grupo) continue;
+    const codigo =
+      grupo === 'canal'
+        ? canalDeExpediente(r, catalogo?.gestorCanal)
+        : productorDeExpediente(r);
+    const it = m.get(codigo) ?? {
+      codigo,
+      nombre:
+        codigo === SIN_IDENTIFICAR
+          ? grupo === 'canal'
+            ? 'Canal sin identificar'
+            : 'Productor sin identificar'
+          : grupo === 'canal'
+            ? (catalogo?.nombres.get(codigo) ?? null)
+            : null,
+      total: 0,
+      completos: 0,
+      incompletos: 0,
+      pctIncompletos: null,
+    };
+    it.total++;
+    if (r.estadoDocumental === 'completo') it.completos++;
+    if (r.estadoDocumental === 'incompleto') it.incompletos++;
     m.set(codigo, it);
   }
   return [...m.values()]
-    .filter((x) => x.incompletos > 0)
+    .map((x) => ({ ...x, pctIncompletos: ratio(x.incompletos, x.total) }))
     .sort(
       (a, b) =>
+        (b.pctIncompletos ?? 0) - (a.pctIncompletos ?? 0) ||
         b.incompletos - a.incompletos ||
         b.total - a.total ||
         a.codigo.localeCompare(b.codigo),
     )
-    .slice(0, TOP);
+    .slice(0, MAX_RANKING);
 }
 
 export async function calcularKpis(args: {
@@ -110,7 +143,10 @@ export async function calcularKpis(args: {
   const finVentana = new Date(caracasInicioDia(finDia).getTime() + DIA_MS);
   const iniVentana = new Date(finVentana.getTime() - DIAS_TENDENCIA * DIA_MS);
   // Tendencia: solo el filtro de área (la ventana de 30 días es la de fechas).
-  const whereArea: Prisma.MktExpedienteWhereInput = { area: where.area };
+  const whereArea: Prisma.MktExpedienteWhereInput = {
+    area: where.area,
+    estadoDocumental: { not: 'descartada' },
+  };
   const conIds = ids.length > 0;
 
   const [
@@ -120,9 +156,7 @@ export async function calcularKpis(args: {
     agotados,
     notifs,
     reqs,
-    canales,
-    gestores,
-    productores,
+    vendedores,
     emitidas30,
     completadas30,
   ] = await Promise.all([
@@ -172,9 +206,18 @@ export async function calcularKpis(args: {
           _count: { _all: true },
         })
       : Promise.resolve([]),
-    topPor('ccanalalt', where),
-    topPor('cgestor', where),
-    topPor('cproductor', where),
+    prisma.mktExpediente.findMany({
+      where,
+      select: {
+        area: true,
+        estadoDocumental: true,
+        centidad: true,
+        citem: true,
+        cgestor: true,
+        ccanalalt: true,
+        cproductor: true,
+      },
+    }),
     prisma.mktExpediente.findMany({
       where: { ...whereArea, emitidaEn: { gte: iniVentana, lt: finVentana } },
       select: { emitidaEn: true },
@@ -312,7 +355,20 @@ export async function calcularKpis(args: {
     porDocumento: [...docs.values()].sort(
       (a, b) => b.faltante + b.observado - (a.faltante + a.observado),
     ),
-    topIncompletos: { canales, gestores, productores },
+    porCanal: rankingPorActor(
+      vendedores,
+      'canal',
+      // Catálogo de nest-api solo si hay pólizas de gestor sin canal (resolverlo al suyo).
+      vendedores.some(
+        (v) =>
+          grupoArea(v.area) === 'canal' &&
+          canalDeExpediente(v) === SIN_IDENTIFICAR &&
+          !!(v.cgestor || v.centidad === 'G'),
+      )
+        ? await catalogoCanales()
+        : null,
+    ),
+    porProductor: rankingPorActor(vendedores, 'productor'),
     tendencia: [...dias.entries()].map(([fecha, v]) => ({ fecha, ...v })),
   };
 }

@@ -209,6 +209,10 @@ export const listQuerySchema = z.object({
     .optional(),
   q: z.string().trim().max(100).optional(),
   vendedor: z.string().trim().max(100).optional(),
+  /** Canal del ranking (ccanalalt o SIN_IDENTIFICAR): incluye sus gestores y puntos. */
+  canal: z.string().trim().max(64).optional(),
+  /** Productor del ranking (cproductor o SIN_IDENTIFICAR). */
+  productor: z.string().trim().max(64).optional(),
   agrupar: z.enum(['poliza', 'asegurado']).optional(),
   /** Solo pólizas con algún documento errado (no coincide, ilegible, sin certeza: observado). */
   conErrores: z.preprocess(

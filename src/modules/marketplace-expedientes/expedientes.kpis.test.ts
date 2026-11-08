@@ -60,11 +60,8 @@ describe('indicadores.kpis', () => {
     expect(k.completadosUltimos7Dias).toBe(0);
     expect(k.porProducto).toEqual([]);
     expect(k.porDocumento).toEqual([]);
-    expect(k.topIncompletos).toEqual({
-      canales: [],
-      gestores: [],
-      productores: [],
-    });
+    expect(k.porCanal).toEqual([]);
+    expect(k.porProductor).toEqual([]);
     expect(k.tendencia).toHaveLength(30);
     expect(
       k.tendencia.every((d) => d.emitidas === 0 && d.completadas === 0),
@@ -108,10 +105,15 @@ describe('indicadores.kpis', () => {
       area: 'canal',
       emitidaEn: new Date('2026-01-10T12:00:00Z'),
     });
-    expect((await svc.indicadores({ area: 'G' })).kpis.tasaCompletitud).toBe(0);
+    // Gestores trabajan para los canales: C incluye sus pólizas incompletas (1 de 4 completa);
+    // G es el mismo filtro que C.
     expect((await svc.indicadores({ area: 'C' })).kpis.tasaCompletitud).toBe(
-      0.5,
+      0.25,
     );
+    expect((await svc.indicadores({ area: 'G' })).kpis.tasaCompletitud).toBe(
+      0.25,
+    );
+    expect((await svc.indicadores({ area: 'C' })).incompletos).toBe(3);
     const enero = await svc.indicadores({
       desde: '2026-01-01',
       hasta: '2026-01-31',
@@ -159,7 +161,7 @@ describe('indicadores.kpis', () => {
     expect(k.tasaRecuperacion).toBe(0.5);
   });
 
-  it('documentos por estado y top de incompletos (5 por grupo, sin códigos vacíos)', async () => {
+  it('documentos por estado y ranking por canal (el gestor suma a su canal)', async () => {
     const a = await exp({ ccanalalt: '900', cgestor: '12' });
     const b = await exp({ ccanalalt: '900' });
     await exp({ ccanalalt: '901', estadoDocumental: 'completo' });
@@ -182,13 +184,34 @@ describe('indicadores.kpis', () => {
         },
       ]),
     );
-    expect(k.topIncompletos.canales).toEqual([
-      { codigo: '900', incompletos: 2, total: 2 },
+    // Sin ccanalalt ni catálogo: «Canal sin identificar» (nunca se descartan).
+    expect(k.porCanal).toEqual([
+      {
+        codigo: 'SIN_IDENTIFICAR',
+        nombre: 'Canal sin identificar',
+        total: 6,
+        completos: 0,
+        incompletos: 6,
+        pctIncompletos: 1,
+      },
+      {
+        codigo: '900',
+        nombre: null,
+        total: 2,
+        completos: 0,
+        incompletos: 2,
+        pctIncompletos: 1,
+      },
+      {
+        codigo: '901',
+        nombre: null,
+        total: 1,
+        completos: 1,
+        incompletos: 0,
+        pctIncompletos: 0,
+      },
     ]);
-    expect(k.topIncompletos.gestores).toEqual([
-      { codigo: '12', incompletos: 1, total: 1 },
-    ]);
-    expect(k.topIncompletos.productores).toHaveLength(5);
+    expect(k.porProductor).toEqual([]);
   });
 
   it('tendencia en hora Caracas: 02:00 UTC cuenta para el día anterior', async () => {

@@ -309,3 +309,71 @@ export async function analizarEnOcr(params: {
         : null,
   };
 }
+
+export interface OcrLocalizacion {
+  /** 'poliza' = carpeta de la póliza; 'pendiente' = carpeta temporal de la cédula; null = sin rastro. */
+  ubicacion: 'poliza' | 'pendiente' | null;
+  /** Carpeta relativa a EXPEDIENTES_ROOT. */
+  carpeta: string | null;
+  /** Clave del documento (cedula, licencia…) → ref relativo a EXPEDIENTES_ROOT. */
+  documentos: Record<string, string>;
+}
+
+/**
+ * Conciliación de pólizas sin datos del expediente: POST {OCR_INTERNAL_URL}/api/internal/expedientes/localizar
+ * JSON { cnpoliza, cnrecibo?, cedulas, empresaId } con x-expediente-key. Solo lectura en el OCR.
+ * Cualquier respuesta no 200 (o sin OCR configurado) lanza: el llamador no descarta nada y reintenta.
+ */
+export async function localizarEnOcr(params: {
+  cnpoliza: string;
+  cnrecibo?: string | null;
+  cedulas: string[];
+  empresaId: number;
+}): Promise<OcrLocalizacion> {
+  const cfg = ocrInternalConfig();
+  if (!cfg) throw new OcrNoConfiguradoError();
+  const res = await fetch(`${cfg.url}/api/internal/expedientes/localizar`, {
+    method: 'POST',
+    headers: {
+      'x-expediente-key': cfg.key,
+      'content-type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      cnpoliza: params.cnpoliza,
+      cnrecibo: params.cnrecibo ?? '',
+      cedulas: params.cedulas,
+      empresaId: String(params.empresaId),
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok || body.ok !== true) {
+    throw new OcrAnalisisError(
+      res.status,
+      typeof body.code === 'string' ? body.code.slice(0, 64) : null,
+      mensajeOcr(body, `OCR respondió HTTP ${res.status}`),
+    );
+  }
+  const ubicacion =
+    body.ubicacion === 'poliza' || body.ubicacion === 'pendiente'
+      ? body.ubicacion
+      : null;
+  const documentos: Record<string, string> = {};
+  const raw =
+    body.documentos && typeof body.documentos === 'object'
+      ? (body.documentos as Record<string, unknown>)
+      : {};
+  for (const [clave, ref] of Object.entries(raw)) {
+    if (/^[a-z_]{2,32}$/.test(clave) && typeof ref === 'string' && ref.trim())
+      documentos[clave] = ref.trim().slice(0, 500);
+  }
+  return {
+    ubicacion,
+    carpeta:
+      ubicacion && typeof body.carpeta === 'string'
+        ? body.carpeta.slice(0, 500)
+        : null,
+    documentos,
+  };
+}
