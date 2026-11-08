@@ -56,6 +56,8 @@ export interface BrandedContent {
   ctaLabel?: string;
   ctaUrl?: string;
   extraNote?: string;
+  /** false: nest-api no repite la introducción encima de la tarjeta. */
+  introArriba?: boolean;
   /** Si viene, se envía con `expediente-documentos` y lo demás queda de respaldo `branded`. */
   expediente?: DatosExpedienteCorreo;
   /** Código de acceso por cédula: plantilla `expediente-codigo` con respaldo `branded`. */
@@ -145,6 +147,7 @@ function datosBranded(content: BrandedContent): Record<string, unknown> {
     ...(content.ctaLabel ? { ctaLabel: content.ctaLabel } : {}),
     ...(content.ctaUrl ? { ctaUrl: content.ctaUrl } : {}),
     ...(content.extraNote ? { extraNote: content.extraNote } : {}),
+    ...(content.introArriba === false ? { introArriba: false } : {}),
   };
 }
 
@@ -465,9 +468,9 @@ export function correoResumenNocturno(r: ResumenNocturno): BrandedContent {
   return {
     subject: `Marketplace | ${r.areasLabel} | Control documental diario – ${r.fechaLocal}`,
     title: `Control documental diario – ${r.fechaLocal}`,
-    intro:
-      `Corte: ${r.fechaHoraCaracas}. Emitidas hoy: ${r.emitidas}. Completas al corte: ${r.completas}. ` +
-      `Incompletas de hoy: ${r.incompletas}. El reporte se envía aun si hay cero incompletos.`,
+    // Las cifras van solo en la tabla; la introducción sale una vez.
+    intro: `Corte: ${r.fechaHoraCaracas}. Pólizas emitidas en el Marketplace y estado de sus documentos.`,
+    introArriba: false,
     fields: [
       { label: 'Emitidas hoy', value: n(r.emitidas) },
       { label: 'Completas al corte', value: n(r.completas) },
@@ -488,8 +491,6 @@ export function correoResumenNocturno(r: ResumenNocturno): BrandedContent {
         label: `Acumulado cartera ${r.areasLabel}`,
         value: `${r.totalCartera} (${r.totalCompletos} completos, ${r.totalIncompletos} incompletos)`,
       },
-      { label: 'Sin información documental', value: n(r.sinInformacion) },
-      { label: 'Sin vínculo documental', value: n(r.sinVinculo) },
       { label: 'Errores técnicos', value: n(r.errores) },
     ],
     ...(r.enlaceReporte

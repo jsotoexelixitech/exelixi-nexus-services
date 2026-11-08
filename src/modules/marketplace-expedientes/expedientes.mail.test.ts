@@ -11,6 +11,7 @@ import {
   correoObservado,
   correoRecibido,
   correoRecordatorio,
+  correoResumenNocturno,
   correoSolicitudInicial,
   DatosCorreoAsegurado,
   entregarCorreo,
@@ -242,5 +243,49 @@ describe('vocabulario al asegurado', () => {
         expect(JSON.stringify(c).toLowerCase()).not.toContain('vendedor');
       }
     }
+  });
+});
+
+describe('control documental diario', () => {
+  const datos = {
+    fechaLocal: '08/11/2026',
+    fechaHoraCaracas: '08/11/2026 23:00',
+    areasLabel: 'Canales',
+    emitidas: 7,
+    completas: 3,
+    incompletas: 4,
+    sinDocumentos: 2,
+    ilegibles: 0,
+    inconsistentes: 0,
+    porValidar: 1,
+    intentos: 0,
+    entregados: 0,
+    rebotes: 0,
+    excluidos: 0,
+    totalCartera: 10,
+    totalCompletos: 5,
+    totalIncompletos: 5,
+    sinInformacion: 0,
+    sinVinculo: 0,
+    errores: 0,
+    pendientesPago: 0,
+    enlaceReporte: null,
+  };
+
+  it('las cifras van solo en la tabla y la introducción no se repite', () => {
+    const c = correoResumenNocturno(datos);
+    expect(c.introArriba).toBe(false);
+    expect(c.intro).not.toMatch(/Emitidas hoy|Completas|Incompletas/);
+    const labels = (c.fields ?? []).map((x) => x.label);
+    expect(labels).toEqual(
+      expect.arrayContaining([
+        'Emitidas hoy',
+        'Completas al corte',
+        'Incompletas de hoy',
+        'Sin documentos',
+      ]),
+    );
+    expect(labels).not.toContain('Sin información documental');
+    expect(labels).not.toContain('Sin vínculo documental');
   });
 });
