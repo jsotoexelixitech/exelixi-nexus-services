@@ -58,6 +58,8 @@ export interface BrandedContent {
   extraNote?: string;
   /** Si viene, se envía con `expediente-documentos` y lo demás queda de respaldo `branded`. */
   expediente?: DatosExpedienteCorreo;
+  /** Código de acceso por cédula: plantilla `expediente-codigo` con respaldo `branded`. */
+  codigo?: { nombre: string; codigo: string; minutos: number };
 }
 
 export type ResultadoEnvio =
@@ -101,7 +103,7 @@ function enLista(items: string[]): string {
 async function postNest(
   to: string[],
   toName: string | undefined,
-  template: 'branded' | 'expediente-documentos',
+  template: 'branded' | 'expediente-documentos' | 'expediente-codigo',
   data: Record<string, unknown>,
 ): Promise<{ sent: boolean; error?: string; status?: number }> {
   const { url, apiKey } = nestMailConfig();
@@ -171,7 +173,18 @@ async function postCorreo(
   toName: string | undefined,
   content: BrandedContent,
 ): Promise<{ sent: boolean; error?: string }> {
-  if (content.expediente) {
+  if (content.codigo) {
+    const r = await postNest(to, toName, 'expediente-codigo', {
+      subject: content.subject,
+      nombre: recortar(content.codigo.nombre, 80),
+      codigo: content.codigo.codigo,
+      minutos: content.codigo.minutos,
+    });
+    if (r.sent || (r.status !== 400 && r.status !== 422)) return r;
+    logger.warn(
+      `[expedientes-mail] nest-api rechazó expediente-codigo (HTTP ${r.status}); reintento con branded`,
+    );
+  } else if (content.expediente) {
     const r = await postNest(
       to,
       toName,
@@ -392,6 +405,33 @@ export function correoCompleto(p: DatosCorreoAsegurado): BrandedContent {
       `Estimado(a) ${p.nombre}: le confirmamos que hemos completado y validado la documentación ` +
       `de ${p.polizas.length > 1 ? 'sus pólizas' : 'su póliza'}. No necesita realizar ninguna otra gestión para este expediente.`,
   });
+}
+
+export const ASUNTO_CODIGO = `${MARCA} | Código de verificación`;
+
+/**
+ * Código de acceso por cédula (de usted). Solo el código y su vigencia: ni pólizas ni
+ * documentos, para que el correo no diga nada si lo ve un tercero.
+ */
+export function correoCodigo(p: {
+  nombre: string;
+  codigo: string;
+  minutos: number;
+}): BrandedContent {
+  return {
+    subject: ASUNTO_CODIGO,
+    eyebrow: 'Control documental',
+    title: 'Código de verificación',
+    intro:
+      `Estimado(a) ${p.nombre || 'asegurado(a)'}: recibimos una solicitud para ingresar a su expediente ` +
+      `con su documento de identidad. Su código de verificación es ${p.codigo}. Vence en ${p.minutos} minutos ` +
+      'y solo puede usarse una vez.',
+    fields: [{ label: 'Código', value: p.codigo }],
+    extraNote:
+      'Si usted no solicitó este código, ignore este mensaje: nadie podrá ingresar sin él. ' +
+      'La Mundial de Seguros nunca le pedirá este código por teléfono.',
+    codigo: { nombre: p.nombre, codigo: p.codigo, minutos: p.minutos },
+  };
 }
 
 export interface ResumenNocturno {

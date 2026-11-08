@@ -35,6 +35,16 @@ import {
 } from './expedientes.schema';
 import { ejecutarJob } from './expedientes.jobs';
 import { leerMultipart } from './expedientes.files';
+import {
+  claveAsegurado,
+  CODIGO_MINUTOS,
+  CODIGO_REENVIO_SEGUNDOS,
+  MENSAJE_VERIFICAR,
+  solicitarCodigo,
+  verificarCodigo,
+  verificarCodigoSchema,
+  verificarIdentidadSchema,
+} from './expedientes.acceso';
 
 const router = Router();
 
@@ -412,6 +422,92 @@ const publicoCargaLimiter = rateLimit({
     message: 'Demasiadas cargas. Espere un minuto.',
   },
 });
+
+// ─── Público: acceso por cédula + código al correo registrado ─────────────
+
+const QUINCE_MIN = 15 * 60 * 1000;
+const MSG_ESPERA = {
+  status: 'error',
+  success: false,
+  message: 'Demasiados intentos. Espere unos minutos e intente de nuevo.',
+};
+
+/** Clave por documento (no por IP): frena el reparto del ataque entre muchas IP. */
+function claveDocumento(req: Request): string {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  return `doc:${claveAsegurado(b.tipoDoc, b.documento) ?? 'invalido'}`;
+}
+
+const verificarIpLimiter = rateLimit({
+  windowMs: QUINCE_MIN,
+  max: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: MSG_ESPERA,
+});
+
+const verificarDocLimiter = rateLimit({
+  windowMs: QUINCE_MIN,
+  max: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: claveDocumento,
+  message: MSG_ESPERA,
+});
+
+const codigoIpLimiter = rateLimit({
+  windowMs: QUINCE_MIN,
+  max: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: MSG_ESPERA,
+});
+
+const codigoDocLimiter = rateLimit({
+  windowMs: QUINCE_MIN,
+  max: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: claveDocumento,
+  message: MSG_ESPERA,
+});
+
+/**
+ * Siempre la misma respuesta, existan o no pólizas. El envío del código corre fuera de la
+ * petición para que el tiempo tampoco delate si el asegurado existe.
+ */
+router.post(
+  '/publico/verificar',
+  verificarIpLimiter,
+  verificarDocLimiter,
+  h(async (req, res) => {
+    const body = verificarIdentidadSchema.parse(req.body ?? {});
+    void solicitarCodigo(body.tipoDoc, body.documento).catch((err) =>
+      logger.warn(
+        `[expedientes] acceso por cédula: envío fallido: ${err instanceof Error ? err.message : 'error'}`,
+      ),
+    );
+    return ok(res, {
+      mensaje: MENSAJE_VERIFICAR,
+      vigenciaMinutos: CODIGO_MINUTOS,
+      reenvioSegundos: CODIGO_REENVIO_SEGUNDOS,
+    });
+  }),
+);
+
+/** Código válido → token de un enlace `carga_documental` de 60 minutos. */
+router.post(
+  '/publico/verificar-codigo',
+  codigoIpLimiter,
+  codigoDocLimiter,
+  h(async (req, res) => {
+    const body = verificarCodigoSchema.parse(req.body ?? {});
+    return ok(
+      res,
+      await verificarCodigo(body.tipoDoc, body.documento, body.codigo),
+    );
+  }),
+);
 
 /** Solo nombre, póliza enmascarada y requisitos pendientes/recibidos. */
 router.get(

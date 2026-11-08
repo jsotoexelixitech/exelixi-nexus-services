@@ -1934,9 +1934,17 @@ export class ExpedientesService {
 
   // ─── Enlace del asegurado ───────────────────────────────────────────────
 
-  async crearEnlace(aseguradoKeyValue: string | null, expedienteIds: number[]) {
+  async crearEnlace(
+    aseguradoKeyValue: string | null,
+    expedienteIds: number[],
+    /** Vigencia corta en minutos (acceso por cédula); sin ella, EXPEDIENTES_LINK_DIAS. */
+    opts: { minutos?: number } = {},
+  ) {
     const { token, hash } = generarToken();
-    const expiraEn = new Date(Date.now() + linkDias() * 86_400_000);
+    const expiraEn = new Date(
+      Date.now() +
+        (opts.minutos ? opts.minutos * 60_000 : linkDias() * 86_400_000),
+    );
     await prisma.mktExpedienteEnlace.create({
       data: {
         tokenHash: hash,
