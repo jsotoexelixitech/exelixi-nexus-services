@@ -193,6 +193,31 @@ export const observarSchema = z.object({
   body: z.object({ motivo: str(500).min(3, 'El motivo es obligatorio') }),
 });
 
+/** Productos del flujo con config OCR propia (los mismos de /api/config/:empresa/:producto/ocr). */
+export const PRODUCTOS_OCR = ['rcv', 'funerario', 'patrimoniales'] as const;
+export type ProductoOcr = (typeof PRODUCTOS_OCR)[number];
+
+/** ccanalalt como lo guarda el OCR: texto sin espacios (acepta número). */
+const codigoCanal = z
+  .union([z.string(), z.number()])
+  .transform((v) => String(v).trim())
+  .pipe(z.string().min(1).max(64));
+
+export const ocrPorCanalQuerySchema = z.object({
+  producto: z.enum(PRODUCTOS_OCR).default('rcv'),
+});
+
+export const ocrPorCanalUpdateSchema = z.object({
+  producto: z.enum(PRODUCTOS_OCR),
+  /** Lista completa de canales con OCR OPCIONAL (el resto queda obligatorio). */
+  canales: z.array(codigoCanal).max(2000),
+  /** Canales opcionales que la pantalla cargó: si ya no coinciden, otro guardó antes (409). */
+  base: z.array(codigoCanal).max(2000).optional(),
+  motivo: str(500).min(3, 'El motivo es obligatorio'),
+});
+
+export type OcrPorCanalUpdate = z.infer<typeof ocrPorCanalUpdateSchema>;
+
 export const listQuerySchema = z.object({
   estadoDoc: z.enum(['completo', 'incompleto', 'sin_informacion']).optional(),
   estadoPago: z.enum(['pagada', 'pendiente']).optional(),

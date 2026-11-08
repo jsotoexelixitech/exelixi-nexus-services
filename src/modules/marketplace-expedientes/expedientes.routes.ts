@@ -31,8 +31,15 @@ import {
   JobName,
   listQuerySchema,
   observarSchema,
+  ocrPorCanalQuerySchema,
+  ocrPorCanalUpdateSchema,
   validarSchema,
 } from './expedientes.schema';
+import {
+  empresaOcrPorCanal,
+  guardarOcrPorCanal,
+  obtenerOcrPorCanal,
+} from './expedientes.ocr-canal';
 import { ejecutarJob } from './expedientes.jobs';
 import { leerMultipart } from './expedientes.files';
 import {
@@ -247,6 +254,40 @@ router.put(
         body as Parameters<typeof svc.updateConfig>[0],
         actorDe(req),
       ),
+    );
+  }),
+);
+
+// ─── OCR por canal (admin; misma config que el parametrizador del OCR) ─────
+
+function empresaOcrDe(req: AuthRequest): number {
+  return empresaOcrPorCanal(
+    (req as ExpedientesRequest).accesoLibre === true,
+    req.user?.empresaId,
+  );
+}
+
+router.get(
+  '/ocr-por-canal',
+  internoLimiter,
+  sesion,
+  admin,
+  h(async (req, res) => {
+    const q = ocrPorCanalQuerySchema.parse(req.query);
+    return ok(res, await obtenerOcrPorCanal(empresaOcrDe(req), q.producto));
+  }),
+);
+
+router.put(
+  '/ocr-por-canal',
+  internoLimiter,
+  sesion,
+  admin,
+  h(async (req, res) => {
+    const body = ocrPorCanalUpdateSchema.parse(req.body ?? {});
+    return ok(
+      res,
+      await guardarOcrPorCanal(empresaOcrDe(req), body, actorDe(req)),
     );
   }),
 );

@@ -14,6 +14,7 @@ const UNIQUES: Record<string, string[][]> = {
   mktExpedienteEnlace: [['tokenHash']],
   mktExpedienteJobRun: [['job', 'fecha']],
   mktExpedienteConfig: [['clave']],
+  productConfig: [['empresaId', 'producto', 'modulo']],
 };
 
 const PK: Record<string, string> = { mktExpedienteConfig: 'clave' };
@@ -321,12 +322,29 @@ export function createFakePrisma() {
     'usuario',
     'funeralSubmission',
     'empresa',
+    'productConfig',
   ];
   const client: Record<string, any> = {};
   for (const m of models) client[m] = makeModel(m, store, seq);
   client.$reset = () => {
     store.clear();
     seq.clear();
+  };
+  /** Transacción interactiva: si la función lanza, se restaura todo lo escrito. */
+  client.$transaction = async (fn: (tx: any) => Promise<unknown>) => {
+    const copia = new Map(
+      [...store].map(([k, rows]) => [k, rows.map((r) => ({ ...r }))]),
+    );
+    const seqCopia = new Map(seq);
+    try {
+      return await fn(client);
+    } catch (err) {
+      store.clear();
+      copia.forEach((v, k) => store.set(k, v));
+      seq.clear();
+      seqCopia.forEach((v, k) => seq.set(k, v));
+      throw err;
+    }
   };
   return client;
 }

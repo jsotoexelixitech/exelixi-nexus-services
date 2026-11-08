@@ -7,11 +7,20 @@ import logger from '../../utils/logger';
 import { normalizarCodigoActor } from './expedientes.domain';
 import { nestMailConfig } from './expedientes.env';
 
+/** Canal activo con el código tal como lo guarda el OCR en `ocrOpcional.canales`. */
+export interface CanalCatalogo {
+  /** String(ccanalalt).trim(): el mismo formato que compara el OCR en tiempo de ejecución. */
+  codigo: string;
+  nombre: string;
+}
+
 export interface CatalogoCanales {
   /** ccanalalt → nombre del canal. */
   nombres: Map<string, string>;
   /** cgestor → ccanalalt del canal al que pertenece. */
   gestorCanal: Map<string, string>;
+  /** Canales en el orden de nest-api (también los que no traen nombre). */
+  canales?: CanalCatalogo[];
 }
 
 const TTL_MS = 10 * 60 * 1000;
@@ -33,7 +42,8 @@ export async function catalogoCanales(
       data?: { canales?: unknown[]; gestores?: unknown[] };
     };
     if (res.ok && body.data) {
-      valor = { nombres: new Map(), gestorCanal: new Map() };
+      const canales: CanalCatalogo[] = [];
+      valor = { nombres: new Map(), gestorCanal: new Map(), canales };
       for (const raw of body.data.canales ?? []) {
         const c = (raw ?? {}) as Record<string, unknown>;
         const cod = normalizarCodigoActor(
@@ -42,6 +52,10 @@ export async function catalogoCanales(
         const nombre =
           typeof c.xcanalalt === 'string' ? c.xcanalalt.trim() : '';
         if (cod && nombre) valor.nombres.set(cod, nombre.slice(0, 120));
+        const codigo = c.ccanalalt == null ? '' : String(c.ccanalalt).trim();
+        if (codigo && !canales.some((x) => x.codigo === codigo)) {
+          canales.push({ codigo, nombre: nombre.slice(0, 120) });
+        }
       }
       for (const raw of body.data.gestores ?? []) {
         const g = (raw ?? {}) as Record<string, unknown>;
