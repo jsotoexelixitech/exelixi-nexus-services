@@ -89,6 +89,7 @@ import {
   ExpedientePayload,
   ListQuery,
 } from './expedientes.schema';
+import { calcularKpis } from './expedientes.kpis';
 
 const CONFIG_KEY = 'global';
 
@@ -1160,14 +1161,14 @@ export class ExpedientesService {
 
   async indicadores(q: Pick<ListQuery, 'area' | 'desde' | 'hasta'>) {
     const config = await this.getConfig();
-    const exps = await prisma.mktExpediente.findMany({
-      where: this.whereLista(q, config),
-    });
+    const where = this.whereLista(q, config);
+    const exps = await prisma.mktExpediente.findMany({ where });
     const reqs = await this.requisitosDe(exps.map((e) => e.id));
     const exclusiones = await this.exclusionesActivas();
     const conEstado = (e: Exp, estado: string) =>
       (reqs.get(e.id) ?? []).some((r) => r.estado === estado);
     const automatica = config.validacion === 'automatica';
+    const noEnviar = exps.filter((e) => estaExcluido(e, exclusiones)).length;
     return {
       total: exps.length,
       completos: exps.filter((e) => e.estadoDocumental === 'completo').length,
@@ -1211,7 +1212,7 @@ export class ExpedientesService {
           ).length
         : 0,
       sinCorreo: exps.filter((e) => !emailValido(e.aseguradoEmail)).length,
-      noEnviar: exps.filter((e) => estaExcluido(e, exclusiones)).length,
+      noEnviar,
       intentos: exps.reduce((a, e) => a + e.intentos, 0),
       recuperados: exps.filter(
         (e) => e.estadoDocumental === 'completo' && e.intentos > 0,
@@ -1219,6 +1220,13 @@ export class ExpedientesService {
       aseguradosUnicos: new Set(
         exps.map((e) => e.aseguradoKey ?? `exp:${e.id}`),
       ).size,
+      /** v1.4: KPI agregados (mismo filtro); `null` = sin dato. */
+      kpis: await calcularKpis({
+        where,
+        ids: exps.map((e) => e.id),
+        noEnviar,
+        hasta: q.hasta,
+      }),
     };
   }
 

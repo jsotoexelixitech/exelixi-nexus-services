@@ -2,8 +2,8 @@
 /**
  * Prisma en memoria SOLO para pruebas del monitor de expedientes (sin BD real).
  * Soporta lo que usa el módulo: findUnique/findFirst/findMany/count/create/
- * update/updateMany, filtros in/not/gt/gte/lt/lte/contains, AND/OR, claves
- * compuestas y P2002 en índices únicos.
+ * update/updateMany, groupBy (con _count._all), select plano, filtros
+ * in/not/gt/gte/lt/lte/contains, AND/OR, claves compuestas y P2002 en índices únicos.
  */
 
 type Row = Record<string, any>;
@@ -236,14 +236,37 @@ function makeModel(
       )[0];
       return r ? { ...r } : null;
     },
-    findMany: async ({ where, orderBy, skip, take }: any = {}) => {
+    findMany: async ({ where, orderBy, skip, take, select }: any = {}) => {
       let list = sortRows(
         rows().filter((x) => matches(x, where)),
         orderBy,
       );
       if (skip) list = list.slice(skip);
       if (take != null) list = list.slice(0, take);
-      return list.map((r) => ({ ...r }));
+      return list.map((r) =>
+        select
+          ? Object.fromEntries(
+              Object.keys(select)
+                .filter((k) => select[k])
+                .map((k) => [k, r[k]]),
+            )
+          : { ...r },
+      );
+    },
+    groupBy: async ({ by, where }: any) => {
+      const grupos = new Map<string, Row>();
+      for (const r of rows().filter((x) => matches(x, where))) {
+        const clave = JSON.stringify((by as string[]).map((k) => r[k] ?? null));
+        const g =
+          grupos.get(clave) ??
+          Object.fromEntries([
+            ...(by as string[]).map((k) => [k, r[k] ?? null]),
+            ['_count', { _all: 0 }],
+          ]);
+        g._count._all++;
+        grupos.set(clave, g);
+      }
+      return [...grupos.values()];
     },
     count: async ({ where }: any = {}) =>
       rows().filter((x) => matches(x, where)).length,
