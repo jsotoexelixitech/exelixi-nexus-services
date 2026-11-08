@@ -115,6 +115,14 @@ export interface ResumenRevisionIa {
   motivos: Record<string, number>;
 }
 
+/** El OCR no encontró el archivo en la ruta guardada (404 ARCHIVO_NO_ENCONTRADO). */
+function esArchivoNoEncontrado(err: unknown): boolean {
+  return (
+    err instanceof OcrAnalisisError &&
+    (err.status === 404 || err.code === 'ARCHIVO_NO_ENCONTRADO')
+  );
+}
+
 function mensajeErrorOcr(err: unknown): string {
   if (err instanceof OcrAnalisisError) return err.message;
   if (err instanceof OcrNoConfiguradoError) return 'OCR no configurado.';
@@ -2118,6 +2126,7 @@ export class ExpedientesService {
     this.enAnalisis.add(r.id);
     try {
       let diag: Diagnostico;
+      let refActual = r.ref;
       let hash: string | null = r.archivoHash ?? null;
       let lectura: OcrLectura | null | undefined;
       if (
@@ -2151,14 +2160,27 @@ export class ExpedientesService {
           { motivoAnalisis: motivo },
         );
       } else {
-        try {
-          const res = await colaIa.ejecutar(() =>
+        const analizar = (ref: string) =>
+          colaIa.ejecutar(() =>
             analizarEnOcr({
-              ref: r.ref as string,
+              ref,
               tipo: r.tipo,
               aceptaRif: aceptaRifEn(exp.producto, r.tipo),
             }),
           );
+        try {
+          let res;
+          try {
+            res = await analizar(refActual);
+          } catch (err) {
+            // Ruta vieja de {cédula}/pendiente/: se busca dónde quedó y se analiza ahí.
+            const nueva = esArchivoNoEncontrado(err)
+              ? await this.reubicarRef(exp, r)
+              : null;
+            if (!nueva) throw err;
+            refActual = nueva;
+            res = await analizar(refActual);
+          }
           hash = res.hash;
           lectura = res.ocr;
           diag = diagnosticar(r.tipo, res.ocr, ctx, { motivoAnalisis: motivo });
@@ -2169,7 +2191,7 @@ export class ExpedientesService {
         }
       }
       return await this.aplicarDiagnostico(exp, r, diag, {
-        ref: r.ref,
+        ref: refActual,
         hash,
         lectura,
         ctx,
@@ -2177,6 +2199,38 @@ export class ExpedientesService {
       });
     } finally {
       this.enAnalisis.delete(r.id);
+    }
+  }
+
+  /**
+   * La mesa técnica guarda la ruta de {cédula}/pendiente/ y, al emitir, el OCR mueve esa carpeta a la
+   * de la póliza: la ruta queda vieja aunque el archivo exista. Se pregunta al OCR dónde quedó
+   * (solo lectura) y se actualiza la ruta del requisito. Nunca mueve ni borra archivos.
+   * Solo para rutas de pendiente; devuelve la ruta nueva o null.
+   */
+  private async reubicarRef(exp: Exp, r: Req): Promise<string | null> {
+    if (!r.ref || !/(^|\/)pendiente\//.test(r.ref)) return null;
+    try {
+      const loc = await localizarEnOcr({
+        cnpoliza: exp.cnpoliza,
+        cnrecibo: exp.cnrecibo,
+        cedulas: cedulasCandidatas([exp.aseguradoDocumento]),
+        empresaId: exp.empresaId,
+      });
+      const nueva = documentosDesdeOcr(loc.documentos)[r.tipo]?.ref;
+      if (!nueva || nueva === r.ref) return null;
+      const upd = await prisma.mktExpedienteRequisito.updateMany({
+        where: { id: r.id, ref: r.ref },
+        data: { ref: nueva },
+      });
+      if (!upd.count) return null;
+      await this.evento(exp.id, 'documento_reubicado', 'ia', {
+        tipo: r.tipo,
+        ubicacion: loc.ubicacion,
+      });
+      return nueva;
+    } catch {
+      return null;
     }
   }
 

@@ -400,6 +400,83 @@ describe('validación automática al crear el expediente (documentos del wizard)
   });
 });
 
+describe('ruta vieja de pendiente (mesa técnica)', () => {
+  const PENDIENTE = 'La Mundial de Seguros/12345678/pendiente/cedula.webp';
+
+  function conLocalizar(documentos: Record<string, string>) {
+    const base = fetchMock.getMockImplementation() as (
+      url: string,
+      init: any,
+    ) => Promise<Response>;
+    fetchMock.mockImplementation(async (url: string, init: any) =>
+      String(url).endsWith('/api/internal/expedientes/localizar')
+        ? respuesta(200, {
+            ok: true,
+            ubicacion: 'poliza',
+            carpeta: 'La Mundial de Seguros/12345678/2321234-26-11-1100015737',
+            documentos,
+          })
+        : base(url, init),
+    );
+  }
+  const llamadasLocalizar = () =>
+    fetchMock.mock.calls.filter(([url]: any[]) =>
+      String(url).endsWith('/api/internal/expedientes/localizar'),
+    );
+
+  async function conRefVieja(ref: string) {
+    const id = await crearRcv('P-70', { documentos: ['cedula'] });
+    Object.assign(req(id, 'cedula'), {
+      ref,
+      estado: 'recibido',
+      decision: null,
+      diagnostico: null,
+      analisisRef: null,
+      archivoHash: null,
+      ocrDatos: null,
+    });
+    return id;
+  }
+
+  it('si el archivo ya no está en pendiente, toma la ruta de la póliza y lo analiza ahí', async () => {
+    const id = await conRefVieja(PENDIENTE);
+    conLocalizar({ cedula: REF.cedula });
+    const r = await svc.revisarConIa({ modo: 'completo' });
+    expect(r).toMatchObject({
+      analizados: 1,
+      erroresTecnicos: 0,
+      validados: 1,
+    });
+    expect(req(id, 'cedula')).toMatchObject({
+      ref: REF.cedula,
+      estado: 'validado',
+    });
+    expect(llamadasLocalizar()).toHaveLength(1);
+    expect(
+      db.mktExpedienteEvento
+        ._rows()
+        .some((e: any) => e.tipo === 'documento_reubicado'),
+    ).toBe(true);
+  });
+
+  it('si el OCR no lo encuentra en otra carpeta, queda como error técnico sin tocar la ruta', async () => {
+    const id = await conRefVieja(PENDIENTE);
+    conLocalizar({});
+    const r = await svc.revisarConIa({ modo: 'completo' });
+    expect(r.erroresTecnicos).toBe(1);
+    expect(req(id, 'cedula').ref).toBe(PENDIENTE);
+  });
+
+  it('una ruta de carpeta de póliza que no existe no se reubica', async () => {
+    const vieja = 'La Mundial de Seguros/12345678/otra-carpeta/cedula.webp';
+    const id = await conRefVieja(vieja);
+    conLocalizar({ cedula: REF.cedula });
+    await svc.revisarConIa({ modo: 'completo' });
+    expect(llamadasLocalizar()).toHaveLength(0);
+    expect(req(id, 'cedula').ref).toBe(vieja);
+  });
+});
+
 describe('no reanaliza sin necesidad', () => {
   it('sin cambios no vuelve a llamar al OCR', async () => {
     const id = await crearRcv('P-10');
