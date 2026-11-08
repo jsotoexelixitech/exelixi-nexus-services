@@ -10,7 +10,7 @@ import type {
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import prisma from '../../config/prisma';
-import { catalogoCanales } from './expedientes.canales';
+import { catalogoCanales, gestorCanalEnCache } from './expedientes.canales';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/app-error';
 import {
@@ -336,7 +336,14 @@ function aplicaExclusion(e: ExpExcluible, x: MktExpedienteExclusion): boolean {
     return !!x.aseguradoKey && x.aseguradoKey === e.aseguradoKey;
   if (esTipoActor(x.alcance)) {
     const v = normalizarCodigoActor(x.valor);
-    return !!v && v === valorActor(e, x.alcance);
+    if (!v) return false;
+    // Canal: también las pólizas de sus gestores (gestor → canal por el catálogo de nest-api).
+    if (x.alcance === 'canal')
+      return (
+        v !== SIN_IDENTIFICAR &&
+        v === canalDeExpediente(e, gestorCanalEnCache())
+      );
+    return v === valorActor(e, x.alcance);
   }
   return false;
 }
@@ -1311,10 +1318,13 @@ export class ExpedientesService {
   }
 
   async exclusionesActivas(): Promise<MktExpedienteExclusion[]> {
-    return prisma.mktExpedienteExclusion.findMany({
+    const lista = await prisma.mktExpedienteExclusion.findMany({
       where: { activo: true },
       orderBy: { createdAt: 'desc' },
     });
+    // La exclusión por canal alcanza a sus gestores: deja el catálogo en caché (nunca lanza).
+    if (lista.some((x) => x.alcance === 'canal')) await catalogoCanales();
+    return lista;
   }
 
   toItem(
@@ -2748,8 +2758,16 @@ export class ExpedientesService {
     exp: Exp | null,
     actor: string,
   ) {
-    const valor =
+    let valor =
       normalizarCodigoActor(body.valor) ?? (exp ? valorActor(exp, tipo) : null);
+    // Póliza de un gestor sin código de canal: el canal sale del catálogo de nest-api.
+    if (!valor && exp && tipo === 'canal') {
+      const canal = canalDeExpediente(
+        exp,
+        (await catalogoCanales())?.gestorCanal,
+      );
+      valor = canal === SIN_IDENTIFICAR ? null : canal;
+    }
     if (!valor) {
       throw new AppError(
         exp
@@ -2878,13 +2896,25 @@ export class ExpedientesService {
       string,
       { nombre: string | null; polizas: number }
     >();
+    // Canal: la póliza de un gestor cuenta en su canal; nombres y canales sin pólizas
+    // salen del catálogo de nest-api (macanalalt activos).
+    const catalogo = tipo === 'canal' ? await catalogoCanales() : null;
     for (const e of exps) {
-      const valor = valorActor(e, tipo);
-      if (!valor) continue;
+      const valor =
+        tipo === 'canal'
+          ? canalDeExpediente(e, catalogo?.gestorCanal)
+          : valorActor(e, tipo);
+      if (!valor || valor === SIN_IDENTIFICAR) continue;
       const a = porValor.get(valor) ?? { nombre: null, polizas: 0 };
       a.polizas++;
-      a.nombre = a.nombre ?? nombreActorDeSnapshot(e.snapshot, tipo);
+      a.nombre =
+        catalogo?.nombres.get(valor) ??
+        a.nombre ??
+        nombreActorDeSnapshot(e.snapshot, tipo);
       porValor.set(valor, a);
+    }
+    for (const [cod, nombre] of catalogo?.nombres ?? []) {
+      if (!porValor.has(cod)) porValor.set(cod, { nombre, polizas: 0 });
     }
     const t = (q ?? '').trim().toLowerCase();
     return Array.from(porValor, ([valor, a]) => ({

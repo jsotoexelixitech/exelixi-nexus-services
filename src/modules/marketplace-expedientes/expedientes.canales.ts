@@ -66,6 +66,14 @@ export async function catalogoCanales(
   return valor;
 }
 
+/**
+ * gestor → canal del último catálogo cargado (o null). Lo usa la exclusión por canal, que es
+ * síncrona; exclusionesActivas() carga el catálogo antes cuando hay alguna exclusión de canal.
+ */
+export function gestorCanalEnCache(): Map<string, string> | null {
+  return cache?.valor?.gestorCanal ?? null;
+}
+
 /** Solo pruebas. */
 export function _resetCatalogoCanales(valor?: CatalogoCanales | null): void {
   cache = valor === undefined ? null : { en: Date.now(), valor };

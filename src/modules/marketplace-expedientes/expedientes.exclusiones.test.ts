@@ -33,6 +33,7 @@ import prisma from '../../config/prisma';
 import router from './expedientes.routes';
 import { estaExcluido, expedientesService as svc } from './expedientes.service';
 import { enviarRecordatorios } from './expedientes.tareas';
+import { _resetCatalogoCanales } from './expedientes.canales';
 
 const db = prisma as any;
 const DIA = 86_400_000;
@@ -124,6 +125,7 @@ beforeEach(() => {
       }),
   );
   vi.stubGlobal('fetch', fetchMock);
+  _resetCatalogoCanales(null);
 });
 
 afterEach(() => {
@@ -440,6 +442,68 @@ describe('actores para elegir', () => {
     expect(
       (await svc.actores('canal', 'farmacia')).map((a) => a.valor),
     ).toEqual(['900']);
+  });
+});
+
+describe('canal con sus gestores (catálogo de nest-api)', () => {
+  beforeEach(() =>
+    _resetCatalogoCanales({
+      nombres: new Map([
+        ['900', 'Farmacia Centro'],
+        ['950', 'Canal sin pólizas'],
+      ]),
+      gestorCanal: new Map([['12', '900']]),
+    }),
+  );
+
+  it('la lista suma las pólizas del gestor a su canal, con nombre, y trae los canales del catálogo', async () => {
+    await crear('P-1', CANAL_900);
+    await crear('P-2', GESTOR_12);
+    await crear('P-3', GESTOR_13);
+    expect(await svc.actores('canal')).toEqual([
+      expect.objectContaining({
+        valor: '900',
+        nombre: 'Farmacia Centro',
+        polizas: 2,
+      }),
+      expect.objectContaining({
+        valor: '950',
+        nombre: 'Canal sin pólizas',
+        polizas: 0,
+      }),
+    ]);
+    expect(
+      (await svc.actores('canal', 'farmacia')).map((a) => a.valor),
+    ).toEqual(['900']);
+  });
+
+  it('excluir el canal detiene también los correos de las pólizas de sus gestores', async () => {
+    const canal = await crear('P-1', CANAL_900);
+    const delGestor = await crear('P-2', GESTOR_12);
+    const otroGestor = await crear('P-3', GESTOR_13);
+    await svc.crearExclusion(
+      { alcance: 'canal', valor: '900', motivo: 'pedido LM' },
+      'portal:1',
+    );
+    expect([canal, delGestor, otroGestor].map(estaExcluidoDe)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    const r = await enviarRecordatorios(BASE);
+    expect(r.excluidos).toBe(2);
+    expect(notifs(delGestor, 'excluido')).toHaveLength(1);
+    expect(notifs(otroGestor, 'enviado')).toHaveLength(1);
+    expect(exp(delGestor).estadoDocumental).toBe('incompleto');
+  });
+
+  it('excluir el canal desde la póliza de un gestor usa el canal del catálogo', async () => {
+    const delGestor = await crear('P-2', GESTOR_12);
+    const x: any = await svc.crearExclusion(
+      { alcance: 'canal', expedienteId: delGestor, motivo: 'pedido LM' },
+      'portal:1',
+    );
+    expect(x.valor).toBe('900');
   });
 });
 
