@@ -35,6 +35,8 @@ import {
   contextoPoliza,
   diagnosticar,
   esperaReintentoMs,
+  estadoPorDiagnostico,
+  huellaPoliza,
   maskDocumento,
   motivoParaAsegurado,
   VERSION_COMPARADOR,
@@ -1112,7 +1114,7 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     expect(r.motivo).toMatch(/^Revisar: /);
   });
 
-  it('documento de otra persona de la póliza → sin_certeza «corresponde al asegurado, no al tomador»', async () => {
+  it('v4: cédula del asegurado (otra persona natural de la póliza) → coincide con el asegurado', async () => {
     lee(REF_P, {
       identificacion: '20304050',
       tipoDoc: 'V',
@@ -1125,11 +1127,8 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
       ASEGURADO,
     );
     const d = req(id, 'cedula').diagnostico;
-    expect(d.resultado).toBe('sin_certeza');
-    expect(d.resumen).toBe(
-      'El documento corresponde al asegurado, no al tomador.',
-    );
-    expect(d.comparadoCon).toBe('tomador');
+    expect(d.resultado).toBe('coincide');
+    expect(d.comparadoCon).toBe('asegurado');
   });
 
   it('roles: cedula_titular → asegurado; cedula_beneficiario → beneficiario o el siguiente disponible', () => {
@@ -1591,5 +1590,344 @@ describe('v3: datos cambiados en el formulario (ocrLeido de la emisión)', () =>
     expect(req(id, 'certificado').diagnostico.resultado).toBe(
       'datos_modificados',
     );
+  });
+});
+
+describe('v4: personas — la cédula se compara contra todas las personas de la póliza (prod 9-nov)', () => {
+  const REF_V4 = 'La Mundial de Seguros/40111222/2321234-26-11-90/cedula.webp';
+  const TOM_V = {
+    tipoDoc: 'V',
+    documento: '40100984',
+    nombre: 'Carlos Eduardo',
+    apellido: 'Rojas',
+  };
+  const TOM_J = {
+    tipoDoc: 'J',
+    documento: '401118743',
+    nombre: 'Minera Ejemplo C.A.',
+  };
+  const TITULAR = {
+    tipoDoc: 'V',
+    identificacion: '40118363',
+    nombre: 'Noemi',
+    apellido: 'Rojas',
+  };
+  const HIJA = {
+    tipoDoc: 'V',
+    identificacion: '40121247',
+    nombre: 'Mariana Valentina',
+    apellido: 'Rojas',
+    parentesco: '3',
+  };
+  /** Snapshot de la mesa técnica (funeral_submission) como lo guarda Emisión. */
+  const MESA = (tomador: any) => ({
+    tomador,
+    asegurado: TITULAR,
+    funeral: { asegurados: [TITULAR, HIJA], beneficiarios: [] },
+  });
+  /** Expediente de prod: llegó por conciliación, el snapshot solo trae al tomador. */
+  const expPersonas = (tomador: any) => ({
+    producto: 'personas',
+    snapshot: {
+      tomador: {
+        nombre: tomador.nombre,
+        identificacion: `${tomador.tipoDoc}-${tomador.documento}`,
+      },
+    },
+    aseguradoTipoDoc: tomador.tipoDoc,
+    aseguradoDocumento: tomador.documento,
+    aseguradoNombre: tomador.nombre,
+  });
+  const lectura = (extraido: any) => ({ extraido, confianza: 1 });
+
+  it('caso 1: tomador J y cédula V del titular → coincide con el titular (no con el tomador)', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_J), [MESA(TOM_J)]);
+    const d = diagnosticar(
+      'cedula',
+      lectura({
+        identificacion: '40118363',
+        tipoDoc: 'V',
+        nombre: 'NOEMI',
+        apellido: 'ROJAS',
+      }),
+      ctx,
+    );
+    expect(d.resultado).toBe('coincide');
+    expect(d.comparadoCon).toBe('asegurado');
+  });
+
+  it('caso 2: tomador V y cédula de otra persona de la póliza (asegurada) → coincide', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_V), [MESA(TOM_V)]);
+    const d = diagnosticar(
+      'cedula',
+      lectura({
+        identificacion: 'V-40.121.247',
+        tipoDoc: 'V',
+        nombre: 'MARIANA VALENTINA',
+        apellido: 'ROJAS',
+      }),
+      ctx,
+    );
+    expect(d.resultado).toBe('coincide');
+    // Sigue valiendo la del tomador natural.
+    expect(
+      diagnosticar(
+        'cedula',
+        lectura({
+          identificacion: '40100984',
+          tipoDoc: 'V',
+          nombre: 'CARLOS EDUARDO',
+          apellido: 'ROJAS',
+        }),
+        ctx,
+      ),
+    ).toMatchObject({ resultado: 'coincide', comparadoCon: 'tomador' });
+  });
+
+  it('asegurados del jsonData de la emisión también cuentan', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_V), [
+      { flujo: 'personas', funeral: { asegurados: [HIJA] } },
+    ]);
+    expect(
+      diagnosticar(
+        'cedula',
+        lectura({
+          identificacion: '40121247',
+          tipoDoc: 'V',
+          nombre: 'MARIANA',
+          apellido: 'ROJAS',
+        }),
+        ctx,
+      ).resultado,
+    ).toBe('coincide');
+  });
+
+  it('caso 3: tomador J y RIF del tomador → coincide (no «se esperaba cédula»)', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_J), [MESA(TOM_J)]);
+    const d = diagnosticar(
+      'cedula',
+      lectura({
+        rif: 'J-40111874-3',
+        tipoDoc: 'J',
+        razonSocial: 'MINERA EJEMPLO, C.A.',
+      }),
+      ctx,
+    );
+    expect(d.resultado).toBe('coincide');
+    expect(d.comparadoCon).toBe('tomador');
+  });
+
+  it('negativo: persona ajena a la póliza (otro número y otro nombre) → no_coincide', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_V), [MESA(TOM_V)]);
+    const d = diagnosticar(
+      'cedula',
+      lectura({
+        identificacion: '55667788',
+        tipoDoc: 'V',
+        nombre: 'PEDRO',
+        apellido: 'GOMEZ',
+      }),
+      ctx,
+    );
+    expect(d.resultado).toBe('no_coincide');
+    expect(estadoPorDiagnostico(d).estado).toBe('observado');
+  });
+
+  it('negativo: número de una persona de la póliza con otro nombre → no_coincide', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_V), [MESA(TOM_V)]);
+    const d = diagnosticar(
+      'cedula',
+      lectura({
+        identificacion: '40118363',
+        tipoDoc: 'V',
+        nombre: 'PEDRO',
+        apellido: 'GOMEZ',
+      }),
+      ctx,
+    );
+    expect(d.resultado).toBe('no_coincide');
+  });
+
+  it('negativo: RIF de otra empresa con tomador J → no_coincide', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_J), [MESA(TOM_J)]);
+    const d = diagnosticar(
+      'cedula',
+      lectura({ rif: 'J-30999888-1', tipoDoc: 'J', razonSocial: 'OTRA C.A.' }),
+      ctx,
+    );
+    expect(d.resultado).toBe('no_coincide');
+  });
+
+  it('tomador J y pasaporte que no es de nadie de la póliza (representante) → sin_certeza, no validado', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_J), [MESA(TOM_J)]);
+    const d = diagnosticar(
+      'cedula',
+      lectura({
+        numeroPasaporte: 'P-77441551',
+        tipoDoc: 'P',
+        nombre: 'JUN',
+        apellido: 'LI',
+      }),
+      ctx,
+    );
+    expect(d.resultado).toBe('sin_certeza');
+    expect(estadoPorDiagnostico(d).motivo).toMatch(/^Revisar: .*jurídica/);
+  });
+
+  it('datos insuficientes: tomador J sin titular ni asegurados → sin_certeza (revisión), nunca validado', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_J));
+    const d = diagnosticar(
+      'cedula',
+      lectura({
+        identificacion: '40118363',
+        tipoDoc: 'V',
+        nombre: 'NOEMI',
+        apellido: 'ROJAS',
+      }),
+      ctx,
+    );
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toMatch(/no trae la cédula del titular/);
+  });
+
+  it('el OCR devolvió el rótulo «nombre» → sin_certeza (lectura fallida), no no_coincide', () => {
+    const ctx = contextoPoliza(expPersonas(TOM_V), [MESA(TOM_V)]);
+    const d = diagnosticar(
+      'cedula',
+      lectura({
+        identificacion: '40118363',
+        tipoDoc: 'V',
+        nombre: 'nombre',
+        apellido: 'apellido',
+      }),
+      ctx,
+    );
+    expect(d.resultado).toBe('sin_certeza');
+  });
+
+  it('las personas adicionales no cambian la huella (no reabren lo decidido)', () => {
+    const sin = contextoPoliza(expPersonas(TOM_V));
+    const con = contextoPoliza(expPersonas(TOM_V), [MESA(TOM_V)]);
+    expect(huellaPoliza(con)).toBe(huellaPoliza(sin));
+  });
+
+  async function expedienteProd(poliza: string, tomador: any, extraido: any) {
+    lee(REF_V4, extraido);
+    const r = await svc.registrarDesdeEmision(
+      {
+        id: Number(poliza.replace(/\D/g, '')) || 1,
+        empresaId: 7,
+        polizaNumero: poliza,
+        // Como en prod: la emisión trae al tomador en el jsonData y nada más de la póliza.
+        jsonData: {
+          producto: 'personas',
+          tomadorNombre: tomador.nombre,
+          tomadorIdentificacion: `${tomador.tipoDoc}-${tomador.documento}`,
+        },
+      },
+      {
+        expediente: {
+          centidad: 'C',
+          ccanalalt: '900',
+          producto: 'personas',
+          documentos: { cedula: { recibido: true, ref: REF_V4 } },
+        },
+      },
+    );
+    await svc.esperarAnalisisPendientes();
+    return r!.id;
+  }
+
+  it('al desplegar: lo observado por la IA con la regla vieja se recompara sin OCR y queda validado; lo validado no se toca', async () => {
+    const id = await expedienteProd('PV-1', TOM_V, {
+      identificacion: '40118363',
+      tipoDoc: 'V',
+      nombre: 'NOEMI',
+      apellido: 'ROJAS',
+    });
+    // Sin mesa técnica todavía: falso no_coincide contra el tomador (como en prod).
+    const fila = req(id, 'cedula');
+    expect(fila.estado).toBe('observado');
+    fila.diagnostico = { ...fila.diagnostico, comparador: 3 };
+    await db.funeralSubmission.create({
+      data: {
+        empresaId: 7,
+        cnpoliza: 'PV-1',
+        createdAt: new Date(),
+        snapshotJson: MESA(TOM_V),
+      },
+    });
+    // Un validado de la v3 (otra póliza) no se reabre.
+    const idOk = await expedienteProd('PV-2', TOM_V, {
+      identificacion: '40100984',
+      tipoDoc: 'V',
+      nombre: 'CARLOS EDUARDO',
+      apellido: 'ROJAS',
+    });
+    const ok = req(idOk, 'cedula');
+    expect(ok.estado).toBe('validado');
+    ok.diagnostico = { ...ok.diagnostico, comparador: 3 };
+    const antes = { ...ok };
+
+    const llamadas = llamadasAnalizar().length;
+    const r = await svc.revisarConIa({ modo: 'completo' });
+    expect(r.motivos).toEqual({ cambio_comparador: 1 });
+    expect(llamadasAnalizar()).toHaveLength(llamadas);
+    expect(req(id, 'cedula')).toMatchObject({
+      estado: 'validado',
+      decision: 'ia',
+    });
+    expect(req(id, 'cedula').diagnostico).toMatchObject({
+      resultado: 'coincide',
+      comparador: VERSION_COMPARADOR,
+      comparadoCon: 'asegurado',
+    });
+    expect(req(idOk, 'cedula')).toEqual(antes);
+    // Una segunda pasada no vuelve a tocar nada.
+    expect((await svc.revisarConIa({ modo: 'completo' })).motivos).toEqual({});
+  });
+
+  it('al desplegar: «parece ser un RIF» con tomador J se vuelve a leer aceptando RIF y queda validado', async () => {
+    await db.funeralSubmission.create({
+      data: {
+        empresaId: 7,
+        cnpoliza: 'PV-3',
+        createdAt: new Date(),
+        snapshotJson: MESA(TOM_J),
+      },
+    });
+    const id = await expedienteProd('PV-3', TOM_J, {
+      rif: 'J-40111874-3',
+      tipoDoc: 'J',
+      razonSocial: 'MINERA EJEMPLO C.A.',
+    });
+    // Simula lo guardado por la v3: el OCR rechazó el RIF y no dejó datos leídos.
+    const fila = req(id, 'cedula');
+    fila.estado = 'observado';
+    fila.decision = 'ia';
+    fila.ocrDatos = null;
+    fila.diagnostico = {
+      ...fila.diagnostico,
+      comparador: 3,
+      resultado: 'no_coincide',
+      campos: [
+        {
+          campo: 'tipoDocumento',
+          etiqueta: 'Tipo de documento',
+          enPoliza: 'Cédula de identidad',
+          enDocumento: null,
+          coincide: false,
+          estado: 'no_coincide',
+        },
+      ],
+    };
+    const llamadas = llamadasAnalizar(REF_V4).length;
+    const r = await svc.revisarConIa({ modo: 'completo' });
+    expect(r.motivos).toEqual({ cambio_comparador: 1 });
+    await svc.esperarAnalisisPendientes();
+    const nuevas = llamadasAnalizar(REF_V4).slice(llamadas);
+    expect(nuevas).toHaveLength(1);
+    expect(JSON.parse((nuevas[0] as any)[1].body).aceptaRif).toBe(true);
+    expect(req(id, 'cedula')).toMatchObject({ estado: 'validado' });
   });
 });

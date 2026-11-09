@@ -36,8 +36,16 @@ export type MotivoAnalisis =
  * anterior se vuelven a COMPARAR con lo ya extraído (sin llamar otra vez al OCR).
  * v2 (7-nov): comparación por rol del documento y posible error de lectura de un dígito.
  * v3 (7-nov): datos cambiados en el formulario (`ocrLeido` de la emisión vs documento vs póliza).
+ * v4 (9-nov): personas — la cédula se compara contra todas las personas naturales de la póliza
+ *   (titular, tomador V/E/P y asegurados, también los de la mesa técnica); con tomador J vale su RIF.
  */
-export const VERSION_COMPARADOR = 3;
+export const VERSION_COMPARADOR = 4;
+
+/**
+ * La v4 solo cambia contra quién se compara la cédula en personas: lo ya validado por la IA con la
+ * v3 no se vuelve a comparar (lo validado no se toca).
+ */
+const VERSION_COMPARADOR_VALIDADOS = 3;
 
 /** Persona de la póliza según su papel. */
 export type RolPersona = 'tomador' | 'asegurado' | 'beneficiario' | 'conductor';
@@ -115,6 +123,14 @@ export interface ContextoPoliza {
    * de Emisión), por requisito. Ausente en emisiones viejas.
    */
   ocrLeido?: Record<string, Record<string, unknown>>;
+  /** Producto del expediente (rcv | personas | patrimonial). */
+  producto?: string;
+  /**
+   * v4: personas de la póliza que no están en el snapshot del expediente (`funeral.asegurados` y
+   * la solicitud de la mesa técnica). Fuera de la huella: no reabren lo ya decidido; solo amplían
+   * contra quién se compara la cédula en personas.
+   */
+  adicionales?: PersonaPoliza[];
 }
 
 /** Confianza mínima para validar sin intervención humana. */
@@ -289,14 +305,21 @@ function lista(v: unknown): unknown[] {
  * Personas de la póliza con sus papeles: tomador, asegurado (titular), beneficiario y conductor
  * habitual. La misma cédula en varios papeles es una sola persona con varios roles.
  */
-export function contextoPoliza(exp: {
-  producto: string;
-  snapshot?: unknown;
-  aseguradoTipoDoc?: string | null;
-  aseguradoDocumento?: string | null;
-  aseguradoNombre?: string | null;
-  aseguradoApellido?: string | null;
-}): ContextoPoliza {
+export function contextoPoliza(
+  exp: {
+    producto: string;
+    snapshot?: unknown;
+    aseguradoTipoDoc?: string | null;
+    aseguradoDocumento?: string | null;
+    aseguradoNombre?: string | null;
+    aseguradoApellido?: string | null;
+  },
+  /**
+   * v4: otras fuentes con las personas de la póliza (snapshot de la mesa técnica, jsonData de la
+   * emisión). Solo se usan para la cédula en personas y no entran en la huella.
+   */
+  otrasFuentes: unknown[] = [],
+): ContextoPoliza {
   const snap = rec(exp.snapshot);
   const guardado = personaDe(
     {
@@ -352,11 +375,82 @@ export function contextoPoliza(exp: {
   }
   const veh = rec(snap.vehiculo);
   const ocrLeido = ocrLeidoDe(snap.ocrLeido);
+  const adicionales = personasAdicionales(snap, otrasFuentes, personas);
   return {
     personas,
     vehiculo: Object.keys(veh).length ? veh : null,
     ...(ocrLeido ? { ocrLeido } : {}),
+    producto: exp.producto,
+    ...(adicionales.length ? { adicionales } : {}),
   };
+}
+
+/**
+ * v4: personas de `funeral.asegurados` / `funeral.beneficiarios` del snapshot y de las otras fuentes
+ * (mesa técnica, jsonData: tomador, asegurado/titular, asegurados, beneficiarios y los de `funeral`)
+ * que no estén ya en la póliza. Los menores sin cédula (cédula del titular + correlativo) no cuentan.
+ */
+function personasAdicionales(
+  snap: Record<string, unknown>,
+  otrasFuentes: unknown[],
+  yaEstan: PersonaPoliza[],
+): PersonaPoliza[] {
+  const fuentes: [unknown, RolPersona][] = [];
+  const deFuneral = (f: Record<string, unknown>) => {
+    for (const a of lista(f.asegurados)) fuentes.push([a, 'asegurado']);
+    for (const b of lista(f.beneficiarios)) fuentes.push([b, 'beneficiario']);
+  };
+  deFuneral(rec(snap.funeral));
+  for (const fuente of otrasFuentes) {
+    for (const m of [rec(fuente), rec(rec(fuente).data)]) {
+      fuentes.push(
+        [m.tomador, 'tomador'],
+        [m.asegurado, 'asegurado'],
+        [m.titular, 'asegurado'],
+      );
+      deFuneral(m);
+      deFuneral(rec(m.funeral));
+    }
+  }
+  const out: PersonaPoliza[] = [];
+  for (const [v, rol] of fuentes) {
+    if (rec(v).sinCedula === true) continue;
+    const p = personaDe(v, rol);
+    if (!p?.documento) continue;
+    const igual = [...yaEstan, ...out].find((x) => x.documento === p.documento);
+    if (igual) {
+      // Solo se completan los papeles de las adicionales (las del snapshot van en la huella).
+      if (out.includes(igual) && !igual.roles.includes(rol))
+        igual.roles.push(rol);
+      continue;
+    }
+    out.push(p);
+  }
+  return out;
+}
+
+/** Todas las personas de la póliza: las del snapshot y las adicionales (v4). */
+function todasLasPersonas(ctx: ContextoPoliza): PersonaPoliza[] {
+  return [...ctx.personas, ...(ctx.adicionales ?? [])];
+}
+
+/** Tipo de documento de persona jurídica (empresa u organismo). */
+function esJuridico(tipoDoc?: string | null): boolean {
+  return ['J', 'G', 'C'].includes(String(tipoDoc ?? '').toUpperCase());
+}
+
+/** Tomador persona jurídica (J/G/C) de la póliza, si lo hay. */
+export function tomadorJuridico(ctx: ContextoPoliza): PersonaPoliza | null {
+  return (
+    todasLasPersonas(ctx).find(
+      (p) => p.roles.includes('tomador') && esJuridico(p.tipoDoc),
+    ) ?? null
+  );
+}
+
+/** v4: en personas, la cédula de la póliza puede ser de cualquiera de sus personas naturales. */
+function cedulaDePersonas(tipo: string, ctx: ContextoPoliza): boolean {
+  return tipo === 'cedula' && ctx.producto === 'personas';
 }
 
 /** Claves de `ocrLeido` (contrato v1.3). */
@@ -589,6 +683,19 @@ function textoRoles(roles: RolPersona[]): string {
   return `${roles.slice(0, -1).join(', ')} ni ${roles[roles.length - 1]}`;
 }
 
+/** Rótulos que a veces devuelve el OCR en lugar del dato (lectura fallida, no otra persona). */
+const ROTULOS_OCR = new Set([
+  'NOMBRE',
+  'NOMBRES',
+  'APELLIDO',
+  'APELLIDOS',
+  'NOMBRE APELLIDO',
+  'NOMBRES APELLIDOS',
+  'NULL',
+  'UNDEFINED',
+  'N A',
+]);
+
 /** Un solo dígito distinto (lectura dudosa del OCR) en un número de 6 o más dígitos. */
 function casiIgual(a: string, b: string): boolean {
   return (
@@ -645,7 +752,11 @@ function compararPersona(
     tipo === 'pasaporte' ? normSerial(p.documento ?? '') : (p.documento ?? '');
 
   // Personas a las que debe pertenecer el documento; si la póliza no las trae, la de respaldo.
-  const reglas = ROLES_DOCUMENTO[tipo] ?? ROLES_DOCUMENTO.cedula;
+  const todas = todasLasPersonas(ctx);
+  const enPersonas = cedulaDePersonas(tipo, ctx);
+  const reglas = enPersonas
+    ? { esperados: ['tomador', 'asegurado'] as RolPersona[], respaldo: [] }
+    : (ROLES_DOCUMENTO[tipo] ?? ROLES_DOCUMENTO.cedula);
   const conRol = (roles: RolPersona[]) => {
     const out: PersonaPoliza[] = [];
     for (const r of roles)
@@ -653,15 +764,39 @@ function compararPersona(
         if (p.documento && p.roles.includes(r) && !out.includes(p)) out.push(p);
     return out;
   };
-  let objetivos = conRol(reglas.esperados);
+  let objetivos: PersonaPoliza[];
   let respaldo: RolPersona | null = null;
-  if (!objetivos.length) {
-    for (const r of reglas.respaldo) {
-      const o = conRol([r]);
-      if (o.length) {
-        objetivos = o;
-        respaldo = r;
-        break;
+  /** v4 personas: aviso cuando no hay contra quién comparar (sin_certeza, nunca no_coincide). */
+  let sinComparar: string | null = null;
+  if (enPersonas) {
+    // Cédula en personas: vale la de cualquier persona natural de la póliza (titular, tomador
+    // V/E/P o asegurado). Con tomador J, el documento de identidad del tomador es su RIF.
+    const tomJ = tomadorJuridico(ctx);
+    const naturales = todas.filter(
+      // El asegurado guardado en el expediente puede ser el mismo tomador J (sin titular): las
+      // personas jurídicas nunca cuentan como naturales.
+      (p) =>
+        !!p.documento &&
+        !esJuridico(p.tipoDoc) &&
+        (p.roles.includes('asegurado') || p.roles.includes('tomador')),
+    );
+    if (tomJ && esJuridico(tipoOcr)) objetivos = [tomJ];
+    else objetivos = naturales;
+    if (!objetivos.length) {
+      sinComparar = tomJ
+        ? 'El tomador es una persona jurídica y la póliza no trae la cédula del titular ni de los asegurados para comparar.'
+        : null;
+    }
+  } else {
+    objetivos = conRol(reglas.esperados);
+    if (!objetivos.length) {
+      for (const r of reglas.respaldo) {
+        const o = conRol([r]);
+        if (o.length) {
+          objetivos = o;
+          respaldo = r;
+          break;
+        }
       }
     }
   }
@@ -669,18 +804,26 @@ function compararPersona(
   const rolDe = (p: PersonaPoliza) =>
     rolesValidos.find((r) => p.roles.includes(r)) ?? p.rol;
 
+  const igualA = (p: PersonaPoliza) =>
+    !!p.documento && documentosIguales(docDe(p), docOcr, conDv);
   const exacto = docOcr
-    ? (ctx.personas.find(
-        (p) => p.documento && documentosIguales(docDe(p), docOcr, conDv),
-      ) ?? null)
+    ? enPersonas
+      ? (objetivos.find(igualA) ?? todas.find(igualA) ?? null)
+      : (ctx.personas.find(igualA) ?? null)
     : null;
   const persona =
     exacto && objetivos.includes(exacto)
       ? exacto
-      : (objetivos[0] ??
-        ctx.personas.find((p) => p.documento) ??
-        ctx.personas[0] ??
-        null);
+      : enPersonas
+        ? // Sin coincidencia exacta: la que difiere en un dígito (posible error de lectura) o la
+          // primera; sin personas naturales no se compara contra el tomador J.
+          (objetivos.find((p) => casiIgual(docOcr, docDe(p))) ??
+          objetivos[0] ??
+          null)
+        : (objetivos[0] ??
+          ctx.personas.find((p) => p.documento) ??
+          ctx.personas[0] ??
+          null);
   const rol = persona ? rolDe(persona) : null;
 
   const campos: CampoDiagnostico[] = [];
@@ -765,9 +908,23 @@ function compararPersona(
     nombres.every((c) => c.coincide !== false);
   let aviso: string | null = null;
   let nota: string | null = null;
-  if (exacto && !objetivos.includes(exacto)) {
+  const sinTomador =
+    enPersonas && !todas.some((p) => p.roles.includes('tomador'));
+  // El OCR devolvió el rótulo del campo («nombre») en vez del dato: lectura fallida.
+  const rotulo = [
+    original(['nombre', 'nombres', 'razonSocial']),
+    original(['apellido', 'apellidos']),
+  ].some((v) => !!v && ROTULOS_OCR.has(normTexto(v)));
+  if (sinComparar) {
+    aviso = sinComparar;
+  } else if (rotulo) {
+    aviso =
+      'El OCR no leyó el nombre del documento (devolvió el rótulo del campo); hay que revisarlo.';
+  } else if (exacto && !objetivos.includes(exacto)) {
     // Es de otra persona de la póliza: no es un documento falso, pero tampoco el pedido.
-    aviso = `El documento corresponde al ${exacto.rol}, no al ${esperadoTexto}.`;
+    aviso = enPersonas
+      ? `El documento corresponde al ${exacto.rol}, no al titular, al tomador ni a un asegurado.`
+      : `El documento corresponde al ${exacto.rol}, no al ${esperadoTexto}.`;
   } else if (
     !exacto &&
     docCampo.coincide === false &&
@@ -784,6 +941,20 @@ function compararPersona(
     const sinRol = `La póliza no trae la cédula del ${esperadoTexto}; se comparó con la del ${respaldo}.`;
     if (docCampo.coincide === false) aviso = sinRol;
     else nota = sinRol;
+  } else if (sinTomador && !exacto && docCampo.coincide === false && rol) {
+    // Personas sin datos del tomador: la cédula puede ser la suya; no se afirma que no coincide.
+    aviso = `La póliza no trae la cédula del tomador; se comparó con la del ${rol}.`;
+  } else if (
+    enPersonas &&
+    tomadorJuridico(ctx) &&
+    !esJuridico(tipoOcr) &&
+    !exacto &&
+    docCampo.coincide === false
+  ) {
+    // Tomador empresa: la cédula o pasaporte puede ser del representante legal, que la póliza
+    // no trae. No coincide con nadie de la póliza, pero tampoco se afirma que sea ajena: revisar.
+    aviso =
+      'El tomador es una persona jurídica y el documento no coincide con el titular ni con los asegurados (puede ser del representante legal).';
   }
   const crudos: Crudos = {
     tipoDoc: { pol: persona?.tipoDoc ?? null, doc: tipoOcr ?? null },
@@ -1449,6 +1620,16 @@ export function diagnosticoVigente(r: {
     : null;
 }
 
+/** El OCR dijo que el archivo no era el documento pedido (p. ej. «parece ser un RIF»). */
+export function fueOtroTipoDeDocumento(d: unknown): boolean {
+  const r = rec(d);
+  return (
+    r.resultado === 'no_coincide' &&
+    Array.isArray(r.campos) &&
+    r.campos.some((c) => rec(c).campo === 'tipoDocumento')
+  );
+}
+
 /** v3: requisito observado porque un dato se cambió en el formulario respecto al OCR al emitir. */
 export function conDatosModificados(r: {
   estado: string;
@@ -1501,7 +1682,11 @@ export function motivoAnalisis(
     r.decision === 'ia'
   ) {
     if (!diag) return 'cambio_archivo';
-    if ((diag.comparador ?? 1) < VERSION_COMPARADOR) return 'cambio_comparador';
+    const vigente =
+      r.estado === 'validado'
+        ? VERSION_COMPARADOR_VALIDADOS
+        : VERSION_COMPARADOR;
+    if ((diag.comparador ?? 1) < vigente) return 'cambio_comparador';
     if (r.huellaPoliza !== huella) return 'cambio_poliza';
   }
   return null;
