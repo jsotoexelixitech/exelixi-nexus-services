@@ -680,11 +680,13 @@ describe('exposición: bandeja, detalle, indicadores y página pública', () => 
     });
   });
 
-  it('analizando: documentos recibidos que la IA aún no resuelve', async () => {
+  it('error técnico del OCR: cuenta en noLeidos, no en analizando', async () => {
     ocr.set(REF.cedula, { status: 503, body: { ok: false } });
     await crearRcv('P-32', { documentos: ['cedula'] });
     const ind = await svc.indicadores({});
-    expect(ind.analizando).toBe(1);
+    expect(ind.noLeidos).toBe(1);
+    expect(ind.analizando).toBe(0);
+    expect(ind.porValidar).toBe(1);
   });
 
   it('página pública: solo diagnostico.resultado y motivo sin datos de la póliza', async () => {

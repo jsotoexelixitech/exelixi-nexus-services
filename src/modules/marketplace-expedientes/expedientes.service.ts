@@ -323,6 +323,24 @@ export function areaDesdeFiltro(v: string): string {
   return '__ninguna__';
 }
 
+/** Rango de días desde/hasta (AAAA-MM-DD, hora Caracas, hasta inclusive); null sin fechas. */
+function rangoEmitida(
+  desde?: string,
+  hasta?: string,
+): { gte?: Date; lt?: Date } | null {
+  if (!desde && !hasta) return null;
+  return {
+    ...(desde ? { gte: new Date(`${desde}T04:00:00.000Z`) } : {}),
+    ...(hasta
+      ? {
+          lt: new Date(
+            new Date(`${hasta}T04:00:00.000Z`).getTime() + 86_400_000,
+          ),
+        }
+      : {}),
+  };
+}
+
 type ExpExcluible = Pick<
   Exp,
   'id' | 'empresaId' | 'cnpoliza' | 'aseguradoKey'
@@ -1270,18 +1288,8 @@ export class ExpedientesService {
     if (q.estadoDoc) where.estadoDocumental = q.estadoDoc;
     if (q.estadoPago) where.estadoPago = q.estadoPago;
     if (q.producto) where.producto = q.producto;
-    if (q.desde || q.hasta) {
-      where.emitidaEn = {
-        ...(q.desde ? { gte: new Date(`${q.desde}T04:00:00.000Z`) } : {}),
-        ...(q.hasta
-          ? {
-              lt: new Date(
-                new Date(`${q.hasta}T04:00:00.000Z`).getTime() + 86_400_000,
-              ),
-            }
-          : {}),
-      };
-    }
+    const rango = rangoEmitida(q.desde, q.hasta);
+    if (rango) where.emitidaEn = rango;
     const and: Prisma.MktExpedienteWhereInput[] = [];
     if (q.q) {
       const t = q.q;
@@ -1556,8 +1564,39 @@ export class ExpedientesService {
       (reqs.get(e.id) ?? []).some((r) => r.estado === estado);
     const automatica = config.validacion === 'automatica';
     const noEnviar = exps.filter((e) => estaExcluido(e, exclusiones)).length;
+    /** Documento recibido con archivo que la IA analiza (la decisión manual no se toca). */
+    const enIa = (r: Req) =>
+      r.estado === 'recibido' && !!r.ref && r.decision !== 'manual';
+    const errorTecnico = (r: Req) =>
+      diagnosticoVigente(r)?.resultado === 'error_tecnico';
+    const rango = rangoEmitida(q.desde, q.hasta);
+    const [descartadas, emisionesNexus] = await Promise.all([
+      prisma.mktExpediente.count({
+        where: { ...where, estadoDocumental: ESTADO_DESCARTADA },
+      }),
+      prisma.emision.count({ where: rango ? { createdAt: rango } : {} }),
+    ]);
+    const porArea = { canales: 0, productores: 0, sinDatos: 0 };
+    for (const e of exps) {
+      const g = grupoArea(e.area);
+      if (g === 'canal') porArea.canales++;
+      else if (g === 'productor') porArea.productores++;
+      else porArea.sinDatos++;
+    }
     return {
+      /** Modo de validación (el portal no muestra «Por validar» en automática). */
+      validacion: config.validacion,
       total: exps.length,
+      /** Descartadas (no pasaron por el OCR) con los mismos filtros de fecha y área: fuera del total. */
+      descartadas,
+      /**
+       * Filas de `emision` creadas en el mismo rango de fechas (hora Caracas; el monitor usa la
+       * misma fecha como `emitidaEn`), de todas las empresas como el monitor. No filtra área: la
+       * emisión no la guarda. Sin filtro de área: total + descartadas ≈ emisionesNexus.
+       */
+      emisionesNexus,
+      /** El mismo `total` por grupo visible: canal (incluye gestores), productor o sin datos de quién emitió. */
+      porArea,
       completos: exps.filter((e) => e.estadoDocumental === 'completo').length,
       incompletos: exps.filter((e) => e.estadoDocumental === 'incompleto')
         .length,
@@ -1589,13 +1628,16 @@ export class ExpedientesService {
             conDatosModificados(r),
         ),
       ).length,
-      /** Con documentos recibidos que la IA aún no resuelve (incluye reintentos por error técnico). */
+      /** Con documentos recibidos que la IA aún no resuelve (sin contar los de error técnico). */
       analizando: automatica
         ? exps.filter((e) =>
-            (reqs.get(e.id) ?? []).some(
-              (r) =>
-                r.estado === 'recibido' && !!r.ref && r.decision !== 'manual',
-            ),
+            (reqs.get(e.id) ?? []).some((r) => enIa(r) && !errorTecnico(r)),
+          ).length
+        : 0,
+      /** Con algún documento recibido que el OCR no pudo leer (error técnico; se reintenta solo). */
+      noLeidos: automatica
+        ? exps.filter((e) =>
+            (reqs.get(e.id) ?? []).some((r) => enIa(r) && errorTecnico(r)),
           ).length
         : 0,
       sinCorreo: exps.filter((e) => !emailValido(e.aseguradoEmail)).length,
