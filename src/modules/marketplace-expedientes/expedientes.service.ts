@@ -75,12 +75,14 @@ import {
   diagnosticoErrorTecnico,
   diagnosticoVigente,
   esperaReintentoMs,
+  fueOtroTipoDeDocumento,
   estadoPorDiagnostico,
   huellaPoliza,
   MotivoAnalisis,
   motivoAnalisis,
   motivoParaAsegurado,
   ocrLeidoDe,
+  tomadorJuridico,
   VERSION_COMPARADOR,
 } from './expedientes.ia';
 import {
@@ -133,9 +135,18 @@ function mensajeErrorOcr(err: unknown): string {
   return 'OCR no disponible.';
 }
 
-/** Cédula o RIF en el mismo documento solo en patrimoniales (igual que la emisión). */
-function aceptaRifEn(producto: string, tipo: string): boolean {
-  return producto === 'patrimonial' && tipo === 'cedula';
+/**
+ * Cédula o RIF en el mismo documento: patrimoniales (igual que la emisión) y, v4, personas con
+ * tomador persona jurídica (J/G/C): su documento de identidad es el RIF.
+ */
+function aceptaRifEn(
+  producto: string,
+  tipo: string,
+  ctx?: ContextoPoliza,
+): boolean {
+  if (tipo !== 'cedula') return false;
+  if (producto === 'patrimonial') return true;
+  return producto === 'personas' && !!ctx && !!tomadorJuridico(ctx);
 }
 
 type Exp = MktExpediente;
@@ -1888,6 +1899,7 @@ export class ExpedientesService {
       throw new AppError('No hay pólizas para este documento.', 409);
     const config = await this.getConfig();
     const principal = expedientes[0];
+    const ctxPrincipal = await this.contextoDe(principal);
 
     let ocrRes: OcrDocumentoResultado | null = null;
     let ocrDisponible = true;
@@ -1910,7 +1922,7 @@ export class ExpedientesService {
             documento: principal.aseguradoDocumento,
             empresaId: principal.empresaId,
             empresaNombre,
-            aceptaRif: aceptaRifEn(principal.producto, tipo),
+            aceptaRif: aceptaRifEn(principal.producto, tipo, ctxPrincipal),
           }),
         true,
       );
@@ -1994,7 +2006,7 @@ export class ExpedientesService {
       let completadoAhora = false;
       if (ocrDisponible && ref && this.iaActiva(config)) {
         // La lectura ya la hizo la carga: se compara contra la póliza sin otra llamada al OCR.
-        const ctx = contextoPoliza(exp);
+        const ctx = await this.contextoDe(exp);
         const diag = diagnosticar(tipo, ocrRes?.ocr, ctx, {
           motivoAnalisis: 'carga',
         });
@@ -2137,12 +2149,17 @@ export class ExpedientesService {
     const porId = new Map(exps.map((e) => [e.id, e]));
 
     const trabajos: Promise<void>[] = [];
+    const contextos = new Map<number, ContextoPoliza>();
     for (const r of reqs) {
       const exp = porId.get(r.expedienteId);
       if (!exp || !requisitosAplicables(exp.producto, config).includes(r.tipo))
         continue;
       resumen.revisados++;
-      const ctx = contextoPoliza(exp);
+      let ctx = contextos.get(exp.id);
+      if (!ctx) {
+        ctx = await this.contextoDe(exp);
+        contextos.set(exp.id, ctx);
+      }
       const motivo = motivoAnalisis(r, huellaPoliza(ctx), ahora);
       if (!motivo) {
         resumen.sinCambios++;
@@ -2178,9 +2195,18 @@ export class ExpedientesService {
       let refActual = r.ref;
       let hash: string | null = r.archivoHash ?? null;
       let lectura: OcrLectura | null | undefined;
+      const aceptaRif = aceptaRifEn(exp.producto, r.tipo, ctx);
+      // v4: el OCR lo rechazó por «parece ser un RIF» y ahora el RIF vale (tomador J): sin datos
+      // leídos que comparar, se vuelve a leer el mismo archivo aceptando RIF.
+      const releerConRif =
+        motivo === 'cambio_comparador' &&
+        aceptaRif &&
+        (!r.ocrDatos || typeof r.ocrDatos !== 'object') &&
+        fueOtroTipoDeDocumento(r.diagnostico);
       if (
         (motivo === 'cambio_poliza' || motivo === 'cambio_comparador') &&
-        r.analisisRef === r.ref
+        r.analisisRef === r.ref &&
+        !releerConRif
       ) {
         // Mismo archivo: se compara de nuevo lo ya leído, sin otra llamada al OCR.
         if (!r.ocrDatos || typeof r.ocrDatos !== 'object') {
@@ -2214,7 +2240,7 @@ export class ExpedientesService {
             analizarEnOcr({
               ref,
               tipo: r.tipo,
-              aceptaRif: aceptaRifEn(exp.producto, r.tipo),
+              aceptaRif,
             }),
           );
         try {
@@ -2249,6 +2275,38 @@ export class ExpedientesService {
     } finally {
       this.enAnalisis.delete(r.id);
     }
+  }
+
+  /**
+   * Contexto de la póliza para la IA. v4: en personas suma las personas de la solicitud en la mesa
+   * técnica (titular, asegurados) y del jsonData de la emisión, que el snapshot del expediente no
+   * trae cuando la póliza llegó sin bloque `expediente` (conciliación). Solo lectura; si falla, se
+   * compara con lo del expediente como antes.
+   */
+  private async contextoDe(exp: Exp): Promise<ContextoPoliza> {
+    if (exp.producto !== 'personas') return contextoPoliza(exp);
+    const fuentes: unknown[] = [];
+    try {
+      const sub = await prisma.funeralSubmission.findFirst({
+        where: { empresaId: exp.empresaId, cnpoliza: exp.cnpoliza },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (sub?.snapshotJson) fuentes.push(sub.snapshotJson);
+    } catch {
+      /* sin mesa técnica */
+    }
+    try {
+      if (exp.emisionId) {
+        const em = await prisma.emision.findUnique({
+          where: { id: exp.emisionId },
+          select: { jsonData: true },
+        });
+        if (em?.jsonData) fuentes.push(em.jsonData);
+      }
+    } catch {
+      /* sin emisión */
+    }
+    return contextoPoliza(exp, fuentes);
   }
 
   /**
