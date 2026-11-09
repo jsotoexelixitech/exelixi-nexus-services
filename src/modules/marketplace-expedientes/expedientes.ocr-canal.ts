@@ -16,8 +16,16 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
-import { catalogoCanales, type CanalCatalogo } from './expedientes.canales';
-import type { OcrPorCanalUpdate, ProductoOcr } from './expedientes.schema';
+import {
+  catalogoCanales,
+  type CanalCatalogo,
+  type PuntoCatalogo,
+} from './expedientes.canales';
+import type {
+  OcrPorCanalUpdate,
+  ProductoOcr,
+  PuntosCanalQuery,
+} from './expedientes.schema';
 
 const MODULO = 'ocr';
 export const EVENTO_OCR_POR_CANAL = 'ocr_por_canal_actualizado';
@@ -31,6 +39,16 @@ export interface CanalOcr {
   /** false: está en la config del OCR pero ya no en el catálogo de canales activos. */
   enCatalogo: boolean;
   ocrOpcional: boolean;
+  /** Puntos de comercialización activos del canal (la lista va aparte, por canal). */
+  puntos: number;
+}
+
+export interface PuntosDeCanal {
+  canal: string;
+  total: number;
+  pagina: number;
+  porPagina: number;
+  puntos: PuntoCatalogo[];
 }
 
 export interface CambioOcrPorCanal {
@@ -115,7 +133,10 @@ async function empresaNombre(empresaId: number): Promise<string | null> {
 }
 
 /** Sin catálogo no se muestra ni se guarda nada (un catálogo vacío también es una falla). */
-async function canalesActivos(mensaje: string): Promise<CanalCatalogo[]> {
+async function canalesActivos(mensaje: string): Promise<{
+  canales: CanalCatalogo[];
+  puntos: Map<string, PuntoCatalogo[]>;
+}> {
   const cat = await catalogoCanales();
   const canales =
     cat?.canales ??
@@ -124,7 +145,43 @@ async function canalesActivos(mensaje: string): Promise<CanalCatalogo[]> {
       nombre,
     }));
   if (!cat || canales.length === 0) throw new AppError(mensaje, 502);
-  return canales;
+  return { canales, puntos: cat.puntos ?? new Map() };
+}
+
+const MENSAJE_SIN_CATALOGO =
+  'No se pudo consultar el catálogo de canales (nest-api). Intente de nuevo en unos minutos.';
+
+/**
+ * Puntos de comercialización de un canal, paginados (hay canales con miles). Solo lectura:
+ * siguen la configuración del canal; filtro opcional por código o nombre.
+ */
+export async function puntosDeCanal(
+  q: PuntosCanalQuery,
+): Promise<PuntosDeCanal> {
+  const { canales, puntos } = await canalesActivos(MENSAJE_SIN_CATALOGO);
+  if (!canales.some((c) => c.codigo === q.canal)) {
+    throw new AppError(
+      'Ese canal no está en el catálogo de canales activos.',
+      404,
+    );
+  }
+  const filtro = q.q?.toLocaleLowerCase('es') ?? '';
+  const todos = puntos.get(q.canal) ?? [];
+  const lista = filtro
+    ? todos.filter(
+        (p) =>
+          p.codigo.toLocaleLowerCase('es').includes(filtro) ||
+          p.nombre.toLocaleLowerCase('es').includes(filtro),
+      )
+    : todos;
+  const inicio = (q.pagina - 1) * q.porPagina;
+  return {
+    canal: q.canal,
+    total: lista.length,
+    pagina: q.pagina,
+    porPagina: q.porPagina,
+    puntos: lista.slice(inicio, inicio + q.porPagina),
+  };
 }
 
 type Db = Pick<typeof prisma, 'productConfig' | 'mktExpedienteEvento'>;
@@ -180,7 +237,7 @@ function armarVista(
   empresaId: number,
   nombre: string | null,
   producto: ProductoOcr,
-  catalogo: CanalCatalogo[],
+  { canales: catalogo, puntos }: Awaited<ReturnType<typeof canalesActivos>>,
   opcionales: string[],
   gestores: number,
   cambios: CambioOcrPorCanal[],
@@ -198,6 +255,7 @@ function armarVista(
         nombre: c.nombre || null,
         enCatalogo: true,
         ocrOpcional: marcados.has(c.codigo),
+        puntos: puntos.get(c.codigo)?.length ?? 0,
       })),
       ...opcionales
         .filter((c) => !enCatalogo.has(c))
@@ -206,6 +264,7 @@ function armarVista(
           nombre: null,
           enCatalogo: false,
           ocrOpcional: true,
+          puntos: 0,
         })),
     ],
     opcionales,
@@ -219,9 +278,7 @@ export async function obtenerOcrPorCanal(
   producto: ProductoOcr,
 ): Promise<OcrPorCanalVista> {
   const nombre = await empresaNombre(empresaId);
-  const catalogo = await canalesActivos(
-    'No se pudo consultar el catálogo de canales (nest-api). Intente de nuevo en unos minutos.',
-  );
+  const catalogo = await canalesActivos(MENSAJE_SIN_CATALOGO);
   const actual = await leerConfigOcr(prisma, empresaId, producto);
   return armarVista(
     empresaId,
@@ -249,7 +306,7 @@ export async function guardarOcrPorCanal(
   const catalogo = await canalesActivos(
     'No se pudo consultar el catálogo de canales (nest-api). No se guardó ningún cambio; intente de nuevo en unos minutos.',
   );
-  const activos = new Set(catalogo.map((c) => c.codigo));
+  const activos = new Set(catalogo.canales.map((c) => c.codigo));
   const pedidos = codigos(body.canales);
 
   const r = await prisma.$transaction(async (tx) => {

@@ -207,6 +207,16 @@ export const ocrPorCanalQuerySchema = z.object({
   producto: z.enum(PRODUCTOS_OCR).default('rcv'),
 });
 
+/** Puntos de comercialización de un canal (lista bajo demanda, paginada). */
+export const puntosCanalQuerySchema = z.object({
+  canal: codigoCanal,
+  pagina: z.coerce.number().int().min(1).max(10_000).default(1),
+  porPagina: z.coerce.number().int().min(1).max(200).default(50),
+  q: z.string().trim().max(60).optional(),
+});
+
+export type PuntosCanalQuery = z.infer<typeof puntosCanalQuerySchema>;
+
 export const ocrPorCanalUpdateSchema = z.object({
   producto: z.enum(PRODUCTOS_OCR),
   /** Lista completa de canales con OCR OPCIONAL (el resto queda obligatorio). */

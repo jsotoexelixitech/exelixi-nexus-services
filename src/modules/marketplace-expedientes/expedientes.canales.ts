@@ -14,6 +14,12 @@ export interface CanalCatalogo {
   nombre: string;
 }
 
+/** Punto de comercialización (magestor) de un canal: sigue la configuración del canal. */
+export interface PuntoCatalogo {
+  codigo: string;
+  nombre: string;
+}
+
 export interface CatalogoCanales {
   /** ccanalalt → nombre del canal. */
   nombres: Map<string, string>;
@@ -21,6 +27,12 @@ export interface CatalogoCanales {
   gestorCanal: Map<string, string>;
   /** Canales en el orden de nest-api (también los que no traen nombre). */
   canales?: CanalCatalogo[];
+  /**
+   * ccanalalt (mismo formato que `canales[].codigo`) → puntos activos de ese canal, ordenados
+   * por nombre. nest-api ya resuelve el canal de cada punto (columna o prefijo del código) y
+   * deja fuera los de canales inactivos; los gestores sin canal (productores) no entran.
+   */
+  puntos?: Map<string, PuntoCatalogo[]>;
 }
 
 const TTL_MS = 10 * 60 * 1000;
@@ -43,7 +55,8 @@ export async function catalogoCanales(
     };
     if (res.ok && body.data) {
       const canales: CanalCatalogo[] = [];
-      valor = { nombres: new Map(), gestorCanal: new Map(), canales };
+      const puntos = new Map<string, PuntoCatalogo[]>();
+      valor = { nombres: new Map(), gestorCanal: new Map(), canales, puntos };
       for (const raw of body.data.canales ?? []) {
         const c = (raw ?? {}) as Record<string, unknown>;
         const cod = normalizarCodigoActor(
@@ -66,6 +79,27 @@ export async function catalogoCanales(
           g.ccanalalt == null ? null : String(g.ccanalalt),
         );
         if (gestor && canal) valor.gestorCanal.set(gestor, canal);
+        const codigoPunto = g.cgestor == null ? '' : String(g.cgestor).trim();
+        const codigoCanal =
+          g.ccanalalt == null ? '' : String(g.ccanalalt).trim();
+        if (codigoPunto && codigoCanal) {
+          const lista = puntos.get(codigoCanal) ?? [];
+          lista.push({
+            codigo: codigoPunto.slice(0, 64),
+            nombre:
+              typeof g.xgestor === 'string'
+                ? g.xgestor.trim().slice(0, 120)
+                : '',
+          });
+          puntos.set(codigoCanal, lista);
+        }
+      }
+      for (const lista of puntos.values()) {
+        lista.sort(
+          (a, b) =>
+            a.nombre.localeCompare(b.nombre, 'es') ||
+            a.codigo.localeCompare(b.codigo, 'es'),
+        );
       }
     } else {
       logger.warn(`[expedientes] catálogo de canales: HTTP ${res.status}`);

@@ -33,12 +33,14 @@ import {
   observarSchema,
   ocrPorCanalQuerySchema,
   ocrPorCanalUpdateSchema,
+  puntosCanalQuerySchema,
   validarSchema,
 } from './expedientes.schema';
 import {
   empresaOcrPorCanal,
   guardarOcrPorCanal,
   obtenerOcrPorCanal,
+  puntosDeCanal,
 } from './expedientes.ocr-canal';
 import { ejecutarJob } from './expedientes.jobs';
 import { leerMultipart } from './expedientes.files';
@@ -275,6 +277,18 @@ router.get(
   h(async (req, res) => {
     const q = ocrPorCanalQuerySchema.parse(req.query);
     return ok(res, await obtenerOcrPorCanal(empresaOcrDe(req), q.producto));
+  }),
+);
+
+/** Puntos de comercialización de un canal (solo lectura; siguen la config del canal). */
+router.get(
+  '/ocr-por-canal/puntos',
+  internoLimiter,
+  sesion,
+  admin,
+  h(async (req, res) => {
+    const q = puntosCanalQuerySchema.parse(req.query);
+    return ok(res, await puntosDeCanal(q));
   }),
 );
 

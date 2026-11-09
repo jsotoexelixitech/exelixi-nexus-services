@@ -27,7 +27,7 @@ vi.mock('../portal/portal-admin.middleware', () => ({
 
 import prisma from '../../config/prisma';
 import router from './expedientes.routes';
-import { _resetCatalogoCanales } from './expedientes.canales';
+import { _resetCatalogoCanales, catalogoCanales } from './expedientes.canales';
 import { EVENTO_OCR_POR_CANAL } from './expedientes.ocr-canal';
 import { getConfig } from '../config/product-config.service';
 
@@ -90,6 +90,16 @@ beforeEach(async () => {
       { codigo: '2', nombre: 'Canal Dos' },
       { codigo: '3', nombre: '' },
     ],
+    puntos: new Map([
+      [
+        '1',
+        [
+          { codigo: '215-28', nombre: 'Punto A' },
+          { codigo: '1-1195-4215', nombre: 'Punto B' },
+          { codigo: '1-1195-4216', nombre: 'Punto C' },
+        ],
+      ],
+    ]),
   });
   await db.empresa.create({ data: { id: 7, nombre: 'La Mundial' } });
   await db.empresa.create({ data: { id: 8, nombre: 'Otra empresa' } });
@@ -133,19 +143,79 @@ describe('GET /api/expedientes/ocr-por-canal', () => {
       gestoresConfigurados: 2,
     });
     expect(d.canales).toEqual([
-      { codigo: '1', nombre: 'Canal Uno', enCatalogo: true, ocrOpcional: true },
+      {
+        codigo: '1',
+        nombre: 'Canal Uno',
+        enCatalogo: true,
+        ocrOpcional: true,
+        puntos: 3,
+      },
       {
         codigo: '2',
         nombre: 'Canal Dos',
         enCatalogo: true,
         ocrOpcional: false,
+        puntos: 0,
       },
-      { codigo: '3', nombre: null, enCatalogo: true, ocrOpcional: false },
+      {
+        codigo: '3',
+        nombre: null,
+        enCatalogo: true,
+        ocrOpcional: false,
+        puntos: 0,
+      },
       // Configurado en el OCR pero ya no activo: se muestra para no perderlo.
-      { codigo: '99', nombre: null, enCatalogo: false, ocrOpcional: true },
+      {
+        codigo: '99',
+        nombre: null,
+        enCatalogo: false,
+        ocrOpcional: true,
+        puntos: 0,
+      },
     ]);
-    // Los gestores no se exponen en el monitor.
+    // La vista general solo trae conteos: los puntos van bajo demanda por canal.
     expect(JSON.stringify(d)).not.toContain('215-28');
+  });
+
+  it('puntos de un canal: paginados, con filtro y solo administradores', async () => {
+    const P = `${URL}/puntos`;
+    const r = await request(app).get(`${P}?canal=1&porPagina=2`).set(ADMIN);
+    expect(r.status).toBe(200);
+    expect(r.body.data).toEqual({
+      canal: '1',
+      total: 3,
+      pagina: 1,
+      porPagina: 2,
+      puntos: [
+        { codigo: '215-28', nombre: 'Punto A' },
+        { codigo: '1-1195-4215', nombre: 'Punto B' },
+      ],
+    });
+    const p2 = await request(app)
+      .get(`${P}?canal=1&porPagina=2&pagina=2`)
+      .set(ADMIN);
+    expect(p2.body.data.puntos).toEqual([
+      { codigo: '1-1195-4216', nombre: 'Punto C' },
+    ]);
+    const f = await request(app).get(`${P}?canal=1&q=4216`).set(ADMIN);
+    expect(f.body.data.total).toBe(1);
+    const vacio = await request(app).get(`${P}?canal=2`).set(ADMIN);
+    expect(vacio.body.data).toMatchObject({ total: 0, puntos: [] });
+    expect((await request(app).get(`${P}?canal=77`).set(ADMIN)).status).toBe(
+      404,
+    );
+    expect((await request(app).get(P).set(ADMIN)).status).toBe(400);
+    expect(
+      (
+        await request(app)
+          .get(`${P}?canal=1`)
+          .set({ Authorization: 'Bearer x' })
+      ).status,
+    ).toBe(403);
+    _resetCatalogoCanales(null);
+    expect((await request(app).get(`${P}?canal=1`).set(ADMIN)).status).toBe(
+      502,
+    );
   });
 
   it('el producto por defecto es RCV y cada producto tiene su propia config', async () => {
@@ -167,6 +237,43 @@ describe('GET /api/expedientes/ocr-por-canal', () => {
     const r = await request(app).get(URL).set(ADMIN);
     expect(r.status).toBe(502);
     expect(r.body.message).toMatch(/catálogo de canales/);
+  });
+});
+
+describe('catálogo: puntos por canal', () => {
+  it('agrupa los puntos por el canal que resuelve nest-api; sin canal (productores) no entran', async () => {
+    _resetCatalogoCanales();
+    process.env.NEST_API_KEY = 'k';
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          canales: [{ ccanalalt: 215, xcanalalt: 'Bitácora' }],
+          gestores: [
+            { cgestor: '215-2-9', xgestor: 'Zeta', ccanalalt: 215 },
+            { cgestor: '215-1195-4215 ', xgestor: ' Alfa ', ccanalalt: 215 },
+            {
+              cgestor: '80080-1159-3002',
+              xgestor: 'Productor',
+              ccanalalt: null,
+            },
+          ],
+        },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const cat = await catalogoCanales();
+      expect(cat?.puntos?.get('215')).toEqual([
+        { codigo: '215-1195-4215', nombre: 'Alfa' },
+        { codigo: '215-2-9', nombre: 'Zeta' },
+      ]);
+      expect(cat?.puntos?.size).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.NEST_API_KEY;
+    }
   });
 });
 
