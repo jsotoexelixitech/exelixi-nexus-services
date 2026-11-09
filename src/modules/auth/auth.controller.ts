@@ -417,6 +417,68 @@ export class AuthController {
       }
       const metadata = metaParsed.data;
 
+      // Monitor de expedientes desde el menú de Sis2000: mismo pase que el marketplace, pero
+      // entra directo a /monitor-expedientes. No exige canal/productor (usuarios internos);
+      // exige estar en EXPEDIENTES_USUARIOS.
+      if (target === 'monitor-expedientes') {
+        if (!apiKey) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'El monitor de expedientes se abre desde Sis2000 con x-api-key.',
+          });
+        }
+        const { expedientesEnabled } =
+          await import('../marketplace-expedientes/expedientes.env');
+        if (!expedientesEnabled()) {
+          return res.status(404).json({
+            success: false,
+            message: 'El monitor de expedientes no está disponible.',
+          });
+        }
+        const { identidadPermitida, MENSAJE_SIN_ACCESO_MONITOR } =
+          await import('../marketplace-expedientes/expedientes.usuarios');
+        const identidades = [
+          metadata.xlogin,
+          metadata.xusuario,
+          metadata.email,
+        ];
+        if (!identidadPermitida(identidades)) {
+          logger.warn(
+            `ssoDelegate monitor-expedientes rechazado empresa=${empresaId} xlogin=${metadata.xlogin ?? ''}`,
+          );
+          return res.status(403).json({
+            success: false,
+            message: MENSAJE_SIN_ACCESO_MONITOR,
+          });
+        }
+        const portalUrl = process.env.PORTAL_PUBLIC_URL?.trim();
+        if (!portalUrl) {
+          return res.status(500).json({
+            success: false,
+            message:
+              'Monitor no configurado: defina PORTAL_PUBLIC_URL en nexus-api.',
+          });
+        }
+        const { generatePortalSsoToken } =
+          await import('../../utils/tenant-token');
+        const portalToken = generatePortalSsoToken(
+          empresaId,
+          metadata,
+          'monitor-expedientes',
+        );
+        const redirectUrl = `${portalUrl.replace(/\/+$/, '')}/sso?nexus_token=${portalToken}&next=/monitor-expedientes`;
+        logger.info(
+          `ssoDelegate monitor-expedientes empresa=${empresaId} xlogin=${metadata.xlogin ?? ''}`,
+        );
+        return res.json({
+          success: true,
+          redirect_url: redirectUrl,
+          empresa: empresaNombre,
+          modulo: 'Monitor de expedientes',
+        });
+      }
+
       // Entrada al marketplace del portal desde el menú de Sis2000: no abre un módulo,
       // devuelve la URL del portal con un pase de un solo uso (sin pantalla de login).
       if (target === 'marketplace') {

@@ -42,6 +42,7 @@ beforeEach(() => {
   process.env.EXPEDIENTES_ENABLED = 'true';
   delete process.env.EXPEDIENTES_ENTORNO;
   delete process.env.EXPEDIENTES_ACCESO_LIBRE;
+  delete process.env.EXPEDIENTES_USUARIOS;
   process.env.NODE_ENV = 'test';
   vi.mocked(logger.info).mockClear();
 });
@@ -114,6 +115,8 @@ describe('rutas /api/expedientes', () => {
     expect(ok.status).toBe(200);
     expect(ok.body.data.resumen.conciliacion.creadas).toBe(1);
 
+    // La lista de acceso deja pasar la sesión: lo que se prueba es el bloqueo de jobs.
+    process.env.EXPEDIENTES_USUARIOS = 'op@test';
     process.env.EXPEDIENTES_ENTORNO = 'produccion';
     const prod = await request(app)
       .post('/api/expedientes/jobs/conciliacion/ejecutar')

@@ -2,6 +2,9 @@
  * /api/expedientes — Monitor de expedientes Marketplace.
  * Interno: sesión del portal (Bearer, mismo esquema que /api/portal/*).
  * Admin (config, exclusiones, validar, jobs): requirePortalAdmin.
+ * Todas las rutas internas exigen además la lista de acceso EXPEDIENTES_USUARIOS
+ * (vacía = cerrado en producción; ver expedientes.usuarios.ts). GET /acceso informa si la
+ * sesión entra, para que el portal oculte el monitor a quien no está en la lista.
  * Con EXPEDIENTES_ENABLED apagado todas las rutas responden 404.
  * QA con EXPEDIENTES_ACCESO_LIBRE (nunca en producción): sin Authorization, todas las rutas
  * internas entran como administrador ficticio (actor `qa-acceso-libre`). Con sesión real,
@@ -18,7 +21,10 @@ import {
   expedientesAccesoLibre,
   expedientesEnabled,
   expedientesJobsManualPermitido,
+  MENSAJE_OCR_CANAL_SOLO_LECTURA,
+  ocrCanalEscrituraHabilitada,
 } from './expedientes.env';
+import { requireListaMonitor, sesionPermitida } from './expedientes.usuarios';
 import { expedientesService as svc } from './expedientes.service';
 import {
   actoresQuerySchema,
@@ -112,18 +118,26 @@ type ExpedientesRequest = AuthRequest & { accesoLibre?: boolean };
 /**
  * Sesión del portal. En QA con acceso libre, una petición SIN Authorization entra como
  * administrador ficticio; si trae Authorization se valida la sesión real como siempre.
+ * Con `lista` (todas las rutas internas), la sesión real debe estar en EXPEDIENTES_USUARIOS.
  */
-function sesion(req: Request, res: Response, next: NextFunction) {
-  if (!req.headers.authorization && expedientesAccesoLibre()) {
-    (req as ExpedientesRequest).accesoLibre = true;
-    // Solo método y ruta (ids internos): sin query, sin datos personales.
-    logger.info(
-      `[expedientes] acceso libre QA sin sesión: ${req.method} ${req.baseUrl}${req.path}`,
+function sesionBase(lista: boolean) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.headers.authorization && expedientesAccesoLibre()) {
+      (req as ExpedientesRequest).accesoLibre = true;
+      // Solo método y ruta (ids internos): sin query, sin datos personales.
+      logger.info(
+        `[expedientes] acceso libre QA sin sesión: ${req.method} ${req.baseUrl}${req.path}`,
+      );
+      return next();
+    }
+    return authenticate(req as AuthRequest, res, () =>
+      lista ? requireListaMonitor(req as AuthRequest, res, next) : next(),
     );
-    return next();
-  }
-  return authenticate(req as AuthRequest, res, next);
+  };
 }
+
+const sesion = sesionBase(true);
+const sesionSinLista = sesionBase(false);
 
 function admin(req: Request, res: Response, next: NextFunction) {
   if ((req as ExpedientesRequest).accesoLibre) return next();
@@ -204,7 +218,22 @@ router.post(
   }),
 );
 
-// ─── Lectura (cualquier sesión del portal) ────────────────────────────────
+// ─── Acceso (el portal decide si muestra el monitor) ───────────────────────
+
+router.get(
+  '/acceso',
+  internoLimiter,
+  sesionSinLista,
+  h(async (req, res) => {
+    const libre = (req as ExpedientesRequest).accesoLibre === true;
+    return ok(res, {
+      acceso: libre || sesionPermitida(req.user),
+      ocrPorCanalEscritura: ocrCanalEscrituraHabilitada(),
+    });
+  }),
+);
+
+// ─── Lectura (sesión del portal en la lista EXPEDIENTES_USUARIOS) ──────────
 
 router.get(
   '/',
@@ -276,7 +305,11 @@ router.get(
   admin,
   h(async (req, res) => {
     const q = ocrPorCanalQuerySchema.parse(req.query);
-    return ok(res, await obtenerOcrPorCanal(empresaOcrDe(req), q.producto));
+    const vista = await obtenerOcrPorCanal(empresaOcrDe(req), q.producto);
+    return ok(res, {
+      ...vista,
+      escrituraHabilitada: ocrCanalEscrituraHabilitada(),
+    });
   }),
 );
 
@@ -298,6 +331,9 @@ router.put(
   sesion,
   admin,
   h(async (req, res) => {
+    // Cambia si el OCR es obligatorio en la emisión: solo con la variable explícita.
+    if (!ocrCanalEscrituraHabilitada())
+      return fail(res, 403, MENSAJE_OCR_CANAL_SOLO_LECTURA);
     const body = ocrPorCanalUpdateSchema.parse(req.body ?? {});
     return ok(
       res,

@@ -7,6 +7,10 @@ import logger from '../../utils/logger';
 import { encrypt } from '../../utils/crypto';
 import { verifyPortalSsoToken } from '../../utils/tenant-token';
 import { SIS2000_PORTAL_EMAIL_DOMAIN } from './portal-sis2000-login.service';
+import {
+  identidadPermitida,
+  MENSAJE_SIN_ACCESO_MONITOR,
+} from '../marketplace-expedientes/expedientes.usuarios';
 
 /** Pases ya canjeados (jti → expiración ms). Un pase sirve una sola vez. */
 const usedPasses = new Map<string, number>();
@@ -75,11 +79,20 @@ export async function startPortalSsoSession(nexusToken: string) {
   }
 
   const m = pass.metadata ?? {};
+  // Entrada directa al monitor de expedientes: usuarios internos que pueden no tener
+  // canal/productor; solo si están en EXPEDIENTES_USUARIOS (también se revisa en sso-delegate).
+  const monitor = pass.destino === 'monitor-expedientes';
+  if (
+    monitor &&
+    !identidadPermitida([str(m.xlogin), str(m.xusuario), str(m.email)])
+  ) {
+    throw new AppError(MENSAJE_SIN_ACCESO_MONITOR, 403);
+  }
   const ccanalaltIn = str(m.ccanalalt_in) || str(m.ccanalalt);
   const centidad = (str(m.centidad) || (ccanalaltIn ? 'C' : 'P')).toUpperCase();
   const citem =
     str(m.citem) || (centidad === 'C' ? ccanalaltIn : str(m.cproductor));
-  if (!citem) {
+  if (!citem && !monitor) {
     throw new AppError('Falta el canal o productor del usuario.', 400);
   }
   const cusuario = str(m.cusuario);
@@ -87,9 +100,11 @@ export async function startPortalSsoSession(nexusToken: string) {
   const xlogin = str(m.xlogin);
 
   const identity = xlogin || (cusuario ? `u${cusuario}` : 'canal');
-  const email = `sso.${slug(identity)}.${slug(centidad + citem)}${
-    cgestor ? `.${slug(cgestor)}` : ''
-  }@${SIS2000_PORTAL_EMAIL_DOMAIN}`;
+  const email = citem
+    ? `sso.${slug(identity)}.${slug(centidad + citem)}${
+        cgestor ? `.${slug(cgestor)}` : ''
+      }@${SIS2000_PORTAL_EMAIL_DOMAIN}`
+    : `sso.${slug(identity)}.monitor@${SIS2000_PORTAL_EMAIL_DOMAIN}`;
   const nombre = (
     str(m.xusuario) ||
     xlogin ||
@@ -131,11 +146,14 @@ export async function startPortalSsoSession(nexusToken: string) {
     ccanalaltIn: ccanalaltIn || (centidad === 'C' ? citem : null),
     cscanalaltIn: str(m.cscanalalt_in) || str(m.cscanalalt) || null,
   };
-  await prisma.usuarioPortalPerfil.upsert({
-    where: { usuarioId: user.id },
-    create: { usuarioId: user.id, ...perfil },
-    update: perfil,
-  });
+  // Sin canal (entrada solo al monitor) no se guarda perfil de emisión.
+  if (citem) {
+    await prisma.usuarioPortalPerfil.upsert({
+      where: { usuarioId: user.id },
+      create: { usuarioId: user.id, ...perfil },
+      update: perfil,
+    });
+  }
 
   const role = await prisma.role.findUnique({ where: { id: user.roleId } });
   const rawToken = jwt.sign(
@@ -144,6 +162,10 @@ export async function startPortalSsoSession(nexusToken: string) {
       email: user.email,
       empresaId: user.empresaId,
       roleId: user.roleId,
+      // Identidad Sis2000 para la lista de acceso del monitor (EXPEDIENTES_USUARIOS).
+      sisXlogin: xlogin || null,
+      sisXusuario: str(m.xusuario) || null,
+      sisEmail: str(m.email) || null,
     },
     process.env.JWT_SECRET || 'secret',
     { expiresIn: '8h' },

@@ -78,6 +78,7 @@ beforeEach(async () => {
   delete process.env.EXPEDIENTES_ENTORNO;
   delete process.env.EXPEDIENTES_ACCESO_LIBRE;
   delete process.env.PORTAL_SIS2000_EMPRESA_ID;
+  process.env.EXPEDIENTES_OCR_CANAL_ESCRITURA = 'true';
   process.env.NODE_ENV = 'test';
   _resetCatalogoCanales({
     nombres: new Map([

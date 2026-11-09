@@ -110,3 +110,14 @@ export function nestMailConfig(): { url: string; apiKey: string } {
     apiKey: process.env.NEST_API_KEY || process.env.NEST_SERVICE_API_KEY || '',
   };
 }
+
+/**
+ * «OCR por canal» escribe product_config.ocrOpcional.canales, que decide si el OCR es
+ * obligatorio en la emisión. Solo lectura salvo EXPEDIENTES_OCR_CANAL_ESCRITURA=true explícito.
+ */
+export function ocrCanalEscrituraHabilitada(): boolean {
+  return flag('EXPEDIENTES_OCR_CANAL_ESCRITURA');
+}
+
+export const MENSAJE_OCR_CANAL_SOLO_LECTURA =
+  'La configuración de OCR por canal está en solo lectura en este ambiente. Los cambios se solicitan al equipo de Exélixi.';
