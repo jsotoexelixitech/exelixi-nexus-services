@@ -41,7 +41,6 @@ import {
   requisitosAplicables,
   SIN_IDENTIFICAR,
 } from './expedientes.domain';
-import { publicBaseUrl } from './expedientes.env';
 import { conDatosModificados, diagnosticoVigente } from './expedientes.ia';
 import { estaExcluido, nombreActorDeSnapshot } from './expedientes.service';
 
@@ -290,7 +289,7 @@ export function observacionCorta(
     case 'faltanDocumentos':
       return recortar(textoFaltan, 120);
     default:
-      principal = 'Revisar en el monitor';
+      principal = 'Revisar el expediente';
   }
   const extra = textoFaltan
     ? `; ${textoFaltan.charAt(0).toLowerCase()}${textoFaltan.slice(1)}`
@@ -624,7 +623,6 @@ export async function armarReporteDiario(
   ]);
 
   const { hora } = caracasParts(ahora);
-  const base = publicBaseUrl();
   return {
     grupo,
     areas: rotuloGrupo(grupo, config.alcance),
@@ -673,6 +671,7 @@ export async function armarReporteDiario(
       excluidos: cuenta('excluido'),
     },
     tecnicos: { documentosNoLeidos, fallasTecnicas },
-    enlace: base ? `${base}/monitor-expedientes?tab=incompletos` : null,
+    // El correo no remite a ninguna pantalla (solo la ven Luis, Yennifer y el usuario).
+    enlace: null,
   };
 }

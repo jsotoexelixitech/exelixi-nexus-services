@@ -576,9 +576,6 @@ export function correoResumenNocturno(r: ReporteDiario): BrandedContent {
         value: n(r.tecnicos.documentosNoLeidos + r.tecnicos.fallasTecnicas),
       },
     ],
-    ...(r.enlace ? { ctaLabel: 'Ver detalle', ctaUrl: r.enlace } : {}),
-    extraNote:
-      'Detalle de la emisión incompleta del día en el monitor (requiere sesión).',
     reporte: datosReporteDiario(subject, r),
   };
 }

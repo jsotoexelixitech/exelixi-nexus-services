@@ -347,9 +347,7 @@ describe('reporte nocturno: listado de incompletas de hoy', () => {
       sinCorreo: 1,
       excluidos: 1,
     });
-    expect(d.enlace).toBe(
-      'https://nexusqa.test/portal-lm/monitor-expedientes?tab=incompletos',
-    );
+    expect(d.enlace ?? null).toBeNull();
 
     // Nunca el documento completo, el correo, el teléfono ni el nombre del asegurado.
     const json = JSON.stringify(body);

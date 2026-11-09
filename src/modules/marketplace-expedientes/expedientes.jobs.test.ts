@@ -313,7 +313,7 @@ describe('resumen nocturno', () => {
     expect(json).not.toContain('11222333');
     expect(json).not.toContain('luis@test.com');
     expect(json).not.toContain('Luis');
-    expect(json).toContain('/monitor-expedientes');
+    expect(json).not.toContain('monitor-expedientes');
   });
 
   it('sin destinatarios queda registrado como "sin_correo"', async () => {
