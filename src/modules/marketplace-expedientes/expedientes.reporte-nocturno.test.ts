@@ -494,6 +494,28 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
     },
   );
 
+  it('el reporte va en copia oculta (también el respaldo branded)', async () => {
+    process.env.EXPEDIENTES_MAIL_WHITELIST = 'lm@test.com,lm2@test.com';
+    await destinatarios(['lm@test.com', 'lm2@test.com']);
+    await crear('P-1', { documento: '12345678' });
+    respuestaReporte = (t) =>
+      t === 'expediente-reporte-diario-simple' ? 400 : 200;
+    const r = await tareaNocturna(NOCHE);
+    expect(r.resultado).toBe('enviado');
+    const calls = reporteCalls();
+    expect(calls.map((x) => x.template)).toEqual([
+      'expediente-reporte-diario-simple',
+      'branded',
+    ]);
+    for (const b of calls) {
+      expect(b.ocultarDestinatarios).toBe(true);
+      expect([b.to, ...(b.toExtra ?? [])]).toEqual([
+        'lm@test.com',
+        'lm2@test.com',
+      ]);
+    }
+  });
+
   it('error de entrega (500): no cae a branded y se reintenta', async () => {
     await destinatarios();
     respuestaReporte = () => 500;

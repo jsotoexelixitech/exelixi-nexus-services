@@ -141,12 +141,18 @@ function enLista(items: string[]): string {
   return `${items.slice(0, -1).join(', ')} y ${items.at(-1)}`;
 }
 
+/** Opciones de entrega. `ocultarDestinatarios`: nest-api pone la lista en CCO (BCC). */
+export interface OpcionesEntrega {
+  ocultarDestinatarios?: boolean;
+}
+
 async function postNest(
   to: string[],
   toName: string | undefined,
   template: PlantillaCorreo,
   data: Record<string, unknown>,
   attachments?: AdjuntoCorreo[],
+  opciones: OpcionesEntrega = {},
 ): Promise<{ sent: boolean; error?: string; status?: number }> {
   const { url, apiKey } = nestMailConfig();
   if (!apiKey) return { sent: false, error: 'NEST_API_KEY no configurada' };
@@ -165,6 +171,9 @@ async function postNest(
         template,
         data,
         ...(attachments?.length ? { attachments } : {}),
+        ...(opciones.ocultarDestinatarios === true
+          ? { ocultarDestinatarios: true }
+          : {}),
       }),
       signal: AbortSignal.timeout(attachments?.length ? 60000 : 20000),
     });
@@ -216,11 +225,19 @@ async function postCorreo(
   to: string[],
   toName: string | undefined,
   content: BrandedContent,
+  opciones: OpcionesEntrega = {},
 ): Promise<{ sent: boolean; error?: string; plantilla: PlantillaCorreo }> {
   if (content.reporteSimple) {
     const plantilla = 'expediente-reporte-diario-simple';
     const { data, attachments } = content.reporteSimple;
-    const r = await postNest(to, toName, plantilla, data, attachments);
+    const r = await postNest(
+      to,
+      toName,
+      plantilla,
+      data,
+      attachments,
+      opciones,
+    );
     // 413: nest-api aún con el límite de 100 KB (sin la ruta de adjuntos).
     if (r.sent || ![400, 413, 422].includes(r.status ?? 0))
       return { ...r, plantilla };
@@ -249,14 +266,21 @@ async function postCorreo(
           : null;
   if (propia) {
     const [plantilla, data] = propia;
-    const r = await postNest(to, toName, plantilla, data);
+    const r = await postNest(to, toName, plantilla, data, undefined, opciones);
     if (r.sent || (r.status !== 400 && r.status !== 422))
       return { ...r, plantilla };
     logger.warn(
       `[expedientes-mail] nest-api rechazó ${plantilla} (HTTP ${r.status}); reintento con branded`,
     );
   }
-  const r = await postNest(to, toName, 'branded', datosBranded(content));
+  const r = await postNest(
+    to,
+    toName,
+    'branded',
+    datosBranded(content),
+    undefined,
+    opciones,
+  );
   return { ...r, plantilla: 'branded' };
 }
 
@@ -268,6 +292,7 @@ export async function entregarCorreo(
   destinatarios: (string | null | undefined)[],
   toName: string | undefined,
   content: BrandedContent,
+  opciones: OpcionesEntrega = {},
 ): Promise<EntregaResultado> {
   const validos = Array.from(
     new Set(
@@ -290,7 +315,7 @@ export async function entregarCorreo(
   if (!permitidos.length) {
     return { resultado: 'bloqueado_whitelist', destinatarioMasked: masked };
   }
-  const r = await postCorreo(permitidos, toName, content);
+  const r = await postCorreo(permitidos, toName, content, opciones);
   const maskedPermitidos = permitidos.map((v) => maskEmail(v)).join(', ');
   if (!r.sent) {
     const error = recortar(sinCorreosEnTexto(String(r.error ?? 'error')), 300);

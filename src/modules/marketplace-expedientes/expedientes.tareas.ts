@@ -389,10 +389,12 @@ async function reporteDeGrupo(
         `[expedientes] no se pudo generar el Excel del reporte ${grupo}: ${err instanceof Error ? err.name : 'error'}`,
       );
     }
+    // Varios destinatarios del reporte: en copia oculta, nadie ve a los demás.
     r = await entregarCorreo(
       destinatarios,
       undefined,
       correoReporteSimple(reporte, excel),
+      { ocultarDestinatarios: true },
     );
   }
   await svc.registrarNotificacion({

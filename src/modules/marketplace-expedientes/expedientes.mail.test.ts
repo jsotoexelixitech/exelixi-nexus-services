@@ -140,6 +140,39 @@ describe('correos al asegurado: datos para expediente-documentos', () => {
   });
 });
 
+describe('copia oculta (ocultarDestinatarios)', () => {
+  it('sin la opción el cuerpo no lleva el campo (asegurado sin cambios)', async () => {
+    await entregarCorreo(
+      ['luis@test.com'],
+      'Luis',
+      correoSolicitudInicial(datos()),
+    );
+    const [b] = bodies();
+    expect(b).not.toHaveProperty('ocultarDestinatarios');
+    expect(b.to).toBe('luis@test.com');
+  });
+
+  it('con la opción la propaga a la plantilla y al respaldo branded', async () => {
+    process.env.EXPEDIENTES_MAIL_WHITELIST = 'luis@test.com,ana@test.com';
+    fetchMock.mockResolvedValueOnce(status(400));
+    const r = await entregarCorreo(
+      ['luis@test.com', 'ana@test.com'],
+      undefined,
+      correoSolicitudInicial(datos()),
+      { ocultarDestinatarios: true },
+    );
+    expect(r.resultado).toBe('enviado');
+    const [nueva, branded] = bodies();
+    expect(nueva.template).toBe('expediente-documentos');
+    expect(branded.template).toBe('branded');
+    for (const b of [nueva, branded]) {
+      expect(b.ocultarDestinatarios).toBe(true);
+      expect(b.to).toBe('luis@test.com');
+      expect(b.toExtra).toEqual(['ana@test.com']);
+    }
+  });
+});
+
 describe('respaldo branded', () => {
   it.each([400, 422])(
     'nest-api responde %i: reintenta una sola vez con branded',
