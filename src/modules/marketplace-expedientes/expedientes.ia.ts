@@ -11,6 +11,7 @@
  * - error_tecnico                       → sigue recibido; se reintenta con espera creciente
  */
 import { createHash } from 'crypto';
+import type { DatosCotizacion } from './expedientes.cotizacion';
 import { caracasParts, requisitoLabel } from './expedientes.domain';
 
 export const RESULTADOS_IA = [
@@ -44,11 +45,15 @@ export type MotivoAnalisis =
  * v6 (9-nov): con un aviso (p. ej. sin datos del conductor) y además otro error (vencida), el motivo
  *   empieza por el error («La licencia está vencida…») y queda no_coincide; si el aviso es lo único,
  *   sin_certeza. Los observados v<6 se vuelven a comparar con lo ya extraído (sin OCR).
+ * v7 (9-nov): datos de la cotización del wizard (solo si es la única con ese cnpoliza): vehículo
+ *   para el certificado RCV, conductor para la licencia, tomador/asegurados/titular para la cédula y
+ *   beneficiario (marcado como tal), y lo leído por el OCR al escanear (`documents[tipo].ocr`) para
+ *   los datos cambiados en el formulario. Fuera de la huella. Los observados v<7 se recomparan.
  */
-export const VERSION_COMPARADOR = 6;
+export const VERSION_COMPARADOR = 7;
 
 /**
- * La v4, la v5 y la v6 solo cambian contra quién se compara en personas y licencias (y el orden
+ * La v4 a la v7 solo cambian contra quién se compara en personas y licencias (y el orden
  * del motivo): lo ya validado por la
  * IA con la v3 no se vuelve a comparar (lo validado no se toca).
  */
@@ -138,6 +143,13 @@ export interface ContextoPoliza {
    * contra quién se compara la cédula en personas.
    */
   adicionales?: PersonaPoliza[];
+  /**
+   * v7: vehículo de la cotización del wizard. Fuera de la huella; completa lo que no traiga
+   * `vehiculo` (el del expediente manda).
+   */
+  vehiculoCotizacion?: Record<string, unknown> | null;
+  /** v7: lo que el OCR leyó al escanear según la cotización (si el expediente no trae `ocrLeido`). */
+  ocrLeidoCotizacion?: Record<string, Record<string, unknown>>;
 }
 
 /** Confianza mínima para validar sin intervención humana. */
@@ -326,6 +338,8 @@ export function contextoPoliza(
    * emisión). Solo se usan para la cédula en personas y no entran en la huella.
    */
   otrasFuentes: unknown[] = [],
+  /** v7: datos de la cotización del wizard (la única con ese cnpoliza). Fuera de la huella. */
+  cotizacion: DatosCotizacion | null = null,
 ): ContextoPoliza {
   const snap = rec(exp.snapshot);
   const guardado = personaDe(
@@ -382,14 +396,39 @@ export function contextoPoliza(
   }
   const veh = rec(snap.vehiculo);
   const ocrLeido = ocrLeidoDe(snap.ocrLeido);
-  const adicionales = personasAdicionales(snap, otrasFuentes, personas);
+  const adicionales = personasAdicionales(
+    snap,
+    otrasFuentes,
+    personas,
+    cotizacion?.personas ?? [],
+  );
   return {
     personas,
     vehiculo: Object.keys(veh).length ? veh : null,
     ...(ocrLeido ? { ocrLeido } : {}),
     producto: exp.producto,
     ...(adicionales.length ? { adicionales } : {}),
+    ...(cotizacion?.vehiculo
+      ? { vehiculoCotizacion: cotizacion.vehiculo }
+      : {}),
+    ...(cotizacion?.ocrLeido
+      ? { ocrLeidoCotizacion: cotizacion.ocrLeido }
+      : {}),
   };
+}
+
+/**
+ * v7: vehículo contra el que se compara: el del expediente y, en lo que no traiga, el de la
+ * cotización. null si ninguno.
+ */
+function vehiculoDe(ctx: ContextoPoliza): Record<string, unknown> | null {
+  const cot = ctx.vehiculoCotizacion ?? null;
+  if (!ctx.vehiculo) return cot;
+  if (!cot) return ctx.vehiculo;
+  const out: Record<string, unknown> = { ...cot };
+  for (const [k, v] of Object.entries(ctx.vehiculo))
+    if (texto(v) != null) out[k] = v;
+  return out;
 }
 
 /**
@@ -401,6 +440,8 @@ function personasAdicionales(
   snap: Record<string, unknown>,
   otrasFuentes: unknown[],
   yaEstan: PersonaPoliza[],
+  /** v7: personas de la cotización con su papel. */
+  etiquetadas: [unknown, RolPersona][] = [],
 ): PersonaPoliza[] {
   const fuentes: [unknown, RolPersona][] = [];
   const deFuneral = (f: Record<string, unknown>) => {
@@ -419,6 +460,7 @@ function personasAdicionales(
       deFuneral(rec(m.funeral));
     }
   }
+  fuentes.push(...etiquetadas);
   const out: PersonaPoliza[] = [];
   for (const [v, rol] of fuentes) {
     if (rec(v).sinCedula === true) continue;
@@ -782,8 +824,9 @@ function compararPersona(
     : (ROLES_DOCUMENTO[tipo] ?? ROLES_DOCUMENTO.cedula);
   const conRol = (roles: RolPersona[]) => {
     const out: PersonaPoliza[] = [];
+    // v7: también las personas adicionales (mesa técnica, cotización), fuera de la huella.
     for (const r of roles)
-      for (const p of ctx.personas)
+      for (const p of todas)
         if (p.documento && p.roles.includes(r) && !out.includes(p)) out.push(p);
     return out;
   };
@@ -832,7 +875,7 @@ function compararPersona(
   const exacto = docOcr
     ? enPersonas
       ? (objetivos.find(igualA) ?? todas.find(igualA) ?? null)
-      : (ctx.personas.find(igualA) ?? null)
+      : (todas.find(igualA) ?? null)
     : null;
   const persona =
     exacto && objetivos.includes(exacto)
@@ -843,10 +886,7 @@ function compararPersona(
           (objetivos.find((p) => casiIgual(docOcr, docDe(p))) ??
           objetivos[0] ??
           null)
-        : (objetivos[0] ??
-          ctx.personas.find((p) => p.documento) ??
-          ctx.personas[0] ??
-          null);
+        : (objetivos[0] ?? todas.find((p) => p.documento) ?? todas[0] ?? null);
   const rol = persona ? rolDe(persona) : null;
 
   const campos: CampoDiagnostico[] = [];
@@ -990,9 +1030,7 @@ function compararPersona(
     (enPersonas
       ? !conoceAsegurados(todas)
       : tipo === 'licencia' &&
-        !ctx.personas.some(
-          (p) => !!p.documento && p.roles.includes('conductor'),
-        ))
+        !todas.some((p) => !!p.documento && p.roles.includes('conductor')))
   ) {
     sinDatos = true;
     aviso = enPersonas
@@ -1031,7 +1069,7 @@ function compararVehiculo(
   ex: Record<string, unknown>,
   ctx: ContextoPoliza,
 ): { campos: CampoDiagnostico[]; crudos: Crudos } {
-  const v = ctx.vehiculo ?? {};
+  const v = vehiculoDe(ctx) ?? {};
   const serialIgual =
     (a: string, b: string, largoMin: number) => (): boolean | 'parecido' => {
       const x = normSerial(a);
@@ -1431,14 +1469,15 @@ export function diagnosticar(
 
   // v3: lo que el OCR leyó al emitir. Sin él (emisiones viejas) todo sigue como antes. Con la
   // persona de respaldo o un documento de otra persona de la póliza no se afirma que se cambió.
-  const ol = rec(ctx.ocrLeido?.[tipo]);
+  // v7: si el expediente no trae lo leído de este documento, lo de la cotización del wizard.
+  const ol = rec(ctx.ocrLeido?.[tipo] ?? ctx.ocrLeidoCotizacion?.[tipo]);
   const modificados = Object.keys(ol).length
     ? marcarModificados(tipo, campos, crudos, ol, {
         conDv,
         detectar:
           (!aviso || sinDatos) &&
           !respaldo &&
-          !(tipo === 'certificado' && !ctx.vehiculo),
+          !(tipo === 'certificado' && !vehiculoDe(ctx)),
       })
     : [];
 
@@ -1502,7 +1541,7 @@ export function diagnosticar(
   if (!campos.length || !claveOk) {
     const c = campos.find((x) => clave.includes(x.campo));
     let resumen: string;
-    if (!campos.length || (tipo === 'certificado' && !ctx.vehiculo)) {
+    if (!campos.length || (tipo === 'certificado' && !vehiculoDe(ctx))) {
       resumen =
         tipo === 'certificado'
           ? 'La póliza no trae los datos del vehículo para comparar.'
