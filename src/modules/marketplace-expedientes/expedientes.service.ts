@@ -11,6 +11,13 @@ import type {
 import { randomUUID } from 'crypto';
 import prisma from '../../config/prisma';
 import { catalogoCanales, gestorCanalEnCache } from './expedientes.canales';
+import {
+  actorDeCotizacion,
+  DatosCotizacion,
+  datosDeCotizacion,
+  elegirCotizacion,
+  EnlaceCotizacion,
+} from './expedientes.cotizacion';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/app-error';
 import {
@@ -226,6 +233,16 @@ export function documentosDesdeOcr(
   const cedula = docs.cedula ?? docs.cedula_titular ?? docs.pasaporte;
   if (cedula && !out.cedula) out.cedula = { recibido: true, ref: cedula };
   return out;
+}
+
+/** v7: resultado de completar área y «emitida por» desde la cotización. */
+export interface ResumenActoresCotizacion {
+  revisados: number;
+  actualizados: number;
+  sinCotizacion: number;
+  ambiguas: number;
+  otroProducto: number;
+  sinDatos: number;
 }
 
 /** Quién vendió, desde la sesión guardada en la mesa técnica (metadataCanal del SSO). */
@@ -1138,6 +1155,8 @@ export class ExpedientesService {
       sinRespuesta: number;
     };
     noCubiertos: { producto: string; motivo: string }[];
+    /** v7: área y «emitida por» completados desde la cotización del wizard. */
+    actoresCotizacion: ResumenActoresCotizacion;
   }> {
     const existentes = await prisma.mktExpediente.findMany({
       select: { empresaId: true, cnpoliza: true },
@@ -1250,11 +1269,32 @@ export class ExpedientesService {
       }
     }
 
+    // v7: área y «emitida por» desde la cotización cuando hoy están vacíos (sin correos; no toca
+    // los requisitos ni lo validado).
+    let actoresCotizacion: ResumenActoresCotizacion = {
+      revisados: 0,
+      actualizados: 0,
+      sinCotizacion: 0,
+      ambiguas: 0,
+      otroProducto: 0,
+      sinDatos: 0,
+    };
+    try {
+      actoresCotizacion = await this.completarActoresDesdeCotizacion();
+    } catch (err) {
+      errores++;
+      await this.eventoTecnico({
+        etapa: 'actores_cotizacion',
+        error: err instanceof Error ? err.message.slice(0, 300) : 'error',
+      });
+    }
+
     return {
       revisadas,
       creadas,
       errores,
       ocr,
+      actoresCotizacion,
       // Patrimonial no registra en POST /api/emisiones: no llega al feed.
       noCubiertos: [
         {
@@ -1263,6 +1303,101 @@ export class ExpedientesService {
         },
       ],
     };
+  }
+
+  /**
+   * v7: cotización del wizard de la póliza: la única con `policy.cnpoliza` (o `policy.number`)
+   * igual al cnpoliza en la empresa. Solo lectura. Varias → ambigua (no se usa ninguna).
+   */
+  async cotizacionDe(
+    exp: Pick<Exp, 'empresaId' | 'cnpoliza' | 'producto'>,
+  ): Promise<EnlaceCotizacion> {
+    const cnpoliza = String(exp.cnpoliza ?? '').trim();
+    if (!cnpoliza) return { estado: 'sin_cotizacion' };
+    const candidatas = await prisma.cotizacion.findMany({
+      where: {
+        empresaId: exp.empresaId,
+        OR: [
+          { jsonData: { path: ['policy', 'cnpoliza'], equals: cnpoliza } },
+          { jsonData: { path: ['policy', 'number'], equals: cnpoliza } },
+        ],
+      },
+      select: { id: true, jsonData: true },
+      orderBy: { id: 'asc' },
+      take: 5,
+    });
+    return elegirCotizacion(candidatas, { cnpoliza, producto: exp.producto });
+  }
+
+  /**
+   * v7: expedientes sin área (desconocida): completa área y quién emitió (centidad, citem, cgestor,
+   * ccanalalt, cusuario, xlogin, cproductor) desde la metadata del SSO guardada en la cotización.
+   * Solo llena lo vacío; no toca requisitos, estados ni envía correos. Idempotente: corre en cada
+   * conciliación (los ya completados dejan de ser «desconocida»).
+   */
+  async completarActoresDesdeCotizacion(): Promise<ResumenActoresCotizacion> {
+    const r: ResumenActoresCotizacion = {
+      revisados: 0,
+      actualizados: 0,
+      sinCotizacion: 0,
+      ambiguas: 0,
+      otroProducto: 0,
+      sinDatos: 0,
+    };
+    const exps = await prisma.mktExpediente.findMany({
+      where: { area: 'desconocida', producto: { in: ['rcv', 'personas'] } },
+      orderBy: { id: 'asc' },
+    });
+    const campos = [
+      'centidad',
+      'citem',
+      'cgestor',
+      'ccanalalt',
+      'cusuario',
+      'xlogin',
+      'cproductor',
+    ] as const;
+    for (const exp of exps) {
+      r.revisados++;
+      const enlace = await this.cotizacionDe(exp);
+      if (enlace.estado !== 'unica') {
+        if (enlace.estado === 'ambigua') r.ambiguas++;
+        else if (enlace.estado === 'otro_producto') r.otroProducto++;
+        else r.sinCotizacion++;
+        continue;
+      }
+      let vendedor: Partial<Record<(typeof campos)[number], string | null>> =
+        actorDeCotizacion(enlace.jsonData);
+      if (!vendedor.centidad && vendedor.cusuario) {
+        const perfil = await this.vendedorDesdePerfil(vendedor.cusuario);
+        vendedor = {
+          ...vendedor,
+          ...perfil,
+          cproductor: vendedor.cproductor ?? perfil.cproductor ?? null,
+        };
+      }
+      const area = areaDesdeVendedor(vendedor);
+      const cambios: Record<string, unknown> = {};
+      for (const k of campos) {
+        const v = vendedor[k];
+        if ((exp[k] == null || exp[k] === '') && v) cambios[k] = v;
+      }
+      if (area !== 'desconocida') cambios.area = area;
+      if (!Object.keys(cambios).length) {
+        r.sinDatos++;
+        continue;
+      }
+      await prisma.mktExpediente.update({
+        where: { id: exp.id },
+        data: cambios as Prisma.MktExpedienteUpdateInput,
+      });
+      await this.evento(exp.id, 'expediente_actualizado', 'conciliacion', {
+        campos: Object.keys(cambios),
+        fuente: 'cotizacion',
+      });
+      r.actualizados++;
+    }
+    return r;
   }
 
   /** Requisitos "sin_informacion": reintenta el cruce con la mesa técnica. */
@@ -2279,7 +2414,22 @@ export class ExpedientesService {
    * compara con lo del expediente como antes.
    */
   private async contextoDe(exp: Exp): Promise<ContextoPoliza> {
-    if (exp.producto !== 'personas') return contextoPoliza(exp);
+    // v7: la cotización del wizard (solo si es la única con ese cnpoliza), fuera de la huella.
+    let cotizacion: DatosCotizacion | null = null;
+    if (exp.producto === 'rcv' || exp.producto === 'personas') {
+      try {
+        const enlace = await this.cotizacionDe(exp);
+        if (enlace.estado === 'unica')
+          cotizacion = datosDeCotizacion(enlace.jsonData, exp.producto);
+        else if (enlace.estado !== 'sin_cotizacion')
+          logger.info(
+            `[expedientes] cotización no usada (${enlace.estado}) en expediente ${exp.id}`,
+          );
+      } catch {
+        /* sin cotización: se compara como antes */
+      }
+    }
+    if (exp.producto !== 'personas') return contextoPoliza(exp, [], cotizacion);
     const fuentes: unknown[] = [];
     try {
       const sub = await prisma.funeralSubmission.findFirst({
@@ -2301,7 +2451,7 @@ export class ExpedientesService {
     } catch {
       /* sin emisión */
     }
-    return contextoPoliza(exp, fuentes);
+    return contextoPoliza(exp, fuentes, cotizacion);
   }
 
   /**
