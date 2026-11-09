@@ -175,3 +175,84 @@ describe('indicadores: cuadre con Nexus', () => {
     });
   });
 });
+
+describe('indicadores: desglose de incompletos (una categoría por póliza)', () => {
+  const req = (expedienteId: number, tipo: string, estado: string) =>
+    db.mktExpedienteRequisito.create({
+      data: {
+        expedienteId,
+        tipo,
+        estado,
+        ...(estado === 'validado' ? { validadoPor: 'ia', ref: 'r' } : {}),
+      },
+    });
+  const sumar = (d: Record<string, number>) =>
+    Object.values(d).reduce((a, x) => a + x, 0);
+
+  it('la suma del desglose es incompletos y completos + incompletos es el total', async () => {
+    const ok = await exp({ estadoDocumental: 'completo' });
+    for (const t of ['cedula', 'licencia', 'certificado'])
+      await req(ok.id, t, 'validado');
+    // Mixto: error + no leído → solo «con errores».
+    const a = await exp();
+    await recibido(a.id, 'cedula', 'no_coincide', { estado: 'observado' });
+    await recibido(a.id, 'licencia', 'error_tecnico');
+    // Datos cambiados + faltante → «datos cambiados».
+    const b = await exp();
+    await recibido(b.id, 'cedula', 'datos_modificados', {
+      estado: 'observado',
+    });
+    await req(b.id, 'licencia', 'faltante');
+    // No leído + faltante → «no se pudo leer».
+    const c = await exp();
+    await recibido(c.id, 'cedula', 'error_tecnico');
+    await req(c.id, 'licencia', 'faltante');
+    // La IA lo revisa → «analizando».
+    const d = await exp();
+    await recibido(d.id, 'cedula');
+    // Solo faltan documentos (con y sin filas de requisito).
+    const e = await exp();
+    await req(e.id, 'cedula', 'validado');
+    await req(e.id, 'licencia', 'faltante');
+    await exp();
+    // Recibido sin archivo: la IA no puede leerlo → «por validar».
+    const g = await exp();
+    await recibido(g.id, 'cedula', undefined, { ref: null });
+
+    const ind = await svc.indicadores({});
+    expect(ind.desglose).toEqual({
+      conErrores: 1,
+      datosCambiados: 1,
+      noLeidos: 1,
+      porValidar: 1,
+      analizando: 1,
+      faltanDocumentos: 2,
+      otros: 0,
+    });
+    expect(ind.incompletos).toBe(7);
+    expect(sumar(ind.desglose)).toBe(ind.incompletos);
+    expect(ind.completos + ind.incompletos + ind.sinInformacion).toBe(
+      ind.total,
+    );
+    expect(ind.completos + ind.incompletos).toBe(ind.total);
+    // Los contadores sueltos se mantienen («con algún documento en X»: se pisan).
+    expect(ind.conErrores).toBe(2); // a, b
+    expect(ind.noLeidos).toBe(2); // a, c
+  });
+
+  it('con filtro de área el desglose sigue sumando sus incompletos', async () => {
+    const a = await exp({ area: 'canal' });
+    await recibido(a.id, 'cedula', 'ilegible', { estado: 'observado' });
+    await exp({ area: 'gestor' });
+    await exp({ area: 'desconocida' });
+    const canal = await svc.indicadores({ area: 'C' });
+    expect(canal.incompletos).toBe(2);
+    expect(canal.desglose).toMatchObject({
+      conErrores: 1,
+      faltanDocumentos: 1,
+    });
+    expect(sumar(canal.desglose)).toBe(canal.incompletos);
+    const todo = await svc.indicadores({});
+    expect(sumar(todo.desglose)).toBe(todo.incompletos);
+  });
+});

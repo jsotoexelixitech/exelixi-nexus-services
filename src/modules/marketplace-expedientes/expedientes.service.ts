@@ -98,6 +98,7 @@ import {
   ListQuery,
 } from './expedientes.schema';
 import { calcularKpis } from './expedientes.kpis';
+import { desgloseIncompletos } from './expedientes.categorias';
 
 const CONFIG_KEY = 'global';
 
@@ -1600,6 +1601,12 @@ export class ExpedientesService {
       completos: exps.filter((e) => e.estadoDocumental === 'completo').length,
       incompletos: exps.filter((e) => e.estadoDocumental === 'incompleto')
         .length,
+      /**
+       * Por qué siguen incompletos: cada incompleto en UNA sola categoría (por prioridad), así
+       * la suma es `incompletos`. Los contadores sueltos de abajo (conErrores, noLeidos…) cuentan
+       * «con algún documento en X» y se pisan; el resumen usa este desglose.
+       */
+      desglose: desgloseIncompletos(exps, (e) => reqs.get(e.id) ?? [], config),
       /** Sin datos documentales (registros viejos o personas sin wizard): no son incompletos. */
       sinInformacion: exps.filter(
         (e) => e.estadoDocumental === 'sin_informacion',
