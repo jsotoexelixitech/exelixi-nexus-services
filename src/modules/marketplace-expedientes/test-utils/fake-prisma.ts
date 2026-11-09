@@ -111,6 +111,15 @@ function cmpVal(v: any): number | string {
 
 function matchValue(v: any, cond: any): boolean {
   if (cond === null) return v == null;
+  // Filtro JSON de Prisma (Postgres): { path: ['a', 'b'], equals: x }.
+  if (cond && typeof cond === 'object' && Array.isArray(cond.path)) {
+    const { path, ...resto } = cond;
+    const dentro = (path as string[]).reduce(
+      (o: any, k) => (o && typeof o === 'object' ? o[k] : undefined),
+      v,
+    );
+    return matchValue(dentro, resto);
+  }
   if (cond instanceof Date)
     return v instanceof Date && v.getTime() === cond.getTime();
   if (isOpObject(cond)) {
@@ -318,6 +327,7 @@ export function createFakePrisma() {
     'mktExpedienteEnlace',
     'mktExpedienteJobRun',
     'emision',
+    'cotizacion',
     'usuarioPortalPerfil',
     'usuario',
     'funeralSubmission',

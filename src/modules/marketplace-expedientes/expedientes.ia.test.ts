@@ -2209,7 +2209,7 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
           ctxRcv(),
         );
         expect(d.resultado).toBe('no_coincide');
-        expect(d.comparador).toBe(6);
+        expect(d.comparador).toBe(VERSION_COMPARADOR);
         expect(d.resumen).toMatch(
           /^La licencia está vencida desde el 2020-01-31./,
         );
@@ -2249,7 +2249,9 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
         expect(motivoAnalisis(fila('observado', 5), 'h', ahora)).toBe(
           'cambio_comparador',
         );
-        expect(motivoAnalisis(fila('observado', 6), 'h', ahora)).toBeNull();
+        expect(
+          motivoAnalisis(fila('observado', VERSION_COMPARADOR), 'h', ahora),
+        ).toBeNull();
         expect(motivoAnalisis(fila('validado', 5), 'h', ahora)).toBeNull();
       });
 
