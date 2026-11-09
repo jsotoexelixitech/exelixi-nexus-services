@@ -38,6 +38,7 @@ import {
   estadoPorDiagnostico,
   huellaPoliza,
   maskDocumento,
+  motivoAnalisis,
   motivoParaAsegurado,
   VERSION_COMPARADOR,
 } from './expedientes.ia';
@@ -2199,6 +2200,57 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
           ctxRcv(),
         );
         expect(d.resultado).toBe('no_coincide');
+      });
+
+      it('v6: sin conductor y vencida → no_coincide y el motivo empieza por «vencida», no por «No se pudo comparar»', () => {
+        const d = diagnosticar(
+          'licencia',
+          lectura({ ...OTRO, vencimiento: '2020-01-31' }),
+          ctxRcv(),
+        );
+        expect(d.resultado).toBe('no_coincide');
+        expect(d.comparador).toBe(6);
+        expect(d.resumen).toMatch(
+          /^La licencia está vencida desde el 2020-01-31./,
+        );
+        expect(d.resumen).toContain(
+          'la póliza no trae los datos del conductor',
+        );
+        const m = estadoPorDiagnostico(d);
+        expect(m.estado).toBe('observado');
+        expect(m.motivo).toMatch(/^La licencia está vencida/);
+      });
+
+      it('v6: sin conductor y vigente → sin_certeza con «Revisar: No se pudo comparar…»', () => {
+        const d = diagnosticar('licencia', lectura(OTRO), ctxRcv());
+        expect(d.resultado).toBe('sin_certeza');
+        expect(estadoPorDiagnostico(d).motivo).toMatch(
+          /^Revisar: No se pudo comparar: la póliza no trae los datos del conductor/,
+        );
+      });
+
+      it('v6: el observado v5 incoherente se recompara sin OCR; el validado v3+ no se toca', () => {
+        const ahora = new Date('2026-11-09T12:00:00Z');
+        const fila = (estado: string, comparador: number) => ({
+          ref: 'ref-1',
+          estado,
+          decision: 'ia',
+          analisisRef: 'ref-1',
+          huellaPoliza: 'h',
+          proximoAnalisis: null,
+          diagnostico: {
+            tipo: 'licencia',
+            resultado: estado === 'validado' ? 'coincide' : 'no_coincide',
+            comparador,
+            campos: [],
+            resumen: '',
+          },
+        });
+        expect(motivoAnalisis(fila('observado', 5), 'h', ahora)).toBe(
+          'cambio_comparador',
+        );
+        expect(motivoAnalisis(fila('observado', 6), 'h', ahora)).toBeNull();
+        expect(motivoAnalisis(fila('validado', 5), 'h', ahora)).toBeNull();
       });
 
       it('la licencia del tomador sigue validando', () => {
