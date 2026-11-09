@@ -82,7 +82,6 @@ import {
   motivoAnalisis,
   motivoParaAsegurado,
   ocrLeidoDe,
-  tomadorJuridico,
   VERSION_COMPARADOR,
 } from './expedientes.ia';
 import {
@@ -136,17 +135,13 @@ function mensajeErrorOcr(err: unknown): string {
 }
 
 /**
- * Cédula o RIF en el mismo documento: patrimoniales (igual que la emisión) y, v4, personas con
- * tomador persona jurídica (J/G/C): su documento de identidad es el RIF.
+ * Cédula o RIF en el mismo documento: patrimoniales (igual que la emisión) y personas: con tomador
+ * J/G/C su documento de identidad es el RIF (v4); con tomador V/E vale su RIF personal si el número
+ * es el de su cédula y el nombre es compatible (v5; lo decide el comparador).
  */
-function aceptaRifEn(
-  producto: string,
-  tipo: string,
-  ctx?: ContextoPoliza,
-): boolean {
+function aceptaRifEn(producto: string, tipo: string): boolean {
   if (tipo !== 'cedula') return false;
-  if (producto === 'patrimonial') return true;
-  return producto === 'personas' && !!ctx && !!tomadorJuridico(ctx);
+  return producto === 'patrimonial' || producto === 'personas';
 }
 
 type Exp = MktExpediente;
@@ -1899,7 +1894,6 @@ export class ExpedientesService {
       throw new AppError('No hay pólizas para este documento.', 409);
     const config = await this.getConfig();
     const principal = expedientes[0];
-    const ctxPrincipal = await this.contextoDe(principal);
 
     let ocrRes: OcrDocumentoResultado | null = null;
     let ocrDisponible = true;
@@ -1922,7 +1916,7 @@ export class ExpedientesService {
             documento: principal.aseguradoDocumento,
             empresaId: principal.empresaId,
             empresaNombre,
-            aceptaRif: aceptaRifEn(principal.producto, tipo, ctxPrincipal),
+            aceptaRif: aceptaRifEn(principal.producto, tipo),
           }),
         true,
       );
@@ -2195,9 +2189,10 @@ export class ExpedientesService {
       let refActual = r.ref;
       let hash: string | null = r.archivoHash ?? null;
       let lectura: OcrLectura | null | undefined;
-      const aceptaRif = aceptaRifEn(exp.producto, r.tipo, ctx);
-      // v4: el OCR lo rechazó por «parece ser un RIF» y ahora el RIF vale (tomador J): sin datos
-      // leídos que comparar, se vuelve a leer el mismo archivo aceptando RIF.
+      const aceptaRif = aceptaRifEn(exp.producto, r.tipo);
+      // v4/v5: el OCR lo rechazó por «parece ser un RIF» y ahora el RIF vale (personas con tomador
+      // J o V/E): sin datos leídos que comparar, se vuelve a leer UNA vez el mismo archivo aceptando
+      // RIF; después queda con el comparador vigente y no se repite.
       const releerConRif =
         motivo === 'cambio_comparador' &&
         aceptaRif &&

@@ -38,12 +38,15 @@ export type MotivoAnalisis =
  * v3 (7-nov): datos cambiados en el formulario (`ocrLeido` de la emisión vs documento vs póliza).
  * v4 (9-nov): personas — la cédula se compara contra todas las personas naturales de la póliza
  *   (titular, tomador V/E/P y asegurados, también los de la mesa técnica); con tomador J vale su RIF.
+ * v5 (9-nov): sin datos de la persona → revisar. En personas, si Nexus no trae a los asegurados (solo
+ *   al tomador), una cédula que no es del tomador queda sin_certeza; en RCV, sin conductor habitual,
+ *   una licencia que no es del tomador ni del titular también. En personas vale el RIF personal.
  */
-export const VERSION_COMPARADOR = 4;
+export const VERSION_COMPARADOR = 5;
 
 /**
- * La v4 solo cambia contra quién se compara la cédula en personas: lo ya validado por la IA con la
- * v3 no se vuelve a comparar (lo validado no se toca).
+ * La v4 y la v5 solo cambian contra quién se compara en personas y licencias: lo ya validado por la
+ * IA con la v3 no se vuelve a comparar (lo validado no se toca).
  */
 const VERSION_COMPARADOR_VALIDADOS = 3;
 
@@ -448,6 +451,20 @@ export function tomadorJuridico(ctx: ContextoPoliza): PersonaPoliza | null {
   );
 }
 
+/**
+ * v5: ¿Nexus conoce a las personas de la póliza aparte del tomador? (titular o asegurados naturales
+ * con cédula distinta de la del tomador, en el snapshot o en las otras fuentes).
+ */
+function conoceAsegurados(todas: PersonaPoliza[]): boolean {
+  return todas.some(
+    (p) =>
+      !!p.documento &&
+      !esJuridico(p.tipoDoc) &&
+      !p.roles.includes('tomador') &&
+      p.roles.includes('asegurado'),
+  );
+}
+
 /** v4: en personas, la cédula de la póliza puede ser de cualquiera de sus personas naturales. */
 function cedulaDePersonas(tipo: string, ctx: ContextoPoliza): boolean {
   return tipo === 'cedula' && ctx.producto === 'personas';
@@ -716,6 +733,8 @@ interface ComparacionPersona {
   conDv: boolean;
   /** Se comparó con la persona de respaldo (la esperada no está en la póliza). */
   respaldo: boolean;
+  /** v5: el aviso es solo por falta de datos de las personas (no impide ver datos cambiados). */
+  sinDatos: boolean;
 }
 
 /** Valores sin enmascarar de cada campo comparado: póliza y lo que lee ahora el documento. */
@@ -908,6 +927,7 @@ function compararPersona(
     nombres.every((c) => c.coincide !== false);
   let aviso: string | null = null;
   let nota: string | null = null;
+  let sinDatos = false;
   const sinTomador =
     enPersonas && !todas.some((p) => p.roles.includes('tomador'));
   // El OCR devolvió el rótulo del campo («nombre») en vez del dato: lectura fallida.
@@ -955,6 +975,25 @@ function compararPersona(
     // no trae. No coincide con nadie de la póliza, pero tampoco se afirma que sea ajena: revisar.
     aviso =
       'El tomador es una persona jurídica y el documento no coincide con el titular ni con los asegurados (puede ser del representante legal).';
+  } else if (
+    // v5: Nexus no conoce a las demás personas (sin titular ni asegurados aparte del tomador en
+    // ninguna fuente; sin conductor para la licencia RCV). Un documento de persona natural que no
+    // es del tomador puede ser de alguna de ellas: no se afirma que no coincide; revisar.
+    !exacto &&
+    !!docOcr &&
+    docCampo.coincide === false &&
+    !esJuridico(tipoOcr) &&
+    (enPersonas
+      ? !conoceAsegurados(todas)
+      : tipo === 'licencia' &&
+        !ctx.personas.some(
+          (p) => !!p.documento && p.roles.includes('conductor'),
+        ))
+  ) {
+    sinDatos = true;
+    aviso = enPersonas
+      ? 'No se pudo comparar: la póliza no trae los asegurados en Nexus y el documento no es del tomador; puede ser de un asegurado.'
+      : 'No se pudo comparar: la póliza no trae los datos del conductor en Nexus y la licencia no es del tomador ni del titular; puede ser del conductor habitual.';
   }
   const crudos: Crudos = {
     tipoDoc: { pol: persona?.tipoDoc ?? null, doc: tipoOcr ?? null },
@@ -980,6 +1019,7 @@ function compararPersona(
     crudos,
     conDv,
     respaldo: !!respaldo,
+    sinDatos,
   };
 }
 
@@ -1363,6 +1403,7 @@ export function diagnosticar(
   let crudos: Crudos = {};
   let conDv = false;
   let respaldo = false;
+  let sinDatos = false;
   if (tipo === 'certificado') {
     const r = compararVehiculo(ex, ctx);
     campos = r.campos;
@@ -1379,6 +1420,7 @@ export function diagnosticar(
     crudos = r.crudos;
     conDv = r.conDv;
     respaldo = r.respaldo;
+    sinDatos = r.sinDatos;
     clave = ['documento'];
   }
   const conNota = (t: string) => (nota ? `${t} ${nota}` : t);
@@ -1390,7 +1432,9 @@ export function diagnosticar(
     ? marcarModificados(tipo, campos, crudos, ol, {
         conDv,
         detectar:
-          !aviso && !respaldo && !(tipo === 'certificado' && !ctx.vehiculo),
+          (!aviso || sinDatos) &&
+          !respaldo &&
+          !(tipo === 'certificado' && !ctx.vehiculo),
       })
     : [];
 
