@@ -1,9 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * Reporte nocturno «Control documental diario» (correo 6): listado de incompletas de hoy con el
- * asegurado protegido, caso cero, tope de 200 filas, respaldo `branded`, reintentos sin
- * duplicar y Productores (intermediarios) apagado hasta su aprobación.
+ * Reporte nocturno «Control documental diario» (correo 6), versión simple: cuatro cifras en el
+ * cuerpo y el detalle en un Excel adjunto (hojas Incompletos, Completados y Resumen), caso cero,
+ * respaldo `branded` sin adjunto, tope de tamaño del Excel, reintentos sin duplicar y Productores
+ * (intermediarios) apagado hasta su aprobación.
  */
+import ExcelJS from 'exceljs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../config/prisma', async () => {
@@ -28,6 +30,9 @@ import {
   reintentarNocturna,
   tickScheduler,
 } from './expedientes.jobs';
+import { excelReporteSimple } from './expedientes.excel';
+import { correoReporteSimple } from './expedientes.mail';
+import { cifrasControl, ReporteSimple } from './expedientes.reporte';
 import { expedientesService as svc } from './expedientes.service';
 import { enviarRecordatorios, tareaNocturna } from './expedientes.tareas';
 
@@ -183,9 +188,23 @@ describe('asegurado protegido', () => {
   });
 });
 
-describe('reporte nocturno: listado de incompletas de hoy', () => {
-  it('cifras del día, listado ordenado, asegurado protegido y conciliación', async () => {
-    await destinatarios();
+async function leerExcel(body: any): Promise<ExcelJS.Workbook> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(
+    Buffer.from(body.attachments[0].contentBase64, 'base64') as any,
+  );
+  return wb;
+}
+
+function filas(ws: ExcelJS.Worksheet): any[][] {
+  const out: any[][] = [];
+  ws.eachRow((row) => out.push((row.values as any[]).slice(1)));
+  return out;
+}
+
+describe('reporte nocturno simple: cifras y Excel adjunto', () => {
+  it('cuatro cifras que suman, Excel con sus 3 hojas y el cuerpo sin datos personales', async () => {
+    await destinatarios(['lm@test.com'], { productores: true });
     await crear('P-1', {
       nombre: 'María José',
       apellido: 'Pérez',
@@ -198,14 +217,29 @@ describe('reporte nocturno: listado de incompletas de hoy', () => {
       apellido: 'Rojas',
       documento: '84555221',
       email: null,
+      emitida: new Date(HOY.getTime() + 60 * MIN),
     });
     await crear('P-3', {
       documento: '99888777',
-      emitida: new Date(HOY.getTime() - 86_400_000),
+      emitida: new Date(HOY.getTime() - 3 * 86_400_000),
     });
     const p4 = await crear('P-4', { documento: '55666777' });
     await crear('P-5', { nombre: 'Ana', documento: '33444555' });
-    expediente(p4).estadoDocumental = 'completo';
+    const p9 = await crear('P-9', {
+      centidad: 'P',
+      cproductor: '777',
+      documento: '77666555',
+    });
+    const p6 = await crear('P-6', { documento: '22333444' });
+    const p7 = await crear('P-7', { documento: '66777888' });
+    Object.assign(expediente(p4), {
+      estadoDocumental: 'completo',
+      completadoEn: new Date(HOY.getTime() + 120 * MIN),
+    });
+    expediente(p9).estadoDocumental = 'completo';
+    expediente(p6).area = 'desconocida';
+    // Sin información documental: no cuenta en ninguna cifra.
+    expediente(p7).estadoDocumental = 'sin_informacion';
     await requisito(p2, 'licencia', {
       estado: 'observado',
       ref: 'r-lic',
@@ -227,131 +261,61 @@ describe('reporte nocturno: listado de incompletas de hoy', () => {
       { alcance: 'asegurado', valor: 'V-33444555', motivo: 'pidió no recibir' },
       'portal:1',
     );
-    // Conciliación: una emisión de Nexus de hoy sin expediente.
-    await db.emision.create({
-      data: {
-        empresaId: 7,
-        cotizacionId: 1,
-        polizaNumero: 'P-1',
-        createdAt: HOY,
-      },
-    });
-    await db.emision.create({
-      data: {
-        empresaId: 7,
-        cotizacionId: 2,
-        polizaNumero: 'P-X',
-        createdAt: HOY,
-      },
-    });
-    // Recordatorios de la mañana: P-1 bloqueado (lista blanca), P-2 sin correo, P-5 excluido.
-    // El reloj simulado deja las notificaciones en el día del reporte.
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date(HOY.getTime() + 60 * MIN));
-    await enviarRecordatorios(new Date(HOY.getTime() + 60 * MIN));
+    vi.setSystemTime(new Date(HOY.getTime() + 180 * MIN));
+    await enviarRecordatorios(new Date(HOY.getTime() + 180 * MIN));
     vi.setSystemTime(NOCHE);
 
     const r = await tareaNocturna(NOCHE);
-    expect(r).toMatchObject({
-      fecha: '2026-11-07',
-      intento: 0,
+    expect(r).toMatchObject({ resultado: 'enviado', reintentar: false });
+    expect(r.reportes[0]).toEqual({
+      grupo: 'canales',
       resultado: 'enviado',
-      reintentar: false,
+      plantilla: 'expediente-reporte-diario-simple',
+      areas: 'Canales',
+      completados: 2,
+      incompletos: 5,
+      canales: { completos: 1, incompletos: 4 },
+      productores: { completos: 1, incompletos: 0 },
+      sinDatos: 1,
+      excel: true,
+      omitidas: { incompletos: 0, completados: 0 },
     });
-    expect(r.reportes).toEqual([
-      expect.objectContaining({
-        grupo: 'canales',
-        resultado: 'enviado',
-        plantilla: 'expediente-reporte-diario',
-        emitidas: 4,
-        incompletas: 3,
-        listadas: 3,
-        restantes: 0,
-      }),
-      { grupo: 'productores', resultado: 'deshabilitado' },
-    ]);
+    const c = r.reportes[0] as any;
+    expect(c.completados + c.incompletos).toBe(
+      c.canales.completos +
+        c.canales.incompletos +
+        c.productores.completos +
+        c.productores.incompletos +
+        c.sinDatos,
+    );
 
     const [body] = reporteCalls();
-    expect(body.template).toBe('expediente-reporte-diario');
-    expect(body.to).toBe('lm@test.com');
-    const d = body.data;
-    expect(d.subject).toBe(
-      'Marketplace | Canales | Control documental diario – 07/11/2026',
-    );
-    expect(d.corte).toBe('07/11/2026 23:00');
-    expect(d.dia).toEqual({
-      emitidas: 4,
-      completas: 1,
-      incompletas: 3,
-      sinDatos: 0,
+    expect(body.template).toBe('expediente-reporte-diario-simple');
+    expect(body.data).toEqual({
+      subject: 'Marketplace | Canales | Control documental diario – 07/11/2026',
+      areas: 'Canales',
+      fecha: '07/11/2026',
+      corte: '07/11/2026 23:00',
+      completados: 2,
+      incompletos: 5,
+      canales: { completos: 1, incompletos: 4 },
+      productores: { completos: 1, incompletos: 0 },
+      sinDatos: 1,
+      adjunto: true,
+      omitidas: { incompletos: 0, completados: 0 },
     });
-    expect(d.distribucion).toEqual({
-      faltantes: 8,
-      ilegibles: 1,
-      inconsistentes: 0,
-      porValidar: 0,
+    expect(body.attachments).toHaveLength(1);
+    expect(body.attachments[0]).toMatchObject({
+      filename: 'control-documental-2026-11-07.xlsx',
+      contentType:
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
-    // Primero lo que está mal (P-2), luego lo que falta.
-    expect(d.polizas.map((f: any) => f.poliza)).toEqual(['P-2', 'P-1', 'P-5']);
-    expect(d.polizas[0]).toEqual({
-      poliza: 'P-2',
-      asegurado: 'J. R. · V-84•••221',
-      producto: 'RCV',
-      emitidaPor: 'Farmatodo',
-      observacion:
-        'Licencia ilegible; faltan cédula y certificado de circulación',
-      dias: 0,
-      intentos: 0,
-      ultimoResultado: 'Sin correo válido',
-      noEnviar: false,
-      siguienteAccion: 'Sin correo válido: gestionar por el canal',
-    });
-    expect(d.polizas[1]).toMatchObject({
-      asegurado: 'M. P. · V-12•••678',
-      observacion: 'Faltan cédula, licencia y certificado de circulación',
-      intentos: 1,
-      ultimoResultado: 'Bloqueado',
-      noEnviar: false,
-      siguienteAccion: 'Recordatorio el 10/11/2026',
-    });
-    expect(d.polizas[2]).toMatchObject({
-      asegurado: 'A. · V-33•••555',
-      ultimoResultado: 'Excluido',
-      noEnviar: true,
-      siguienteAccion: 'Excluido de correos',
-    });
-    expect(d.cartera).toMatchObject({ total: 5, completos: 1, incompletos: 4 });
-    expect(d.cartera.desglose).toEqual(
-      expect.arrayContaining([
-        { label: 'Con errores', valor: 1 },
-        { label: 'Faltan documentos', valor: 3 },
-      ]),
-    );
-    expect(d.historicos).toEqual({
-      anteriores: 1,
-      sinRespuesta: 0,
-      sinCorreoValido: 1,
-      noEnviar: 1,
-    });
-    // Del día (P-3 es de ayer): 4 en el monitor; P-X no tiene expediente.
-    expect(d.conciliacion).toEqual({
-      emisionesNexus: 2,
-      enMonitor: 4,
-      noPasaronOcr: 0,
-      sinVinculo: 1,
-    });
-    expect(d.entregabilidad).toMatchObject({
-      intentos: 2,
-      entregados: 0,
-      bloqueados: 2,
-      sinCorreo: 1,
-      excluidos: 1,
-    });
-    expect(d.enlace ?? null).toBeNull();
-
-    // Nunca el documento completo, el correo, el teléfono ni el nombre del asegurado.
-    const json = JSON.stringify(body);
+    // El cuerpo no lleva pólizas, nombres ni documentos: solo el adjunto.
+    const cuerpo = JSON.stringify({ ...body, attachments: undefined });
     for (const prohibido of [
+      'P-1',
+      'P-2',
       '12345678',
       '84555221',
       'maria@test.com',
@@ -359,11 +323,115 @@ describe('reporte nocturno: listado de incompletas de hoy', () => {
       'María',
       'Pérez',
       'Rojas',
+      'Farmatodo',
     ])
-      expect(json).not.toContain(prohibido);
-    expect(json.toLowerCase()).not.toMatch(/vendedor|sin información/);
+      expect(cuerpo).not.toContain(prohibido);
+    expect(cuerpo.toLowerCase()).not.toMatch(/vendedor|monitor|enlace/);
 
-    // Evidencia: notificación del reporte con su lote y el intento.
+    const wb = await leerExcel(body);
+    expect(wb.worksheets.map((w) => w.name)).toEqual([
+      'Incompletos',
+      'Completados',
+      'Resumen',
+    ]);
+    const inc = wb.getWorksheet('Incompletos')!;
+    const fi = filas(inc);
+    expect(fi[0]).toEqual([
+      'Póliza',
+      'Asegurado',
+      'Documento',
+      'Producto',
+      'Área',
+      'Canal o productor',
+      'Emitida el',
+      'Días',
+      'Qué falta / Observación',
+      'Intentos de correo',
+      'Último correo',
+      'No enviar correos',
+    ]);
+    expect(inc.getCell('A1').font?.bold).toBe(true);
+    expect(inc.views[0]).toMatchObject({ state: 'frozen', ySplit: 1 });
+    expect(inc.autoFilter).toBeTruthy();
+    // Más recientes primero; P-3 (de hace 3 días) al final.
+    expect(fi.slice(1).map((f) => f[0])).toEqual([
+      'P-2',
+      'P-6',
+      'P-5',
+      'P-1',
+      'P-3',
+    ]);
+    const filaP2 = fi[1];
+    expect(filaP2.slice(0, 6)).toEqual([
+      'P-2',
+      'Juan Rojas',
+      'V-84555221',
+      'RCV',
+      'Canales',
+      'Farmatodo',
+    ]);
+    expect(filaP2[6]).toEqual(new Date(Date.UTC(2026, 10, 7)));
+    expect(filaP2.slice(7)).toEqual([
+      0,
+      'Licencia ilegible; faltan cédula y certificado de circulación',
+      0,
+      'Sin correo válido · 07/11/2026',
+      'No',
+    ]);
+    expect(fi[2][4]).toBe('Sin datos');
+    expect(fi[3]).toEqual(
+      expect.arrayContaining(['Excluido · 07/11/2026', 'Sí']),
+    );
+    expect(fi[4]).toEqual(
+      expect.arrayContaining([
+        'María José Pérez',
+        'V-12345678',
+        'Bloqueado · 07/11/2026',
+      ]),
+    );
+    expect(fi[5][7]).toBe(3);
+
+    const fc = filas(wb.getWorksheet('Completados')!);
+    expect(fc[0]).toEqual([
+      'Póliza',
+      'Asegurado',
+      'Documento',
+      'Producto',
+      'Área',
+      'Canal o productor',
+      'Emitida el',
+      'Completado el',
+    ]);
+    expect(fc.slice(1).map((f) => [f[0], f[4], f[5]])).toEqual([
+      ['P-9', 'Productores', 'Productor 777'],
+      ['P-4', 'Canales', 'Farmatodo'],
+    ]);
+    expect(fc[2][7]).toEqual(new Date(Date.UTC(2026, 10, 7)));
+
+    const fr = filas(wb.getWorksheet('Resumen')!);
+    expect(fr.slice(0, 6)).toEqual([
+      ['Cifra', 'Valor'],
+      ['Completados', 2],
+      ['Incompletos', 5],
+      ['De canales', '1 completos / 4 incompletos'],
+      ['De productores', '1 completos / 0 incompletos'],
+      ['Sin datos de canal o productor', 1],
+    ]);
+
+    // Nunca el correo ni el teléfono del asegurado, tampoco en el Excel.
+    const celdas = JSON.stringify(wb.worksheets.map(filas));
+    expect(celdas).not.toContain('maria@test.com');
+    expect(celdas).not.toContain('04141234567');
+    expect(celdas.toLowerCase()).not.toContain('vendedor');
+    // Sin datos personales en logs.
+    const logs = JSON.stringify([
+      (logger as any).warn.mock.calls,
+      (logger as any).error.mock.calls,
+      (logger as any).info.mock.calls,
+    ]);
+    for (const prohibido of ['12345678', 'maria@test.com', 'Rojas'])
+      expect(logs).not.toContain(prohibido);
+
     const notif = db.mktExpedienteNotificacion
       ._rows()
       .find((n: any) => n.tipo === 'resumen_nocturno');
@@ -371,69 +439,149 @@ describe('reporte nocturno: listado de incompletas de hoy', () => {
       lote: 'nocturna:2026-11-07:canales',
       etapa: 0,
       resultado: 'enviado',
-      destinatarioMasked: 'l*@test.com',
     });
-    // Sin datos personales en logs.
-    const logs = JSON.stringify((logger as any).warn.mock.calls);
-    expect(logs).not.toContain('12345678');
-    expect(logs).not.toContain('maria@test.com');
   });
 
-  it('cero pendientes del día: se envía igual con el total emitido y la conciliación', async () => {
+  it('caso cero: sale igual con 0 incompletos y el Excel con sus encabezados', async () => {
     await destinatarios();
-    const vacio = await tareaNocturna(NOCHE);
-    expect(vacio.resultado).toBe('enviado');
     const id = await crear('P-4');
     expediente(id).estadoDocumental = 'completo';
-    await crear('P-3', { emitida: new Date(HOY.getTime() - 86_400_000) });
     const r = await tareaNocturna(NOCHE);
     expect(r.resultado).toBe('enviado');
-    const calls = reporteCalls();
-    expect(calls).toHaveLength(2);
-    expect(calls[0].data.dia).toMatchObject({ emitidas: 0, incompletas: 0 });
-    const d = calls[1].data;
-    expect(d.dia).toMatchObject({ emitidas: 1, completas: 1, incompletas: 0 });
-    expect(d.polizas).toEqual([]);
-    expect(d.polizasRestantes).toBe(0);
-    expect(d.historicos.anteriores).toBe(1);
-    expect(d.conciliacion).toMatchObject({ sinVinculo: 0 });
-  });
-
-  it('más de 200 incompletas: lista 200 y dice cuántas quedan en el monitor', async () => {
-    await destinatarios();
-    for (let i = 0; i < 205; i++)
-      await crear(`P-${1000 + i}`, { documento: String(20000000 + i) });
-    const r = await tareaNocturna(NOCHE);
-    expect(r.reportes[0]).toMatchObject({
-      incompletas: 205,
-      listadas: 200,
-      restantes: 5,
+    const [body] = reporteCalls();
+    expect(body.data).toMatchObject({
+      completados: 1,
+      incompletos: 0,
+      canales: { completos: 1, incompletos: 0 },
+      productores: { completos: 0, incompletos: 0 },
+      sinDatos: 0,
     });
-    const d = reporteCalls()[0].data;
-    expect(d.polizas).toHaveLength(200);
-    expect(d.polizasRestantes).toBe(5);
-    expect(d.dia.incompletas).toBe(205);
+    const wb = await leerExcel(body);
+    expect(filas(wb.getWorksheet('Incompletos')!)).toHaveLength(1);
+    expect(filas(wb.getWorksheet('Completados')!)).toHaveLength(2);
   });
 
-  it('nest-api viejo (400): sale con branded solo con cifras', async () => {
+  it.each([400, 413, 422])(
+    'nest-api sin la plantilla o sin adjuntos (%i): branded con las cifras y sin adjunto',
+    async (status) => {
+      await destinatarios();
+      await crear('P-1', { documento: '12345678' });
+      respuestaReporte = (t) =>
+        t === 'expediente-reporte-diario-simple' ? status : 200;
+      const r = await tareaNocturna(NOCHE);
+      expect(r.resultado).toBe('enviado');
+      expect(r.reportes[0].plantilla).toBe('branded');
+      const calls = reporteCalls();
+      expect(calls.map((x) => x.template)).toEqual([
+        'expediente-reporte-diario-simple',
+        'branded',
+      ]);
+      const branded = calls[1];
+      expect(branded.attachments).toBeUndefined();
+      expect(branded.data.subject).toBe(
+        'Marketplace | Canales | Control documental diario – 07/11/2026',
+      );
+      expect(branded.data.fields).toEqual([
+        { label: 'Completados', value: '0' },
+        { label: 'Incompletos', value: '1' },
+        { label: 'De canales', value: '0 completos / 1 incompletos' },
+        { label: 'De productores', value: '0 completos / 0 incompletos' },
+      ]);
+      const json = JSON.stringify(branded);
+      expect(json).not.toContain('P-1');
+      expect(json).not.toContain('12345678');
+      expect(json.toLowerCase()).not.toMatch(/excel|monitor|vendedor/);
+    },
+  );
+
+  it('error de entrega (500): no cae a branded y se reintenta', async () => {
     await destinatarios();
-    await crear('P-1', { documento: '12345678' });
-    respuestaReporte = (t) => (t === 'expediente-reporte-diario' ? 400 : 200);
+    respuestaReporte = () => 500;
     const r = await tareaNocturna(NOCHE);
-    expect(r.resultado).toBe('enviado');
-    expect(r.reportes[0].plantilla).toBe('branded');
-    const calls = reporteCalls();
-    expect(calls.map((c) => c.template)).toEqual([
-      'expediente-reporte-diario',
-      'branded',
+    expect(r.reintentar).toBe(true);
+    expect(reporteCalls().map((x) => x.template)).toEqual([
+      'expediente-reporte-diario-simple',
     ]);
-    const branded = calls[1].data;
-    expect(branded.subject).toBe(
-      'Marketplace | Canales | Control documental diario – 07/11/2026',
-    );
-    expect(branded.fields.map((f: any) => f.label)).toContain('Emitidas hoy');
-    expect(JSON.stringify(branded)).not.toContain('P-1');
-    expect(JSON.stringify(branded)).not.toContain('12345678');
+  });
+});
+
+describe('Excel del control documental: tope de tamaño', () => {
+  const base = {
+    poliza: 'P',
+    asegurado: 'Nombre Apellido',
+    documento: 'V-1',
+    producto: 'RCV',
+    area: 'Canales' as const,
+    canalOProductor: 'Canal',
+    emitidaEn: HOY,
+  };
+  const reporte = (inc: number, comp: number): ReporteSimple => ({
+    grupo: 'canales',
+    areas: 'Canales',
+    fecha: '2026-11-07',
+    fechaLocal: '07/11/2026',
+    corte: '07/11/2026 23:00',
+    cifras: cifrasControl([]),
+    incompletos: Array.from({ length: inc }, (_, i) => ({
+      ...base,
+      poliza: `I-${i}`,
+      dias: i,
+      observacion: `Falta cédula ${'x'.repeat(40)} ${i}`,
+      intentos: 1,
+      ultimoCorreo: 'Enviado · 07/11/2026',
+      noEnviar: false,
+    })),
+    completados: Array.from({ length: comp }, (_, i) => ({
+      ...base,
+      poliza: `C-${i}`,
+      completadoEn: HOY,
+    })),
+  });
+
+  it('quita primero completados y luego las incompletas más antiguas; el correo lo avisa', async () => {
+    const r = reporte(1500, 1500);
+    const completo = await excelReporteSimple(r);
+    expect(completo.omitidas).toEqual({ incompletos: 0, completados: 0 });
+    const soloInc = (await excelReporteSimple({ ...r, completados: [] })).buffer
+      .length;
+    // Cabe sin parte de los completados: las incompletas van todas.
+    const tope = Math.floor((completo.buffer.length + soloInc) / 2);
+    const x = await excelReporteSimple(r, tope);
+    expect(x.buffer.length).toBeLessThanOrEqual(tope);
+    expect(x.omitidas.incompletos).toBe(0);
+    expect(x.omitidas.completados).toBeGreaterThan(0);
+    // Ni sin completados cabe: se van todos y las incompletas más antiguas.
+    const tope2 = Math.floor(soloInc * 0.6);
+    const muyChico = await excelReporteSimple(r, tope2);
+    expect(muyChico.buffer.length).toBeLessThanOrEqual(tope2);
+    expect(muyChico.omitidas.completados).toBe(1500);
+    expect(muyChico.omitidas.incompletos).toBeGreaterThan(0);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(muyChico.buffer as any);
+    const fi = filas(wb.getWorksheet('Incompletos')!);
+    // Se conservan las primeras (las más recientes).
+    expect(fi[1][0]).toBe('I-0');
+    expect(fi).toHaveLength(1500 - muyChico.omitidas.incompletos + 1);
+    const correo = correoReporteSimple(r, muyChico);
+    expect(correo.reporteSimple?.data.omitidas).toEqual(muyChico.omitidas);
+  });
+
+  it('cifras: gestores en canales, sin información fuera y la suma cuadra', () => {
+    expect(
+      cifrasControl([
+        { area: 'canal', estadoDocumental: 'completo' },
+        { area: 'gestor', estadoDocumental: 'incompleto' },
+        { area: 'productor', estadoDocumental: 'incompleto' },
+        { area: 'desconocida', estadoDocumental: 'completo' },
+        { area: 'canal', estadoDocumental: 'sin_informacion' },
+      ]),
+    ).toEqual({
+      completados: 2,
+      incompletos: 2,
+      canales: { completos: 1, incompletos: 1 },
+      productores: { completos: 0, incompletos: 1 },
+      sinDatos: 1,
+    });
   });
 });
 
@@ -581,8 +729,11 @@ describe('reporte nocturno: Productores (intermediarios)', () => {
     });
     let calls = reporteCalls();
     expect(calls).toHaveLength(1);
-    // El reporte de Canales no lleva pólizas de productores.
-    expect(calls[0].data.polizas.map((f: any) => f.poliza)).toEqual(['P-1']);
+    // El reporte principal cubre todo el alcance: cuenta canales y productores por separado.
+    expect(calls[0].data).toMatchObject({
+      canales: { completos: 0, incompletos: 1 },
+      productores: { completos: 0, incompletos: 1 },
+    });
 
     process.env.EXPEDIENTES_RESUMEN_PRODUCTORES = 'true';
     process.env.EXPEDIENTES_RESUMEN_PRODUCTORES_DESTINATARIOS = 'prod@test.com';
@@ -600,9 +751,16 @@ describe('reporte nocturno: Productores (intermediarios)', () => {
     expect(prod.data.subject).toBe(
       'Marketplace | Productores | Control documental diario – 07/11/2026',
     );
-    expect(prod.data.polizas).toEqual([
-      expect.objectContaining({ poliza: 'P-9', emitidaPor: 'Productor 777' }),
-    ]);
+    expect(prod.data).toMatchObject({
+      canales: { completos: 0, incompletos: 0 },
+      productores: { completos: 0, incompletos: 1 },
+    });
+    const wb = await leerExcel(prod);
+    expect(
+      filas(wb.getWorksheet('Incompletos')!)
+        .slice(1)
+        .map((f) => [f[0], f[5]]),
+    ).toEqual([['P-9', 'Productor 777']]);
 
     // Aprobado pero con el alcance de Productores apagado: no se genera.
     await destinatarios(['lm@test.com'], { productores: false });

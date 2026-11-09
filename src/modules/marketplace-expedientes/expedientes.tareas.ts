@@ -26,15 +26,16 @@ import {
 } from './expedientes.env';
 import {
   correoRecordatorio,
-  correoResumenNocturno,
+  correoReporteSimple,
   correoSolicitudInicial,
   entregarCorreo,
   EntregaResultado,
   ResultadoEnvio,
   sinCorreosEnTexto,
 } from './expedientes.mail';
+import { ExcelReporte, excelReporteSimple } from './expedientes.excel';
 import {
-  armarReporteDiario,
+  armarReporteSimple,
   GRUPOS_REPORTE,
   GrupoReporte,
 } from './expedientes.reporte';
@@ -293,11 +294,15 @@ export interface EnvioReporte {
   resultado: ResultadoReporte;
   plantilla?: string;
   areas?: string;
-  emitidas?: number;
-  completas?: number;
-  incompletas?: number;
-  listadas?: number;
-  restantes?: number;
+  completados?: number;
+  incompletos?: number;
+  canales?: { completos: number; incompletos: number };
+  productores?: { completos: number; incompletos: number };
+  sinDatos?: number;
+  /** false: el Excel no se pudo generar y el correo salió sin él. */
+  excel?: boolean;
+  /** Filas que no cupieron en el Excel por tamaño. */
+  omitidas?: { incompletos: number; completados: number };
 }
 
 /** Evidencia y alerta de un reporte nocturno que no salió (sin datos personales). */
@@ -360,12 +365,13 @@ async function reporteDeGrupo(
       return { grupo, resultado: 'sin_reintento' };
   }
 
-  const reporte = await armarReporteDiario(grupo, {
+  const reporte = await armarReporteSimple(grupo, {
     config,
     fecha,
     ahora: ctx.ahora,
     exclusiones: ctx.exclusiones,
   });
+  let excel: ExcelReporte | null = null;
   const destinatarios =
     grupo === 'productores'
       ? destinatariosReporteProductores()
@@ -375,10 +381,18 @@ async function reporteDeGrupo(
     destinatarioMasked: null,
   };
   if (destinatarios.length) {
+    try {
+      excel = await excelReporteSimple(reporte);
+    } catch (err) {
+      // Sin el Excel el correo sale igual con las cifras (y no menciona el adjunto).
+      logger.error(
+        `[expedientes] no se pudo generar el Excel del reporte ${grupo}: ${err instanceof Error ? err.name : 'error'}`,
+      );
+    }
     r = await entregarCorreo(
       destinatarios,
       undefined,
-      correoResumenNocturno(reporte),
+      correoReporteSimple(reporte, excel),
     );
   }
   await svc.registrarNotificacion({
@@ -398,18 +412,21 @@ async function reporteDeGrupo(
     resultado: r.resultado,
     ...(r.plantilla ? { plantilla: r.plantilla } : {}),
     areas: reporte.areas,
-    emitidas: reporte.dia.emitidas,
-    completas: reporte.dia.completas,
-    incompletas: reporte.dia.incompletas,
-    listadas: reporte.polizas.length,
-    restantes: reporte.polizasRestantes,
+    ...reporte.cifras,
+    ...(destinatarios.length
+      ? {
+          excel: !!excel,
+          ...(excel ? { omitidas: excel.omitidas } : {}),
+        }
+      : {}),
   };
 }
 
 /**
- * Correo 6, «Control documental diario»: emitidas del día local incompletas al corte y cartera
- * acumulada. Se envía aunque haya cero pendientes. Un reporte para Canales y otro para
- * Productores (apagado hasta su aprobación). Si la entrega falla, `reintentar` = true y el
+ * Correo 6, «Control documental diario» (versión simple desde el 9-nov-2026): completados e
+ * incompletos de toda la cartera del alcance, de canales y de productores, con el detalle en un
+ * Excel adjunto. Se envía aunque haya cero incompletos. Un reporte para Canales (cubre todo el
+ * alcance) y otro para Productores (apagado hasta su aprobación). Si la entrega falla, `reintentar` = true y el
  * scheduler reintenta (expedientes.jobs). La evidencia queda en el registro de la tarea y en
  * mkt_expediente_notificacion (lote `nocturna:<fecha>:<grupo>`, etapa = intento).
  */

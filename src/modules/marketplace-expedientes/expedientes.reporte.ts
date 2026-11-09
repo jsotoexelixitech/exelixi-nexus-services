@@ -675,3 +675,218 @@ export async function armarReporteDiario(
     enlace: null,
   };
 }
+
+// ─── Versión simple (pedido de La Mundial, 9-nov-2026) ─────────────────────
+//
+// «Yo solo quiero decir quién no cargó el expediente»: el correo lleva solo cuatro cifras y el
+// detalle va en un Excel adjunto (expedientes.excel). El Excel sí trae nombre y documento del
+// asegurado (lo pidió La Mundial); nunca correo ni teléfono, y nada de esto va a logs.
+
+export type AreaReporte = 'Canales' | 'Productores' | 'Sin datos';
+
+export interface CifrasControl {
+  completados: number;
+  incompletos: number;
+  canales: { completos: number; incompletos: number };
+  productores: { completos: number; incompletos: number };
+  /** Pólizas sin datos de quién las emitió (área desconocida). */
+  sinDatos: number;
+}
+
+export interface FilaIncompleto {
+  poliza: string;
+  asegurado: string;
+  documento: string;
+  producto: string;
+  area: AreaReporte;
+  canalOProductor: string;
+  emitidaEn: Date;
+  dias: number;
+  observacion: string;
+  intentos: number;
+  ultimoCorreo: string;
+  noEnviar: boolean;
+}
+
+export interface FilaCompletado {
+  poliza: string;
+  asegurado: string;
+  documento: string;
+  producto: string;
+  area: AreaReporte;
+  canalOProductor: string;
+  emitidaEn: Date;
+  completadoEn: Date | null;
+}
+
+export interface ReporteSimple {
+  grupo: GrupoReporte;
+  /** Rótulo del asunto: «Canales» o «Productores». */
+  areas: string;
+  /** YYYY-MM-DD (Caracas). */
+  fecha: string;
+  /** DD/MM/AAAA. */
+  fechaLocal: string;
+  /** «DD/MM/AAAA HH:MM» (Caracas). */
+  corte: string;
+  cifras: CifrasControl;
+  /** Más recientes primero. */
+  incompletos: FilaIncompleto[];
+  completados: FilaCompletado[];
+}
+
+/**
+ * Áreas del reporte simple. Canales cubre toda la cartera del alcance (canales con sus gestores,
+ * productores si están en el alcance y las pólizas sin datos de quién las emitió), para que las
+ * cifras de canales y productores salgan juntas. Productores (apagado) solo los suyos.
+ */
+export function areasReporteSimple(
+  grupo: GrupoReporte,
+  alcance: AlcanceConfig,
+): AreaExpediente[] {
+  return grupo === 'productores' ? ['productor'] : areasEnAlcance(alcance);
+}
+
+export function areaReporte(area: string): AreaReporte {
+  const g = grupoArea(area);
+  return g === 'canal'
+    ? 'Canales'
+    : g === 'productor'
+      ? 'Productores'
+      : 'Sin datos';
+}
+
+/** Completados e incompletos por área visible; la suma de las áreas da el total. */
+export function cifrasControl(
+  exps: Pick<Exp, 'area' | 'estadoDocumental'>[],
+): CifrasControl {
+  const c: CifrasControl = {
+    completados: 0,
+    incompletos: 0,
+    canales: { completos: 0, incompletos: 0 },
+    productores: { completos: 0, incompletos: 0 },
+    sinDatos: 0,
+  };
+  for (const e of exps) {
+    const completo = e.estadoDocumental === 'completo';
+    if (!completo && e.estadoDocumental !== 'incompleto') continue;
+    if (completo) c.completados++;
+    else c.incompletos++;
+    const g = grupoArea(e.area);
+    if (g === 'desconocida') c.sinDatos++;
+    else {
+      const a = g === 'canal' ? c.canales : c.productores;
+      if (completo) a.completos++;
+      else a.incompletos++;
+    }
+  }
+  return c;
+}
+
+function nombreCompleto(e: Pick<Exp, 'aseguradoNombre' | 'aseguradoApellido'>) {
+  return recortar(
+    [e.aseguradoNombre, e.aseguradoApellido]
+      .map((v) => String(v ?? '').trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' '),
+    120,
+  );
+}
+
+function documentoCompleto(
+  e: Pick<Exp, 'aseguradoTipoDoc' | 'aseguradoDocumento'>,
+): string {
+  const doc = String(e.aseguradoDocumento ?? '').trim();
+  if (!doc) return '';
+  const tipo = String(e.aseguradoTipoDoc ?? '')
+    .trim()
+    .toUpperCase();
+  return tipo ? `${tipo}-${doc}` : doc;
+}
+
+export async function armarReporteSimple(
+  grupo: GrupoReporte,
+  opts: {
+    config: ExpedientesConfig;
+    fecha: string;
+    ahora: Date;
+    exclusiones: MktExpedienteExclusion[];
+  },
+): Promise<ReporteSimple> {
+  const { config, fecha, ahora, exclusiones } = opts;
+  const areas = areasReporteSimple(grupo, config.alcance);
+  const cartera = areas.length
+    ? await prisma.mktExpediente.findMany({
+        where: {
+          area: { in: areas },
+          estadoDocumental: { in: ['completo', 'incompleto'] },
+        },
+      })
+    : [];
+  const recientes = (a: Exp, b: Exp) =>
+    b.emitidaEn.getTime() - a.emitidaEn.getTime() || b.id - a.id;
+  const incompletos = cartera
+    .filter((e) => e.estadoDocumental === 'incompleto')
+    .sort(recientes);
+  const completados = cartera
+    .filter((e) => e.estadoDocumental === 'completo')
+    .sort(recientes);
+
+  const reqs = await requisitosDe(incompletos.map((e) => e.id));
+  const ids = incompletos.map((e) => e.id);
+  const ultimas = ids.length
+    ? await prisma.mktExpedienteNotificacion.findMany({
+        where: {
+          expedienteId: { in: ids },
+          tipo: { notIn: TIPOS_NO_ASEGURADO },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { expedienteId: true, resultado: true, createdAt: true },
+      })
+    : [];
+  const ultimaDe = new Map<number, { resultado: string; createdAt: Date }>();
+  for (const n of ultimas) {
+    if (n.expedienteId != null && !ultimaDe.has(n.expedienteId))
+      ultimaDe.set(n.expedienteId, n);
+  }
+  const catalogo = cartera.some((e) => grupoArea(e.area) === 'canal')
+    ? await catalogoCanales()
+    : null;
+  const comunes = (e: Exp) => ({
+    poliza: e.cnpoliza,
+    asegurado: nombreCompleto(e),
+    documento: documentoCompleto(e),
+    producto: productoLabel(e),
+    area: areaReporte(e.area),
+    canalOProductor: recortar(emitidaPor(e, catalogo), 80),
+    emitidaEn: e.emitidaEn,
+  });
+
+  const { hora } = caracasParts(ahora);
+  return {
+    grupo,
+    areas: rotuloGrupo(grupo, config.alcance),
+    fecha,
+    fechaLocal: fechaLocal(fecha),
+    corte: `${fechaLocal(caracasParts(ahora).fecha)} ${hora}`,
+    cifras: cifrasControl(cartera),
+    incompletos: incompletos.map((e) => {
+      const u = ultimaDe.get(e.id);
+      return {
+        ...comunes(e),
+        dias: Math.max(0, diasCaracasEntre(e.emitidaEn, ahora)),
+        observacion: observacionCorta(e, reqs.get(e.id) ?? [], config),
+        intentos: e.intentos,
+        ultimoCorreo: u
+          ? `${ultimoResultadoLabel(u.resultado)} · ${fechaLocal(caracasParts(u.createdAt).fecha)}`
+          : ultimoResultadoLabel(null),
+        noEnviar: estaExcluido(e, exclusiones),
+      };
+    }),
+    completados: completados.map((e) => ({
+      ...comunes(e),
+      completadoEn: e.completadoEn ?? null,
+    })),
+  };
+}

@@ -16,7 +16,11 @@ import {
   nestMailConfig,
 } from './expedientes.env';
 // Solo tipos: el servicio importa este archivo y el reporte importa el servicio.
-import type { FilaReporte, ReporteDiario } from './expedientes.reporte';
+import type {
+  FilaReporte,
+  ReporteDiario,
+  ReporteSimple,
+} from './expedientes.reporte';
 
 export type TipoCorreoAsegurado =
   | 'solicitud'
@@ -67,10 +71,25 @@ export interface BrandedContent {
   codigo?: { nombre: string; codigo: string; minutos: number };
   /** Control documental diario: `expediente-reporte-diario` con respaldo `branded` (cifras). */
   reporte?: Record<string, unknown>;
+  /**
+   * Control documental diario simple: `expediente-reporte-diario-simple` con el Excel adjunto.
+   * Respaldo (nest-api lo rechaza con 400/413/422): `branded` con las cifras y sin adjunto.
+   */
+  reporteSimple?: {
+    data: Record<string, unknown>;
+    attachments?: AdjuntoCorreo[];
+  };
+}
+
+export interface AdjuntoCorreo {
+  filename: string;
+  contentBase64: string;
+  contentType: string;
 }
 
 export type PlantillaCorreo =
   | 'branded'
+  | 'expediente-reporte-diario-simple'
   | 'expediente-documentos'
   | 'expediente-codigo'
   | 'expediente-reporte-diario';
@@ -127,6 +146,7 @@ async function postNest(
   toName: string | undefined,
   template: PlantillaCorreo,
   data: Record<string, unknown>,
+  attachments?: AdjuntoCorreo[],
 ): Promise<{ sent: boolean; error?: string; status?: number }> {
   const { url, apiKey } = nestMailConfig();
   if (!apiKey) return { sent: false, error: 'NEST_API_KEY no configurada' };
@@ -144,8 +164,9 @@ async function postNest(
         ...(toName ? { toName: recortar(toName, 120) } : {}),
         template,
         data,
+        ...(attachments?.length ? { attachments } : {}),
       }),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(attachments?.length ? 60000 : 20000),
     });
     const body = await res.json().catch(() => ({}));
     return { ...nestMailAccepted(res, body), status: res.status };
@@ -196,6 +217,17 @@ async function postCorreo(
   toName: string | undefined,
   content: BrandedContent,
 ): Promise<{ sent: boolean; error?: string; plantilla: PlantillaCorreo }> {
+  if (content.reporteSimple) {
+    const plantilla = 'expediente-reporte-diario-simple';
+    const { data, attachments } = content.reporteSimple;
+    const r = await postNest(to, toName, plantilla, data, attachments);
+    // 413: nest-api aún con el límite de 100 KB (sin la ruta de adjuntos).
+    if (r.sent || ![400, 413, 422].includes(r.status ?? 0))
+      return { ...r, plantilla };
+    logger.warn(
+      `[expedientes-mail] nest-api rechazó ${plantilla} (HTTP ${r.status}); reintento con branded sin adjunto`,
+    );
+  }
   const propia: [PlantillaCorreo, Record<string, unknown>] | null =
     content.codigo
       ? [
@@ -577,5 +609,80 @@ export function correoResumenNocturno(r: ReporteDiario): BrandedContent {
       },
     ],
     reporte: datosReporteDiario(subject, r),
+  };
+}
+
+// ─── Correo 6, versión simple (pedido de La Mundial, 9-nov-2026) ───────────
+
+export const LINEA_EXCEL =
+  'En el Excel adjunto está el detalle de las pólizas incompletas (quién no ha cargado sus documentos) y de las completadas.';
+
+function porArea(c: { completos: number; incompletos: number }): string {
+  return `${c.completos} completos / ${c.incompletos} incompletos`;
+}
+
+/**
+ * Cuerpo corto: cuatro cifras de toda la cartera del alcance y la línea del Excel. Sin
+ * listado, nombres, documentos, enlaces ni mención al monitor: el detalle va solo en el adjunto.
+ * Respaldo `branded` con las mismas cifras y sin adjunto.
+ */
+export function correoReporteSimple(
+  r: Pick<ReporteSimple, 'areas' | 'fechaLocal' | 'corte' | 'cifras'>,
+  excel: {
+    filename: string;
+    buffer: Buffer;
+    omitidas: { incompletos: number; completados: number };
+  } | null,
+): BrandedContent {
+  const c = r.cifras;
+  const subject = asuntoReporteDiario(r.areas, r.fechaLocal);
+  const corte = `Corte: ${r.corte} (hora de Caracas).`;
+  return {
+    subject,
+    eyebrow: 'Control documental',
+    title: `Control documental diario – ${r.fechaLocal}`,
+    intro: c.incompletos === 0 ? `${corte} 0 incompletos.` : corte,
+    introArriba: false,
+    fields: [
+      { label: 'Completados', value: String(c.completados) },
+      { label: 'Incompletos', value: String(c.incompletos) },
+      { label: 'De canales', value: porArea(c.canales) },
+      { label: 'De productores', value: porArea(c.productores) },
+      ...(c.sinDatos
+        ? [
+            {
+              label: 'Sin datos de canal o productor',
+              value: String(c.sinDatos),
+            },
+          ]
+        : []),
+    ],
+    reporteSimple: {
+      data: {
+        subject,
+        areas: r.areas,
+        fecha: r.fechaLocal,
+        corte: r.corte,
+        completados: c.completados,
+        incompletos: c.incompletos,
+        canales: c.canales,
+        productores: c.productores,
+        sinDatos: c.sinDatos,
+        adjunto: !!excel,
+        ...(excel ? { omitidas: excel.omitidas } : {}),
+      },
+      ...(excel
+        ? {
+            attachments: [
+              {
+                filename: excel.filename,
+                contentBase64: excel.buffer.toString('base64'),
+                contentType:
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              },
+            ],
+          }
+        : {}),
+    },
   };
 }
