@@ -361,6 +361,62 @@ export function maskPoliza(v?: string | null): string {
   return `${'*'.repeat(Math.max(4, s.length - 4))}${s.slice(-4)}`;
 }
 
+/** Iniciales del asegurado («María José Pérez» → «M. P.»): primer nombre y primer apellido. */
+export function inicialesNombre(
+  nombre?: string | null,
+  apellido?: string | null,
+): string {
+  const palabras = (v?: string | null) =>
+    String(v ?? '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+  const n = palabras(nombre);
+  const a = palabras(apellido);
+  const usar = a.length ? [n[0], a[0]] : n.slice(0, 2);
+  return usar
+    .map((p) => p?.match(/\p{L}/u)?.[0]?.toUpperCase())
+    .filter(Boolean)
+    .map((l) => `${l}.`)
+    .join(' ');
+}
+
+/** Documento parcial: «V-12345678» → «V-12•••678». Nunca el número completo. */
+export function maskDocumento(
+  tipoDoc?: string | null,
+  documento?: string | null,
+): string {
+  const d = soloDigitos(documento);
+  if (!d) return '';
+  const parcial =
+    d.length >= 6
+      ? `${d.slice(0, 2)}•••${d.slice(-3)}`
+      : d.length >= 3
+        ? `${d[0]}•••${d.slice(-1)}`
+        : '•••';
+  const tipo = String(tipoDoc ?? '')
+    .trim()
+    .toUpperCase();
+  return tipo ? `${tipo}-${parcial}` : parcial;
+}
+
+/** Asegurado para reportes: «M. P. · V-12•••678» (sin correo ni teléfono). */
+export function aseguradoProtegido(e: {
+  aseguradoNombre?: string | null;
+  aseguradoApellido?: string | null;
+  aseguradoTipoDoc?: string | null;
+  aseguradoDocumento?: string | null;
+}): string {
+  return (
+    [
+      inicialesNombre(e.aseguradoNombre, e.aseguradoApellido),
+      maskDocumento(e.aseguradoTipoDoc, e.aseguradoDocumento),
+    ]
+      .filter(Boolean)
+      .join(' · ') || '—'
+  );
+}
+
 /** Lista blanca fuera de producción: vacía = no se envía nada. */
 export function whitelistPermite(
   to: string,

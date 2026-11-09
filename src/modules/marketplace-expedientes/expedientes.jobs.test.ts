@@ -292,18 +292,27 @@ describe('resumen nocturno', () => {
       'portal:1',
     );
     const vacio = await tareaNocturna(BASE);
-    expect(vacio).toMatchObject({ emitidas: 0, resultado: 'enviado' });
+    expect(vacio).toMatchObject({ resultado: 'enviado' });
+    expect(vacio.reportes[0]).toMatchObject({ grupo: 'canales', emitidas: 0 });
     expect(mailCalls()).toHaveLength(1);
     expect(bodyDe(mailCalls()[0]).to).toBe('lm@test.com');
     expect(bodyDe(mailCalls()[0]).toExtra).toBeUndefined();
 
     await crear('P-1');
     const r = await tareaNocturna(BASE);
-    expect(r).toMatchObject({ emitidas: 1, incompletas: 1, sinDocumentos: 1 });
-    const json = JSON.stringify(bodyDe(mailCalls()[1]));
+    expect(r.reportes[0]).toMatchObject({
+      emitidas: 1,
+      incompletas: 1,
+      listadas: 1,
+    });
+    const body = bodyDe(mailCalls()[1]);
+    expect(body.data.distribucion.faltantes).toBe(3);
+    // La póliza sale en el listado; el asegurado, protegido.
+    const json = JSON.stringify(body);
+    expect(json).toContain('P-1');
     expect(json).not.toContain('11222333');
     expect(json).not.toContain('luis@test.com');
-    expect(json).not.toContain('P-1');
+    expect(json).not.toContain('Luis');
     expect(json).toContain('/monitor-expedientes');
   });
 

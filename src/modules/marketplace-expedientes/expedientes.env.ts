@@ -63,6 +63,24 @@ export function mailWhitelist(): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Reporte nocturno de Productores (intermediarios): queda listo pero APAGADO hasta que La Mundial
+ * lo apruebe. Para activarlo: EXPEDIENTES_RESUMEN_PRODUCTORES=true, sus destinatarios en
+ * EXPEDIENTES_RESUMEN_PRODUCTORES_DESTINATARIOS (separados por coma; no usa los de Canales) y el
+ * alcance «Productores» encendido en la configuración del monitor.
+ */
+export function reporteProductoresHabilitado(): boolean {
+  return flag('EXPEDIENTES_RESUMEN_PRODUCTORES');
+}
+
+export function destinatariosReporteProductores(): string[] {
+  return String(process.env.EXPEDIENTES_RESUMEN_PRODUCTORES_DESTINATARIOS ?? '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
 export function publicBaseUrl(): string {
   return String(process.env.EXPEDIENTES_PUBLIC_URL ?? '')
     .trim()

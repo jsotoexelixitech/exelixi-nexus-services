@@ -1,14 +1,14 @@
 /**
- * Lógica de las tareas diaria (recordatorios por cadencia) y nocturna (resumen).
- * Sin datos personales en logs; cada intento queda en mkt_expediente_notificacion.
+ * Lógica de las tareas diaria (recordatorios por cadencia) y nocturna (control documental
+ * diario). Sin datos personales en logs; cada intento queda en mkt_expediente_notificacion.
  */
 import { randomUUID } from 'crypto';
 import type { MktExpediente, MktExpedienteRequisito } from '@prisma/client';
 import prisma from '../../config/prisma';
+import logger from '../../utils/logger';
 import {
   areasEnAlcance,
   cadenciaVencida,
-  caracasInicioDia,
   caracasParts,
   diasCaracasEntre,
   emailValido,
@@ -19,16 +19,25 @@ import {
   whitelistPermite,
 } from './expedientes.domain';
 import {
+  destinatariosReporteProductores,
   expedientesEsProduccion,
   mailWhitelist,
-  publicBaseUrl,
+  reporteProductoresHabilitado,
 } from './expedientes.env';
 import {
   correoRecordatorio,
   correoResumenNocturno,
   correoSolicitudInicial,
   entregarCorreo,
+  EntregaResultado,
+  ResultadoEnvio,
+  sinCorreosEnTexto,
 } from './expedientes.mail';
+import {
+  armarReporteDiario,
+  GRUPOS_REPORTE,
+  GrupoReporte,
+} from './expedientes.reporte';
 import {
   documentosCorreo,
   estaExcluido,
@@ -265,131 +274,172 @@ export async function tareaDiaria(ahora: Date) {
 
 // ─── Nocturna ───────────────────────────────────────────────────────────────
 
-const RE_ILEGIBLE = /leer|legib|nitid|borros/i;
+/** Reintentos del reporte nocturno en la misma noche (los programa el scheduler). */
+export const MAX_REINTENTOS_NOCTURNA = 3;
 
-function areasLabel(config: ExpedientesConfig): string {
-  const a = config.alcance;
-  const partes = [
-    // Los gestores trabajan para los canales: no son un área aparte.
-    a.canales ? 'Canales' : null,
-    a.productores ? 'Productores' : null,
-  ].filter(Boolean) as string[];
-  if (!partes.length) return 'Marketplace';
-  return partes.length === 1
-    ? partes[0]
-    : `${partes.slice(0, -1).join(', ')} y ${partes.at(-1)}`;
+export type ResultadoReporte =
+  | ResultadoEnvio
+  /** Productores sin aprobación (EXPEDIENTES_RESUMEN_PRODUCTORES apagado). */
+  | 'deshabilitado'
+  /** Productores aprobado pero su alcance está apagado en la configuración. */
+  | 'fuera_de_alcance'
+  /** Reintento: ese reporte ya salió en un intento anterior. */
+  | 'ya_enviado'
+  /** Reintento: el intento anterior no fue un fallo de entrega (p. ej. sin destinatarios). */
+  | 'sin_reintento';
+
+export interface EnvioReporte {
+  grupo: GrupoReporte;
+  resultado: ResultadoReporte;
+  plantilla?: string;
+  areas?: string;
+  emitidas?: number;
+  completas?: number;
+  incompletas?: number;
+  listadas?: number;
+  restantes?: number;
 }
 
-/** Correo 6. Se envía aunque haya cero; sin datos personales en el cuerpo. */
-export async function tareaNocturna(ahora: Date) {
-  const config = await svc.getConfig();
-  const { fecha, hora } = caracasParts(ahora);
-  const inicio = caracasInicioDia(fecha);
-  const fin = new Date(inicio.getTime() + 86_400_000);
-  const todos = await prisma.mktExpediente.findMany({
-    where: {
-      area: { in: areasEnAlcance(config.alcance) },
-      // Descartadas (no pasaron por el OCR): no cuentan en el resumen.
-      estadoDocumental: { not: 'descartada' },
-    },
-  });
-  const hoy = todos.filter((e) => e.emitidaEn >= inicio && e.emitidaEn < fin);
-  const reqs = await requisitosPorExpediente(hoy.map((e) => e.id));
-  const exclusiones = await svc.exclusionesActivas();
-  const incompletasHoy = hoy.filter((e) => e.estadoDocumental === 'incompleto');
-  const obs = (e: Exp) =>
-    (reqs.get(e.id) ?? []).filter((r) => r.estado === 'observado');
-
-  const notifs = await prisma.mktExpedienteNotificacion.findMany({
-    where: {
-      createdAt: { gte: inicio, lt: fin },
-      tipo: { notIn: ['resumen_nocturno', 'prueba'] },
-    },
-  });
-  const errores = await prisma.mktExpedienteEvento.count({
-    where: { tipo: 'error_tecnico', createdAt: { gte: inicio, lt: fin } },
-  });
-  const [totalEmisiones, totalExpedientes] = await Promise.all([
-    prisma.emision.count(),
-    prisma.mktExpediente.count(),
-  ]);
-
-  const [dd, mm, yyyy] = [
-    fecha.slice(8, 10),
-    fecha.slice(5, 7),
-    fecha.slice(0, 4),
-  ];
-  const fechaLocal = `${dd}/${mm}/${yyyy}`;
-  const base = publicBaseUrl();
-  const datos = {
-    fechaLocal,
-    fechaHoraCaracas: `${fechaLocal} ${hora} (hora de Caracas)`,
-    areasLabel: areasLabel(config),
-    emitidas: hoy.length,
-    completas: hoy.filter((e) => e.estadoDocumental === 'completo').length,
-    incompletas: incompletasHoy.length,
-    pendientesPago: hoy.filter((e) => e.estadoPago === 'pendiente').length,
-    sinDocumentos: incompletasHoy.filter((e) =>
-      requisitosAplicables(e.producto, config).every(
-        (t) =>
-          ((reqs.get(e.id) ?? []).find((r) => r.tipo === t)?.estado ??
-            'faltante') === 'faltante',
-      ),
-    ).length,
-    ilegibles: hoy.filter((e) =>
-      obs(e).some((r) => RE_ILEGIBLE.test(r.motivo ?? '')),
-    ).length,
-    inconsistentes: hoy.filter((e) =>
-      obs(e).some((r) => !RE_ILEGIBLE.test(r.motivo ?? '')),
-    ).length,
-    porValidar: hoy.filter((e) =>
-      (reqs.get(e.id) ?? []).some((r) => r.estado === 'recibido'),
-    ).length,
-    intentos: notifs.filter((n) =>
-      ['enviado', 'error', 'bloqueado_whitelist'].includes(n.resultado),
-    ).length,
-    entregados: notifs.filter((n) => n.resultado === 'enviado').length,
-    rebotes: notifs.filter(
-      (n) => n.resultado === 'error' || n.resultado === 'rebotado',
-    ).length,
-    excluidos: todos.filter(
-      (e) => e.estadoDocumental !== 'completo' && estaExcluido(e, exclusiones),
-    ).length,
-    totalCartera: todos.length,
-    totalCompletos: todos.filter((e) => e.estadoDocumental === 'completo')
-      .length,
-    totalIncompletos: todos.filter((e) => e.estadoDocumental === 'incompleto')
-      .length,
-    sinInformacion: todos.filter(
-      (e) => e.estadoDocumental === 'sin_informacion',
-    ).length,
-    sinVinculo: Math.max(0, totalEmisiones - totalExpedientes),
-    errores,
-    enlaceReporte: base ? `${base}/monitor-expedientes` : null,
-  };
-
-  let resultado: string;
-  let destinatarioMasked: string | null = null;
-  let error: string | undefined;
-  if (!config.destinatariosResumen.length) {
-    resultado = 'sin_correo';
-  } else {
-    const r = await entregarCorreo(
-      config.destinatariosResumen,
-      undefined,
-      correoResumenNocturno(datos),
+/** Evidencia y alerta de un reporte nocturno que no salió (sin datos personales). */
+export async function alertaReporteFallido(d: {
+  fecha: string;
+  grupo?: GrupoReporte;
+  intento: number;
+  error?: string;
+}): Promise<void> {
+  const agotado = d.intento >= MAX_REINTENTOS_NOCTURNA;
+  const error = sinCorreosEnTexto(String(d.error ?? 'error')).slice(0, 300);
+  try {
+    await svc.evento(null, 'reporte_nocturno_fallido', 'sistema', {
+      fecha: d.fecha,
+      grupo: d.grupo ?? null,
+      intento: d.intento,
+      reintentoPendiente: !agotado,
+      error,
+    });
+  } catch (err) {
+    logger.error(
+      `[expedientes] no se pudo registrar reporte_nocturno_fallido: ${err instanceof Error ? err.message : 'error'}`,
     );
-    resultado = r.resultado;
-    destinatarioMasked = r.destinatarioMasked;
-    error = r.error;
+  }
+  logger.error(
+    `[expedientes] reporte nocturno ${d.grupo ?? ''} del ${d.fecha} no se entregó ` +
+      `(intento ${d.intento + 1} de ${MAX_REINTENTOS_NOCTURNA + 1}); ` +
+      (agotado ? 'sin más reintentos' : 'se reintentará esta noche'),
+  );
+}
+
+async function reporteDeGrupo(
+  grupo: GrupoReporte,
+  ctx: {
+    config: ExpedientesConfig;
+    fecha: string;
+    ahora: Date;
+    intento: number;
+    exclusiones: Awaited<ReturnType<typeof svc.exclusionesActivas>>;
+  },
+): Promise<EnvioReporte> {
+  const { config, fecha, intento } = ctx;
+  // Intermediarios: plantilla y tarea listas, pero sin aprobación no se genera.
+  if (grupo === 'productores') {
+    if (!reporteProductoresHabilitado())
+      return { grupo, resultado: 'deshabilitado' };
+    if (!config.alcance.productores)
+      return { grupo, resultado: 'fuera_de_alcance' };
+  }
+  const lote = `nocturna:${fecha}:${grupo}`;
+  if (intento > 0) {
+    const previas = await prisma.mktExpedienteNotificacion.findMany({
+      where: { tipo: 'resumen_nocturno', lote },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    // Nunca se duplica: si un intento anterior salió, el reintento no lo repite.
+    if (previas.some((n) => n.resultado === 'enviado'))
+      return { grupo, resultado: 'ya_enviado' };
+    if (previas[0] && previas[0].resultado !== 'error')
+      return { grupo, resultado: 'sin_reintento' };
+  }
+
+  const reporte = await armarReporteDiario(grupo, {
+    config,
+    fecha,
+    ahora: ctx.ahora,
+    exclusiones: ctx.exclusiones,
+  });
+  const destinatarios =
+    grupo === 'productores'
+      ? destinatariosReporteProductores()
+      : config.destinatariosResumen;
+  let r: EntregaResultado = {
+    resultado: 'sin_correo',
+    destinatarioMasked: null,
+  };
+  if (destinatarios.length) {
+    r = await entregarCorreo(
+      destinatarios,
+      undefined,
+      correoResumenNocturno(reporte),
+    );
   }
   await svc.registrarNotificacion({
     expedienteId: null,
     tipo: 'resumen_nocturno',
-    resultado,
-    destinatarioMasked,
-    error: error ?? null,
+    // etapa = intento (0 = primer envío de la noche; 1 a 3 = reintentos).
+    etapa: intento,
+    resultado: r.resultado,
+    destinatarioMasked: r.destinatarioMasked,
+    error: r.error ?? null,
+    lote,
   });
-  const { enlaceReporte: _enlace, ...metricas } = datos;
-  return { ...metricas, resultado };
+  if (r.resultado === 'error')
+    await alertaReporteFallido({ fecha, grupo, intento, error: r.error });
+  return {
+    grupo,
+    resultado: r.resultado,
+    ...(r.plantilla ? { plantilla: r.plantilla } : {}),
+    areas: reporte.areas,
+    emitidas: reporte.dia.emitidas,
+    completas: reporte.dia.completas,
+    incompletas: reporte.dia.incompletas,
+    listadas: reporte.polizas.length,
+    restantes: reporte.polizasRestantes,
+  };
+}
+
+/**
+ * Correo 6, «Control documental diario»: emitidas del día local incompletas al corte y cartera
+ * acumulada. Se envía aunque haya cero pendientes. Un reporte para Canales y otro para
+ * Productores (apagado hasta su aprobación). Si la entrega falla, `reintentar` = true y el
+ * scheduler reintenta (expedientes.jobs). La evidencia queda en el registro de la tarea y en
+ * mkt_expediente_notificacion (lote `nocturna:<fecha>:<grupo>`, etapa = intento).
+ */
+export async function tareaNocturna(
+  ahora: Date,
+  opts: { fecha?: string; intento?: number } = {},
+) {
+  const config = await svc.getConfig();
+  const fecha = opts.fecha ?? caracasParts(ahora).fecha;
+  const intento = opts.intento ?? 0;
+  const exclusiones = await svc.exclusionesActivas();
+  const reportes: EnvioReporte[] = [];
+  for (const grupo of GRUPOS_REPORTE) {
+    reportes.push(
+      await reporteDeGrupo(grupo, {
+        config,
+        fecha,
+        ahora,
+        intento,
+        exclusiones,
+      }),
+    );
+  }
+  const canales = reportes.find((x) => x.grupo === 'canales');
+  return {
+    fecha,
+    intento,
+    /** Resultado del reporte de Canales. */
+    resultado: canales?.resultado ?? 'sin_correo',
+    reintentar: reportes.some((x) => x.resultado === 'error'),
+    reportes,
+  };
 }

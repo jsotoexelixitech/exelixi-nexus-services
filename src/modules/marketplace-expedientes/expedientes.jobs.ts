@@ -1,14 +1,20 @@
 /**
  * Tareas del monitor (hora Caracas). Cada ejecución automática se registra en
  * `mkt_expediente_job_run` con único (job, fecha): si el proceso reinicia o hay
- * varias instancias, la tarea del día corre una sola vez.
+ * varias instancias, la tarea del día corre una sola vez. Si el reporte nocturno no se entrega,
+ * se reintenta hasta 3 veces esa misma noche con clave `<fecha>~reintento~<n>`.
  */
 import type { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { caracasParts } from './expedientes.domain';
 import { expedientesJobsEnabled } from './expedientes.env';
-import { tareaDiaria, tareaNocturna } from './expedientes.tareas';
+import {
+  alertaReporteFallido,
+  MAX_REINTENTOS_NOCTURNA,
+  tareaDiaria,
+  tareaNocturna,
+} from './expedientes.tareas';
 import { expedientesService as svc } from './expedientes.service';
 import type { JobName } from './expedientes.schema';
 
@@ -18,6 +24,10 @@ export interface EjecutarJobOpts {
   forzar?: boolean;
   actor?: string;
   ahora?: Date;
+  /** Solo nocturna: reintento n (1 a 3) del reporte del día `fechaReporte`. */
+  reintento?: number;
+  /** Solo nocturna: día del reporte (YYYY-MM-DD, Caracas); por defecto, el de `ahora`. */
+  fechaReporte?: string;
 }
 
 export type JobResultado =
@@ -33,6 +43,7 @@ export type JobResultado =
 async function correr(
   job: JobName,
   ahora: Date,
+  opts: EjecutarJobOpts,
 ): Promise<Record<string, unknown>> {
   switch (job) {
     case 'conciliacion':
@@ -40,7 +51,10 @@ async function correr(
     case 'diaria':
       return tareaDiaria(ahora);
     case 'nocturna':
-      return tareaNocturna(ahora);
+      return tareaNocturna(ahora, {
+        fecha: opts.fechaReporte,
+        intento: opts.reintento,
+      });
     case 'validacion_ia':
       return {
         validacionIa: await svc.revisarConIa({ modo: 'completo', ahora }),
@@ -56,8 +70,9 @@ export async function ejecutarJob(
 ): Promise<JobResultado> {
   const ahora = opts.ahora ?? new Date();
   const { fecha } = caracasParts(ahora);
-  const clave =
-    opts.origen === 'manual' && opts.forzar
+  const clave = opts.reintento
+    ? `${opts.fechaReporte ?? fecha}~reintento~${opts.reintento}`
+    : opts.origen === 'manual' && opts.forzar
       ? `${fecha}~manual~${ahora.getTime()}`
       : fecha;
 
@@ -75,7 +90,7 @@ export async function ejecutarJob(
   }
 
   try {
-    const resumen = await correr(job, ahora);
+    const resumen = await correr(job, ahora, opts);
     await prisma.mktExpedienteJobRun.update({
       where: { id: runId },
       data: {
@@ -97,6 +112,13 @@ export async function ejecutarJob(
     });
     await svc.eventoTecnico({ etapa: `job_${job}`, error: msg });
     logger.error(`[expedientes] tarea ${job} ${clave} falló: ${msg}`);
+    // El reporte no salió: alerta y el scheduler lo reintenta esta noche.
+    if (job === 'nocturna')
+      await alertaReporteFallido({
+        fecha: opts.fechaReporte ?? fecha,
+        intento: opts.reintento ?? 0,
+        error: msg,
+      });
     return {
       job,
       fecha: clave,
@@ -105,6 +127,73 @@ export async function ejecutarJob(
       resumen: { error: msg },
     };
   }
+}
+
+// ─── Reintentos del reporte nocturno ────────────────────────────────────────
+
+/** Espera (minutos) antes de cada reintento, contada desde el intento anterior. */
+export const ESPERAS_REINTENTO_NOCTURNA_MIN = [5, 15, 30];
+/** Pasado este tiempo desde el primer intento ya no se reintenta (es la misma noche). */
+const VENTANA_REINTENTO_MS = 3 * 60 * 60 * 1000;
+/** Un intento «en curso» más viejo que esto se da por caído (el proceso se reinició a mitad). */
+const EN_CURSO_CAIDO_MS = 20 * 60 * 1000;
+
+/**
+ * Reintento del reporte nocturno que toca ahora, o null. Solo si el último intento de la noche
+ * falló (tarea con error o `reintentar` en su resumen), quedan reintentos y ya pasó la espera.
+ * Mira el día de hoy y el de ayer (un corte tardío puede reintentarse pasada la medianoche).
+ */
+export async function reintentoNocturnaDebido(
+  ahora: Date,
+): Promise<{ fecha: string; reintento: number } | null> {
+  const hoy = caracasParts(ahora).fecha;
+  const ayer = caracasParts(new Date(ahora.getTime() - 86_400_000)).fecha;
+  for (const fecha of [hoy, ayer]) {
+    const runs = await prisma.mktExpedienteJobRun.findMany({
+      where: { job: 'nocturna', fecha: { startsWith: fecha } },
+      orderBy: { id: 'asc' },
+    });
+    const base = runs.find((r) => r.fecha === fecha);
+    if (!base) continue;
+    const reintentos = runs.filter((r) =>
+      r.fecha.startsWith(`${fecha}~reintento~`),
+    );
+    const ultimo = reintentos.at(-1) ?? base;
+    const caido =
+      ultimo.estado === 'en_curso' &&
+      ahora.getTime() - ultimo.inicio.getTime() > EN_CURSO_CAIDO_MS;
+    if (ultimo.estado === 'en_curso' && !caido) return null;
+    const resumen = (ultimo.resumen ?? {}) as { reintentar?: unknown };
+    if (!caido && ultimo.estado !== 'error' && resumen.reintentar !== true)
+      return null;
+    const n = reintentos.length + 1;
+    if (n > MAX_REINTENTOS_NOCTURNA) return null;
+    if (ahora.getTime() - base.inicio.getTime() > VENTANA_REINTENTO_MS)
+      return null;
+    const espera = ESPERAS_REINTENTO_NOCTURNA_MIN[n - 1] * 60_000;
+    if (ahora.getTime() - (ultimo.fin ?? ultimo.inicio).getTime() < espera)
+      return null;
+    return { fecha, reintento: n };
+  }
+  return null;
+}
+
+/** Corre el reintento que toque (único por fecha y número: nunca dos veces el mismo). */
+export async function reintentarNocturna(
+  ahora: Date = new Date(),
+): Promise<JobResultado | null> {
+  const debido = await reintentoNocturnaDebido(ahora);
+  if (!debido) return null;
+  logger.warn(
+    `[expedientes] reintento ${debido.reintento} de ${MAX_REINTENTOS_NOCTURNA} del reporte nocturno del ${debido.fecha}`,
+  );
+  return ejecutarJob('nocturna', {
+    origen: 'auto',
+    ahora,
+    actor: 'scheduler',
+    reintento: debido.reintento,
+    fechaReporte: debido.fecha,
+  });
 }
 
 // ─── Scheduler (patrón setInterval; solo con EXPEDIENTES_JOBS_ENABLED) ──────
@@ -141,6 +230,8 @@ export async function tickScheduler(
       yaCorrio[job] = fecha;
       if (!r.omitido) corridos.push(job);
     }
+    const reintento = await reintentarNocturna(ahora);
+    if (reintento && !reintento.omitido) corridos.push('nocturna');
   } catch (err) {
     logger.error(
       `[expedientes] scheduler: ${err instanceof Error ? err.message : 'error'}`,

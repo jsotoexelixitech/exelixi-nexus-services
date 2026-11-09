@@ -434,7 +434,7 @@ export function exclusionDto(x: MktExpedienteExclusion) {
 }
 
 /** Nombre del actor si la emisión lo dejó en el snapshot (no se consulta Sis2000). */
-function nombreActorDeSnapshot(
+export function nombreActorDeSnapshot(
   snapshot: unknown,
   tipo: TipoActor,
 ): string | null {

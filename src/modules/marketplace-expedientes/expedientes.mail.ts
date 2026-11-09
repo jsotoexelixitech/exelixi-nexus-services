@@ -2,7 +2,8 @@
  * Correos del monitor de expedientes vía nest-api `POST /api/v1/mail/send`.
  * Al asegurado (correos 1 a 5): plantilla `expediente-documentos` con el texto oficial de
  * La Mundial (de usted, póliza en negrita, documentos pendientes y botón). Si nest-api aún no la conoce (400/422), se
- * reintenta una vez con `branded`. Correo 6 (resumen a La Mundial): `branded`.
+ * reintenta una vez con `branded`. Correo 6 (control documental diario a La Mundial):
+ * `expediente-reporte-diario` con respaldo `branded` (solo cifras).
  * Textos: documento 03_Correos_y_Reporte_Nocturno. Al asegurado nunca se le dice
  * «vendedor» ni se le tutea. Nunca se registran correos ni nombres en logs.
  */
@@ -14,6 +15,8 @@ import {
   mailWhitelist,
   nestMailConfig,
 } from './expedientes.env';
+// Solo tipos: el servicio importa este archivo y el reporte importa el servicio.
+import type { FilaReporte, ReporteDiario } from './expedientes.reporte';
 
 export type TipoCorreoAsegurado =
   | 'solicitud'
@@ -62,7 +65,15 @@ export interface BrandedContent {
   expediente?: DatosExpedienteCorreo;
   /** Código de acceso por cédula: plantilla `expediente-codigo` con respaldo `branded`. */
   codigo?: { nombre: string; codigo: string; minutos: number };
+  /** Control documental diario: `expediente-reporte-diario` con respaldo `branded` (cifras). */
+  reporte?: Record<string, unknown>;
 }
+
+export type PlantillaCorreo =
+  | 'branded'
+  | 'expediente-documentos'
+  | 'expediente-codigo'
+  | 'expediente-reporte-diario';
 
 export type ResultadoEnvio =
   | 'enviado'
@@ -75,10 +86,19 @@ export interface EntregaResultado {
   resultado: ResultadoEnvio;
   destinatarioMasked: string | null;
   error?: string;
+  /** Plantilla con que salió (o la última intentada). */
+  plantilla?: PlantillaCorreo;
 }
 
 function recortar(v: string, max: number): string {
   return v.length > max ? `${v.slice(0, max - 1)}…` : v;
+}
+
+const EMAIL_EN_TEXTO = /[^\s@<>()"',;:]+@[^\s@<>()"',;:]+\.[a-z]{2,}/gi;
+
+/** Errores del SMTP pueden traer el destinatario: se enmascara antes de guardarlos o loguearlos. */
+export function sinCorreosEnTexto(v: string): string {
+  return v.replace(EMAIL_EN_TEXTO, (m) => maskEmail(m) ?? '***');
 }
 
 /** Estado de la BD → estado visible; `sin_informacion` no se muestra. */
@@ -105,7 +125,7 @@ function enLista(items: string[]): string {
 async function postNest(
   to: string[],
   toName: string | undefined,
-  template: 'branded' | 'expediente-documentos' | 'expediente-codigo',
+  template: PlantillaCorreo,
   data: Record<string, unknown>,
 ): Promise<{ sent: boolean; error?: string; status?: number }> {
   const { url, apiKey } = nestMailConfig();
@@ -175,31 +195,37 @@ async function postCorreo(
   to: string[],
   toName: string | undefined,
   content: BrandedContent,
-): Promise<{ sent: boolean; error?: string }> {
-  if (content.codigo) {
-    const r = await postNest(to, toName, 'expediente-codigo', {
-      subject: content.subject,
-      nombre: recortar(content.codigo.nombre, 80),
-      codigo: content.codigo.codigo,
-      minutos: content.codigo.minutos,
-    });
-    if (r.sent || (r.status !== 400 && r.status !== 422)) return r;
+): Promise<{ sent: boolean; error?: string; plantilla: PlantillaCorreo }> {
+  const propia: [PlantillaCorreo, Record<string, unknown>] | null =
+    content.codigo
+      ? [
+          'expediente-codigo',
+          {
+            subject: content.subject,
+            nombre: recortar(content.codigo.nombre, 80),
+            codigo: content.codigo.codigo,
+            minutos: content.codigo.minutos,
+          },
+        ]
+      : content.expediente
+        ? [
+            'expediente-documentos',
+            datosExpediente(content.subject, content.expediente),
+          ]
+        : content.reporte
+          ? ['expediente-reporte-diario', content.reporte]
+          : null;
+  if (propia) {
+    const [plantilla, data] = propia;
+    const r = await postNest(to, toName, plantilla, data);
+    if (r.sent || (r.status !== 400 && r.status !== 422))
+      return { ...r, plantilla };
     logger.warn(
-      `[expedientes-mail] nest-api rechazó expediente-codigo (HTTP ${r.status}); reintento con branded`,
-    );
-  } else if (content.expediente) {
-    const r = await postNest(
-      to,
-      toName,
-      'expediente-documentos',
-      datosExpediente(content.subject, content.expediente),
-    );
-    if (r.sent || (r.status !== 400 && r.status !== 422)) return r;
-    logger.warn(
-      `[expedientes-mail] nest-api rechazó expediente-documentos (HTTP ${r.status}); reintento con branded`,
+      `[expedientes-mail] nest-api rechazó ${plantilla} (HTTP ${r.status}); reintento con branded`,
     );
   }
-  return postNest(to, toName, 'branded', datosBranded(content));
+  const r = await postNest(to, toName, 'branded', datosBranded(content));
+  return { ...r, plantilla: 'branded' };
 }
 
 /**
@@ -235,16 +261,20 @@ export async function entregarCorreo(
   const r = await postCorreo(permitidos, toName, content);
   const maskedPermitidos = permitidos.map((v) => maskEmail(v)).join(', ');
   if (!r.sent) {
-    logger.warn(
-      `[expedientes-mail] envío fallido: ${r.error ?? 'sin detalle'}`,
-    );
+    const error = recortar(sinCorreosEnTexto(String(r.error ?? 'error')), 300);
+    logger.warn(`[expedientes-mail] envío fallido: ${error}`);
     return {
       resultado: 'error',
       destinatarioMasked: maskedPermitidos,
-      error: recortar(String(r.error ?? 'error'), 300),
+      error,
+      plantilla: r.plantilla,
     };
   }
-  return { resultado: 'enviado', destinatarioMasked: maskedPermitidos };
+  return {
+    resultado: 'enviado',
+    destinatarioMasked: maskedPermitidos,
+    plantilla: r.plantilla,
+  };
 }
 
 // ─── Plantillas (correos 1 a 6) ────────────────────────────────────────────
@@ -437,66 +467,118 @@ export function correoCodigo(p: {
   };
 }
 
-export interface ResumenNocturno {
-  fechaLocal: string;
-  fechaHoraCaracas: string;
-  areasLabel: string;
-  emitidas: number;
-  completas: number;
-  incompletas: number;
-  sinDocumentos: number;
-  ilegibles: number;
-  inconsistentes: number;
-  porValidar: number;
-  intentos: number;
-  entregados: number;
-  rebotes: number;
-  excluidos: number;
-  totalCartera: number;
-  totalCompletos: number;
-  totalIncompletos: number;
-  sinInformacion: number;
-  sinVinculo: number;
-  errores: number;
-  pendientesPago: number;
-  enlaceReporte: string | null;
+// ─── Correo 6: control documental diario (a La Mundial) ─────────────────────
+
+/**
+ * nest-api acepta 100 KB por petición: con textos largos se quitan filas del final (pasan a
+ * «restantes», que se ven en el monitor) hasta que el cuerpo cabe holgado.
+ */
+export const MAX_BYTES_REPORTE = 90_000;
+
+/** Asunto oficial: «Marketplace | Canales | Control documental diario – DD/MM/AAAA». */
+export function asuntoReporteDiario(areas: string, fechaLocal: string): string {
+  return `Marketplace | ${areas} | Control documental diario – ${fechaLocal}`;
 }
 
-/** Correo 6: sin datos personales; el detalle va por enlace autenticado. */
-export function correoResumenNocturno(r: ResumenNocturno): BrandedContent {
-  const n = (v: number) => String(v);
+function filaParaCorreo(f: FilaReporte): FilaReporte {
   return {
-    subject: `Marketplace | ${r.areasLabel} | Control documental diario – ${r.fechaLocal}`,
+    poliza: recortar(f.poliza, 40),
+    asegurado: recortar(f.asegurado, 40),
+    producto: recortar(f.producto, 40),
+    emitidaPor: recortar(f.emitidaPor, 80),
+    observacion: recortar(f.observacion, 160),
+    dias: f.dias,
+    intentos: f.intentos,
+    ultimoResultado: recortar(f.ultimoResultado, 40),
+    noEnviar: f.noEnviar,
+    siguienteAccion: recortar(f.siguienteAccion, 80),
+  };
+}
+
+/** Datos para `expediente-reporte-diario` (nest-api vuelve a validar, recortar y escapar). */
+export function datosReporteDiario(
+  subject: string,
+  r: ReporteDiario,
+): Record<string, unknown> {
+  const base = {
+    subject,
+    areas: r.areas,
+    fecha: r.fechaLocal,
+    corte: r.corte,
+    dia: r.dia,
+    distribucion: r.distribucion,
+    cartera: r.cartera,
+    historicos: r.historicos,
+    conciliacion: r.conciliacion,
+    entregabilidad: r.entregabilidad,
+    tecnicos: r.tecnicos,
+    ...(r.enlace ? { enlace: r.enlace } : {}),
+  };
+  let polizas = r.polizas.map(filaParaCorreo);
+  let restantes = r.polizasRestantes;
+  const medir = () =>
+    Buffer.byteLength(
+      JSON.stringify({ ...base, polizas, polizasRestantes: restantes }),
+      'utf8',
+    );
+  while (polizas.length && medir() > MAX_BYTES_REPORTE) {
+    const quitar = Math.max(1, Math.ceil(polizas.length * 0.1));
+    polizas = polizas.slice(0, -quitar);
+    restantes += quitar;
+  }
+  return { ...base, polizas, polizasRestantes: restantes };
+}
+
+/**
+ * Correo 6: listado de las incompletas de hoy con el asegurado protegido (iniciales y
+ * documento parcial) y botón al monitor (requiere sesión). Si nest-api no conoce la plantilla
+ * nueva, sale `branded` solo con cifras, como antes.
+ */
+export function correoResumenNocturno(r: ReporteDiario): BrandedContent {
+  const n = (v: number) => String(v);
+  const subject = asuntoReporteDiario(r.areas, r.fechaLocal);
+  const cero = r.dia.incompletas === 0;
+  return {
+    subject,
     title: `Control documental diario – ${r.fechaLocal}`,
     // Las cifras van solo en la tabla; la introducción sale una vez.
-    intro: `Corte: ${r.fechaHoraCaracas}. Pólizas emitidas en el Marketplace y estado de sus documentos.`,
+    intro: cero
+      ? `Corte: ${r.corte} (hora de Caracas). 0 pendientes de la emisión del día.`
+      : `Corte: ${r.corte} (hora de Caracas). Pólizas emitidas en el Marketplace y estado de sus documentos.`,
     introArriba: false,
     fields: [
-      { label: 'Emitidas hoy', value: n(r.emitidas) },
-      { label: 'Completas al corte', value: n(r.completas) },
-      { label: 'Incompletas de hoy', value: n(r.incompletas) },
-      { label: 'Pendientes de pago (hoy)', value: n(r.pendientesPago) },
-      { label: 'Sin documentos', value: n(r.sinDocumentos) },
-      { label: 'Ilegibles', value: n(r.ilegibles) },
-      { label: 'Inconsistentes', value: n(r.inconsistentes) },
-      { label: 'Por validar', value: n(r.porValidar) },
-      { label: 'Correos intentados', value: n(r.intentos) },
+      { label: 'Emitidas hoy', value: n(r.dia.emitidas) },
+      { label: 'Completas al corte', value: n(r.dia.completas) },
+      { label: 'Incompletas de hoy', value: n(r.dia.incompletas) },
+      { label: 'Faltantes', value: n(r.distribucion.faltantes) },
+      { label: 'Ilegibles', value: n(r.distribucion.ilegibles) },
+      { label: 'Inconsistentes', value: n(r.distribucion.inconsistentes) },
+      { label: 'Por validar', value: n(r.distribucion.porValidar) },
+      { label: 'Correos intentados', value: n(r.entregabilidad.intentos) },
       {
         label: 'Entregados (aceptados por el servidor)',
-        value: n(r.entregados),
+        value: n(r.entregabilidad.entregados),
       },
-      { label: 'Con error o rebotados', value: n(r.rebotes) },
-      { label: '«No enviar correos»', value: n(r.excluidos) },
+      { label: 'Con error o rebotados', value: n(r.entregabilidad.conError) },
+      { label: '«No enviar correos»', value: n(r.historicos.noEnviar) },
       {
-        label: `Acumulado cartera ${r.areasLabel}`,
-        value: `${r.totalCartera} (${r.totalCompletos} completos, ${r.totalIncompletos} incompletos)`,
+        label: `Acumulado cartera ${r.areas}`,
+        value: `${r.cartera.total} (${r.cartera.completos} completos, ${r.cartera.incompletos} incompletos)`,
       },
-      { label: 'Errores técnicos', value: n(r.errores) },
+      {
+        label: 'Conciliación con Nexus',
+        value: r.conciliacion.sinVinculo
+          ? `${r.conciliacion.sinVinculo} sin vínculo`
+          : 'Cuadrada',
+      },
+      {
+        label: 'Errores técnicos',
+        value: n(r.tecnicos.documentosNoLeidos + r.tecnicos.fallasTecnicas),
+      },
     ],
-    ...(r.enlaceReporte
-      ? { ctaLabel: 'Ver detalle', ctaUrl: r.enlaceReporte }
-      : {}),
+    ...(r.enlace ? { ctaLabel: 'Ver detalle', ctaUrl: r.enlace } : {}),
     extraNote:
       'Detalle de la emisión incompleta del día en el monitor (requiere sesión).',
+    reporte: datosReporteDiario(subject, r),
   };
 }

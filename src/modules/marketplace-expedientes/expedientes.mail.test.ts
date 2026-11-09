@@ -14,9 +14,12 @@ import {
   correoResumenNocturno,
   correoSolicitudInicial,
   DatosCorreoAsegurado,
+  datosReporteDiario,
   entregarCorreo,
   estadoDocCorreo,
+  MAX_BYTES_REPORTE,
 } from './expedientes.mail';
+import type { FilaReporte, ReporteDiario } from './expedientes.reporte';
 
 const ENLACE = 'https://nexusqa.test/portal-lm/expediente?t=abc';
 
@@ -247,33 +250,82 @@ describe('vocabulario al asegurado', () => {
 });
 
 describe('control documental diario', () => {
-  const datos = {
-    fechaLocal: '08/11/2026',
-    fechaHoraCaracas: '08/11/2026 23:00',
-    areasLabel: 'Canales',
-    emitidas: 7,
-    completas: 3,
-    incompletas: 4,
-    sinDocumentos: 2,
-    ilegibles: 0,
-    inconsistentes: 0,
-    porValidar: 1,
-    intentos: 0,
-    entregados: 0,
-    rebotes: 0,
-    excluidos: 0,
-    totalCartera: 10,
-    totalCompletos: 5,
-    totalIncompletos: 5,
-    sinInformacion: 0,
-    sinVinculo: 0,
-    errores: 0,
-    pendientesPago: 0,
-    enlaceReporte: null,
+  const fila: FilaReporte = {
+    poliza: '18-27-0000137414',
+    asegurado: 'M. P. · V-12•••678',
+    producto: 'RCV',
+    emitidaPor: 'Farmatodo',
+    observacion: 'Falta licencia',
+    dias: 0,
+    intentos: 1,
+    ultimoResultado: 'Enviado',
+    noEnviar: false,
+    siguienteAccion: 'Recordatorio el 11/11/2026',
   };
+  const reporte = (extra: Partial<ReporteDiario> = {}): ReporteDiario => ({
+    grupo: 'canales',
+    areas: 'Canales',
+    fecha: '2026-11-08',
+    fechaLocal: '08/11/2026',
+    corte: '08/11/2026 23:00',
+    dia: { emitidas: 7, completas: 3, incompletas: 4, sinDatos: 0 },
+    distribucion: {
+      faltantes: 2,
+      ilegibles: 0,
+      inconsistentes: 0,
+      porValidar: 1,
+    },
+    polizas: [fila],
+    polizasRestantes: 3,
+    cartera: {
+      total: 10,
+      completos: 5,
+      incompletos: 5,
+      sinDatos: 0,
+      desglose: [{ label: 'Faltan documentos', valor: 5 }],
+    },
+    historicos: {
+      anteriores: 1,
+      sinRespuesta: 0,
+      sinCorreoValido: 0,
+      noEnviar: 0,
+    },
+    conciliacion: {
+      emisionesNexus: 7,
+      enMonitor: 7,
+      noPasaronOcr: 0,
+      sinVinculo: 0,
+    },
+    entregabilidad: {
+      intentos: 0,
+      entregados: 0,
+      conError: 0,
+      sinCorreo: 0,
+      bloqueados: 0,
+      excluidos: 0,
+    },
+    tecnicos: { documentosNoLeidos: 0, fallasTecnicas: 0 },
+    enlace: null,
+    ...extra,
+  });
 
-  it('las cifras van solo en la tabla y la introducción no se repite', () => {
-    const c = correoResumenNocturno(datos);
+  it('asunto oficial y datos para expediente-reporte-diario', () => {
+    const c = correoResumenNocturno(reporte());
+    expect(c.subject).toBe(
+      'Marketplace | Canales | Control documental diario – 08/11/2026',
+    );
+    expect(c.reporte).toMatchObject({
+      subject: c.subject,
+      areas: 'Canales',
+      fecha: '08/11/2026',
+      corte: '08/11/2026 23:00',
+      polizas: [fila],
+      polizasRestantes: 3,
+    });
+  });
+
+  it('respaldo branded: solo cifras, introducción una vez y sin «vendedor»', () => {
+    const c = correoResumenNocturno(reporte());
     expect(c.introArriba).toBe(false);
     expect(c.intro).not.toMatch(/Emitidas hoy|Completas|Incompletas/);
     const labels = (c.fields ?? []).map((x) => x.label);
@@ -282,10 +334,46 @@ describe('control documental diario', () => {
         'Emitidas hoy',
         'Completas al corte',
         'Incompletas de hoy',
-        'Sin documentos',
+        'Faltantes',
+        'Ilegibles',
+        'Inconsistentes',
+        'Por validar',
+        'Conciliación con Nexus',
       ]),
     );
-    expect(labels).not.toContain('Sin información documental');
-    expect(labels).not.toContain('Sin vínculo documental');
+    expect(JSON.stringify(c.fields)).not.toContain('18-27-0000137414');
+    expect(JSON.stringify(c).toLowerCase()).not.toMatch(
+      /vendedor|sin información/,
+    );
+  });
+
+  it('cero pendientes: la introducción del respaldo lo dice', () => {
+    const c = correoResumenNocturno(
+      reporte({
+        dia: { emitidas: 2, completas: 2, incompletas: 0, sinDatos: 0 },
+        polizas: [],
+        polizasRestantes: 0,
+      }),
+    );
+    expect(c.intro).toContain('0 pendientes de la emisión del día');
+  });
+
+  it('con textos largos recorta filas para no pasar el límite de nest-api', () => {
+    const largas = Array.from({ length: 200 }, (_, i) => ({
+      ...fila,
+      poliza: `P-${i}`,
+      emitidaPor: 'x'.repeat(200),
+      observacion: 'y'.repeat(400),
+    }));
+    const data = datosReporteDiario(
+      'Asunto',
+      reporte({ polizas: largas, polizasRestantes: 0 }),
+    ) as { polizas: FilaReporte[]; polizasRestantes: number };
+    expect(Buffer.byteLength(JSON.stringify(data))).toBeLessThanOrEqual(
+      MAX_BYTES_REPORTE,
+    );
+    expect(data.polizas.length).toBeLessThan(200);
+    expect(data.polizas.length + data.polizasRestantes).toBe(200);
+    expect(data.polizas[0].observacion.length).toBeLessThanOrEqual(160);
   });
 });
