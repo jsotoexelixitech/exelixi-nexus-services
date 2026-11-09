@@ -41,11 +41,15 @@ export type MotivoAnalisis =
  * v5 (9-nov): sin datos de la persona → revisar. En personas, si Nexus no trae a los asegurados (solo
  *   al tomador), una cédula que no es del tomador queda sin_certeza; en RCV, sin conductor habitual,
  *   una licencia que no es del tomador ni del titular también. En personas vale el RIF personal.
+ * v6 (9-nov): con un aviso (p. ej. sin datos del conductor) y además otro error (vencida), el motivo
+ *   empieza por el error («La licencia está vencida…») y queda no_coincide; si el aviso es lo único,
+ *   sin_certeza. Los observados v<6 se vuelven a comparar con lo ya extraído (sin OCR).
  */
-export const VERSION_COMPARADOR = 5;
+export const VERSION_COMPARADOR = 6;
 
 /**
- * La v4 y la v5 solo cambian contra quién se compara en personas y licencias: lo ya validado por la
+ * La v4, la v5 y la v6 solo cambian contra quién se compara en personas y licencias (y el orden
+ * del motivo): lo ya validado por la
  * IA con la v3 no se vuelve a comparar (lo validado no se toca).
  */
 const VERSION_COMPARADOR_VALIDADOS = 3;
@@ -1465,13 +1469,15 @@ export function diagnosticar(
     // no se afirma que no coincide; revisar. Lo demás que falle (p. ej. vencida) sí es error.
     const identidad = ['tipoDoc', 'documento', 'nombre', 'apellido'];
     const otros = fallan.filter((c) => !identidad.includes(c.campo));
+    // v6: si además falla otra cosa (p. ej. vencida), el motivo empieza por ese error y no por el
+    // aviso: un no_coincide no puede leerse como «No se pudo comparar…».
     return {
       ...base,
       resultado: otros.length ? 'no_coincide' : 'sin_certeza',
       campos,
       resumen: [
-        aviso,
         ...otros.map((c) => fraseDiferencia(tipo, c, rolTexto)),
+        aviso,
       ].join(' '),
       comparadoCon: rol,
     };
