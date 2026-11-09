@@ -69,6 +69,8 @@ export interface PortalSsoTokenPayload {
   metadata: Record<string, unknown>;
   jti: string;
   exp?: number;
+  /** Destino del pase: 'monitor-expedientes' no exige canal/productor (usuarios internos). */
+  destino?: 'monitor-expedientes';
 }
 
 /**
@@ -78,12 +80,14 @@ export interface PortalSsoTokenPayload {
 export function generatePortalSsoToken(
   empresaId: number,
   metadata: Record<string, unknown>,
+  destino?: PortalSsoTokenPayload['destino'],
 ): string {
   const payload: Omit<PortalSsoTokenPayload, 'exp'> = {
     type: 'portal_sso',
     empresaId,
     metadata,
     jti: randomUUID(),
+    ...(destino ? { destino } : {}),
   };
   return jwt.sign(payload, env.TENANT_TOKEN_SECRET, { expiresIn: '10m' });
 }
