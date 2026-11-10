@@ -122,6 +122,11 @@ export function gestorCanalEnCache(): Map<string, string> | null {
   return cache?.valor?.gestorCanal ?? null;
 }
 
+/** ccanalalt → nombre del último catálogo cargado (o null). Para «emitida por» en la bandeja. */
+export function nombresCanalEnCache(): Map<string, string> | null {
+  return cache?.valor?.nombres ?? null;
+}
+
 /** Solo pruebas. */
 export function _resetCatalogoCanales(valor?: CatalogoCanales | null): void {
   cache = valor === undefined ? null : { en: Date.now(), valor };
