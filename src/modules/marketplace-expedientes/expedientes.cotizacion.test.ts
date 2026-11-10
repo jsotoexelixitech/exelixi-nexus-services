@@ -477,7 +477,9 @@ describe('v7: validación con los datos de la cotización', () => {
     expect(r.motivos).toEqual({ cambio_comparador: 1 });
     expect(llamadasAnalizar()).toHaveLength(llamadas);
     expect(req(id, 'certificado')).toMatchObject({ estado: 'validado' });
-    expect(req(id, 'certificado').diagnostico.comparador).toBe(7);
+    expect(req(id, 'certificado').diagnostico.comparador).toBe(
+      VERSION_COMPARADOR,
+    );
     expect(req(id, 'cedula')).toEqual(antes);
   });
 });

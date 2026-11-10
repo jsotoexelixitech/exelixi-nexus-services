@@ -35,8 +35,10 @@ import {
   contextoPoliza,
   diagnosticar,
   esperaReintentoMs,
+  esRotuloOcr,
   estadoPorDiagnostico,
   huellaPoliza,
+  lecturaFallida,
   maskDocumento,
   motivoAnalisis,
   motivoParaAsegurado,
@@ -249,7 +251,12 @@ describe('validación automática al crear el expediente (documentos del wizard)
     const [url, init] = llamadasAnalizar(REF.cedula)[0];
     expect(url).toBe('http://ocr.local/api/internal/expedientes/analizar');
     expect(init.headers['x-expediente-key']).toBe('clave-interna');
-    expect(JSON.parse(init.body)).toEqual({ ref: REF.cedula, tipo: 'cedula' });
+    // v8: en RCV la cédula también acepta RIF.
+    expect(JSON.parse(init.body)).toEqual({
+      ref: REF.cedula,
+      tipo: 'cedula',
+      aceptaRif: true,
+    });
     expect(init.signal).toBeDefined();
     // Auditoría con el diagnóstico.
     const ev = db.mktExpedienteEvento
@@ -2268,6 +2275,399 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
         );
         expect(d.resultado).toBe('coincide');
       });
+    });
+  });
+});
+
+describe('v8: identidad del vehículo, rótulos del OCR, RIF en la cédula RCV (prod 9-nov)', () => {
+  const lectura = (extraido: any) => ({ extraido, confianza: 1 });
+  const VEH = {
+    placa: 'AB123CD',
+    marca: 'Bera',
+    modelo: 'BR150',
+    anio: 2022,
+    serial: '8211MBCA2NDV01234',
+    serialMotor: '162FMJ22012345',
+  };
+  const CERT = {
+    placa: 'AB123CD',
+    marca: 'BERA',
+    modelo: 'BR150-2',
+    anio: '2022',
+    serial: '8211MBCA2NDV01234',
+    serialMotor: '162FMJ22012345',
+  };
+  const ctxRcv = (snap: any = {}) =>
+    contextoPoliza({
+      producto: 'rcv',
+      snapshot: { ...SNAPSHOT, vehiculo: VEH, ...snap },
+    });
+  const campoDe = (d: any, c: string) =>
+    d.campos.find((x: any) => x.campo === c);
+
+  describe('certificado: solo placa y carrocería deciden', () => {
+    it('serial de motor distinto con placa y carrocería iguales → coincide; el motor queda «difiere»', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, serialMotor: 'XYZ99887766' }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(campoDe(d, 'serialMotor')).toMatchObject({
+        estado: 'difiere',
+        coincide: false,
+      });
+      expect(d.resumen).toMatch(
+        /Difiere \(informativo, no cuenta\): serial de motor\./,
+      );
+      expect(estadoPorDiagnostico(d).estado).toBe('validado');
+    });
+
+    it('marca y modelo del catálogo distintos al carnet, con ocrLeido igual al carnet → no es datos_modificados', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, marca: 'SITONG', modelo: 'KL 650 EEFK/ KLR' }),
+        ctxRcv({
+          ocrLeido: {
+            certificado: {
+              placa: 'AB123CD',
+              serial: '8211MBCA2NDV01234',
+              marca: 'SITONG',
+              modelo: 'KL 650 EEFK/ KLR',
+            },
+          },
+        }),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(campoDe(d, 'marca').estado).toBe('difiere');
+      expect(campoDe(d, 'modelo').estado).toBe('difiere');
+    });
+
+    it('año y motor distintos sin leer la placa ni la carrocería → sin_certeza, nunca no_coincide', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ anio: '2010', serialMotor: 'OTRO123456789' }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('sin_certeza');
+      expect(d.resumen).toMatch(
+        /^No se leyó la placa ni el serial de carrocería/,
+      );
+      expect(d.resumen).toMatch(/serial de motor y año\.$/);
+    });
+
+    it('negativo: placa distinta sigue no_coincide', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, placa: 'ZZ999ZZ' }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('no_coincide');
+      expect(d.resumen).toMatch(/La placa del certificado/);
+    });
+
+    it('negativo: serial de carrocería distinto sigue no_coincide', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, serial: 'LBPKE1800J0123456' }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('no_coincide');
+      expect(d.resumen).toMatch(/serial de carrocería del certificado/);
+    });
+
+    it('negativo: placa cambiada en el formulario sigue datos_modificados; el motor cambiado no', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, placa: 'AC124KB', serialMotor: 'MOTOR9998887' }),
+        ctxRcv({
+          ocrLeido: {
+            certificado: {
+              placa: 'AC124KB',
+              serial: '8211MBCA2NDV01234',
+              serialMotor: 'MOTOR9998887',
+            },
+          },
+        }),
+      );
+      expect(d.resultado).toBe('datos_modificados');
+      expect(campoDe(d, 'placa').estado).toBe('modificado_en_formulario');
+      expect(campoDe(d, 'serialMotor').estado).toBe('difiere');
+      expect(d.resumen).not.toMatch(/serial de motor/);
+    });
+  });
+
+  describe('rótulos y basura del OCR', () => {
+    it('esRotuloOcr / lecturaFallida: positivos y negativos', () => {
+      for (const v of [
+        'TIPODOCPROPIETARIO',
+        'TIPODOCPROPIETA',
+        'Serial Motor',
+        'PLACA',
+        'nombre',
+        'MODELO',
+        'Año',
+      ])
+        expect(esRotuloOcr(v)).toBe(true);
+      for (const v of [
+        'AB123CD',
+        'KLR',
+        'SITONG',
+        'MARIA',
+        'BR150-2',
+        'RK 200',
+        '162FMJ22012345',
+      ])
+        expect(esRotuloOcr(v)).toBe(false);
+      expect(lecturaFallida('serialMotor', 'V')).toBe(true);
+      expect(lecturaFallida('placa', '--')).toBe(true);
+      expect(lecturaFallida('serialMotor', 'HJ150')).toBe(false);
+      // El tipo de documento y los nombres sí pueden ser cortos.
+      expect(lecturaFallida('tipoDoc', 'V')).toBe(false);
+      expect(lecturaFallida('nombre', 'LI')).toBe(false);
+    });
+
+    it('serial de motor TIPODOCPROPIETARIO al emitir y en el carnet → no es datos_modificados', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, serialMotor: 'TIPODOCPROPIETARIO' }),
+        ctxRcv({
+          ocrLeido: {
+            certificado: {
+              placa: 'AB123CD',
+              serial: '8211MBCA2NDV01234',
+              serialMotor: 'TIPODOCPROPIETARIO',
+            },
+          },
+        }),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(campoDe(d, 'serialMotor')).toMatchObject({
+        estado: 'sin_dato_documento',
+        enDocumento: null,
+      });
+    });
+
+    it('serial de motor «V» (basura) → no se compara', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, serialMotor: 'V' }),
+        ctxRcv({ ocrLeido: { certificado: { serialMotor: 'V' } } }),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(campoDe(d, 'serialMotor').estado).toBe('sin_dato_documento');
+    });
+
+    it('la placa leída es el rótulo «PLACA» → sin_certeza «el OCR no leyó la placa»', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, placa: 'PLACA' }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('sin_certeza');
+      expect(d.resumen).toMatch(/^El OCR no leyó la placa del certificado/);
+    });
+
+    it('negativo: carrocería rótulo y placa distinta → no_coincide (el error real manda)', () => {
+      const d = diagnosticar(
+        'certificado',
+        lectura({ ...CERT, placa: 'ZZ999ZZ', serial: 'SERIAL' }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('no_coincide');
+      expect(d.resumen).toMatch(/La placa del certificado/);
+      expect(d.resumen).toMatch(/El OCR no leyó el serial de carrocería/);
+    });
+
+    it('cédula con el número como rótulo → sin_certeza, no no_coincide', () => {
+      const d = diagnosticar(
+        'cedula',
+        lectura({
+          identificacion: 'CEDULA',
+          tipoDoc: 'V',
+          nombre: 'MARIA',
+          apellido: 'PEREZ',
+        }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('sin_certeza');
+      expect(d.resumen).toMatch(/^El OCR no leyó el número del documento/);
+    });
+  });
+
+  describe('cédula RCV con RIF', () => {
+    const TOM_J_RCV = {
+      tipoDoc: 'J',
+      documento: '401118743',
+      nombre: 'TRANSPORTES EJEMPLO C.A.',
+    };
+
+    it('tomador J y RIF del tomador en el slot de cédula → coincide', () => {
+      const d = diagnosticar(
+        'cedula',
+        lectura({
+          rif: 'J-40111874-3',
+          tipoDoc: 'J',
+          razonSocial: 'TRANSPORTES EJEMPLO, C.A.',
+        }),
+        ctxRcv({ tomador: TOM_J_RCV }),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(d.comparadoCon).toBe('tomador');
+    });
+
+    it('tomador V y su RIF personal (mismo número, nombre compatible) → coincide', () => {
+      const d = diagnosticar(
+        'cedula',
+        lectura({
+          rif: 'V-12345678-9',
+          tipoDoc: 'V',
+          razonSocial: 'PEREZ GOMEZ MARIA JOSE',
+        }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('coincide');
+    });
+
+    it('negativo: tomador V y RIF de una empresa → no_coincide', () => {
+      const d = diagnosticar(
+        'cedula',
+        lectura({
+          rif: 'J-40111874-3',
+          tipoDoc: 'J',
+          razonSocial: 'TRANSPORTES EJEMPLO C.A.',
+        }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('no_coincide');
+    });
+
+    it('negativo: tomador V y RIF personal con otro número → no_coincide', () => {
+      const d = diagnosticar(
+        'cedula',
+        lectura({
+          rif: 'V-87654321-0',
+          tipoDoc: 'V',
+          razonSocial: 'PEREZ GOMEZ MARIA JOSE',
+        }),
+        ctxRcv(),
+      );
+      expect(d.resultado).toBe('no_coincide');
+    });
+
+    function rechazadaPorRif(id: number, resumen: string, comparador = 7) {
+      const fila = req(id, 'cedula');
+      Object.assign(fila, {
+        estado: 'observado',
+        decision: 'ia',
+        ocrDatos: null,
+        diagnostico: {
+          ...fila.diagnostico,
+          comparador,
+          resultado: 'no_coincide',
+          resumen,
+          campos: [
+            {
+              campo: 'tipoDocumento',
+              etiqueta: 'Tipo de documento',
+              enPoliza: 'Cédula de identidad',
+              enDocumento: null,
+              coincide: false,
+              estado: 'no_coincide',
+            },
+          ],
+        },
+      });
+    }
+
+    it('al desplegar: «parece ser un RIF» v7 sin datos leídos se vuelve a leer UNA vez aceptando RIF', async () => {
+      const id = await crearRcv('RCV-RIF-1', { documentos: ['cedula'] });
+      lee(REF.cedula, {
+        rif: 'V-12345678-9',
+        tipoDoc: 'V',
+        razonSocial: 'PEREZ GOMEZ MARIA JOSE',
+      });
+      rechazadaPorRif(
+        id,
+        'El documento subido parece ser un(a) "RIF", pero el sistema esperaba un(a) "Cédula".',
+      );
+      const antes = llamadasAnalizar(REF.cedula).length;
+      const r = await svc.revisarConIa({ modo: 'completo' });
+      expect(r.motivos).toEqual({ cambio_comparador: 1 });
+      await svc.esperarAnalisisPendientes();
+      const nuevas = llamadasAnalizar(REF.cedula).slice(antes);
+      expect(nuevas).toHaveLength(1);
+      expect(JSON.parse((nuevas[0] as any)[1].body).aceptaRif).toBe(true);
+      expect(req(id, 'cedula')).toMatchObject({
+        estado: 'validado',
+        decision: 'ia',
+      });
+      expect(req(id, 'cedula').diagnostico.comparador).toBe(VERSION_COMPARADOR);
+      await svc.revisarConIa({ modo: 'completo' });
+      expect(llamadasAnalizar(REF.cedula).slice(antes)).toHaveLength(1);
+    });
+
+    it('negativo: rechazo por otro tipo (no RIF) en RCV → no se vuelve a leer', async () => {
+      const id = await crearRcv('RCV-RIF-2', { documentos: ['cedula'] });
+      rechazadaPorRif(
+        id,
+        'El documento subido parece ser un(a) "Licencia de conducir", pero el sistema esperaba un(a) "Cédula".',
+      );
+      const antes = llamadasAnalizar().length;
+      await svc.revisarConIa({ modo: 'completo' });
+      await svc.esperarAnalisisPendientes();
+      expect(llamadasAnalizar()).toHaveLength(antes);
+      expect(req(id, 'cedula').estado).toBe('observado');
+      expect(req(id, 'cedula').diagnostico.comparador).toBe(VERSION_COMPARADOR);
+    });
+
+    it('negativo: «parece ser un RIF» ya con comparador 8 → no se vuelve a leer', async () => {
+      const id = await crearRcv('RCV-RIF-3', { documentos: ['cedula'] });
+      rechazadaPorRif(id, 'El documento subido parece ser un(a) "RIF".', 8);
+      const antes = llamadasAnalizar().length;
+      await svc.revisarConIa({ modo: 'completo' });
+      await svc.esperarAnalisisPendientes();
+      expect(llamadasAnalizar()).toHaveLength(antes);
+    });
+  });
+
+  describe('licencia: cédula distinta sin datos del conductor', () => {
+    const LIC_OTRO = {
+      identificacion: '20990741',
+      tipoDoc: 'V',
+      nombre: 'PEDRO',
+      apellido: 'GOMEZ',
+      vencimiento: '2031-01-01',
+    };
+    const OL_LIC = {
+      licencia: { documento: '20990741', nombre: 'PEDRO', apellido: 'GOMEZ' },
+    };
+
+    it('sin conductor en la póliza y el OCR al emitir leyó esa cédula → sin_certeza, no datos_modificados', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura(LIC_OTRO),
+        ctxRcv({ ocrLeido: OL_LIC }),
+      );
+      expect(d.resultado).toBe('sin_certeza');
+      expect(d.resumen).toMatch(/no trae los datos del conductor/);
+    });
+
+    it('negativo: con conductor conocido distinto y la cédula cambiada → sigue datos_modificados', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura(LIC_OTRO),
+        ctxRcv({
+          ocrLeido: OL_LIC,
+          conductor: {
+            tipoDoc: 'V',
+            documento: '30111222',
+            nombre: 'PEDRO',
+            apellido: 'GOMEZ',
+          },
+        }),
+      );
+      expect(d.resultado).toBe('datos_modificados');
     });
   });
 });
