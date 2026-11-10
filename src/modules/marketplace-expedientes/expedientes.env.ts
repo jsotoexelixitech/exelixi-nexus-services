@@ -92,6 +92,18 @@ export function linkDias(): number {
   return Number.isFinite(n) && n > 0 && n <= 60 ? Math.floor(n) : 7;
 }
 
+/**
+ * Cada cuántos minutos se concilia durante el día (emisiones nuevas → expediente, documentos
+ * del OCR). Sin variable = 60. 0 = solo la tarea diaria. Rango 15 a 720.
+ */
+export function conciliacionCadaMin(): number {
+  const raw = String(process.env.EXPEDIENTES_CONCILIACION_CADA_MIN ?? '').trim();
+  if (raw === '') return 60;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(720, Math.max(15, Math.floor(n)));
+}
+
 export function ocrInternalConfig(): { url: string; key: string } | null {
   const url = String(process.env.OCR_INTERNAL_URL ?? '')
     .trim()

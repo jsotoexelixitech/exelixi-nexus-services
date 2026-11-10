@@ -14,6 +14,7 @@ import { expedientesService as svc } from './expedientes.service';
 import { enviarRecordatorios, tareaNocturna } from './expedientes.tareas';
 import {
   _resetScheduler,
+  claveConciliacionPeriodica,
   ejecutarJob,
   tickScheduler,
 } from './expedientes.jobs';
@@ -88,6 +89,8 @@ beforeEach(() => {
   process.env.EXPEDIENTES_PUBLIC_URL = 'https://nexusqa.test/portal-lm';
   delete process.env.EXPEDIENTES_MAIL_WHITELIST;
   delete process.env.EXPEDIENTES_ENTORNO;
+  // Las pruebas de hora diaria/nocturna van sin la conciliación periódica (tiene su propia prueba).
+  process.env.EXPEDIENTES_CONCILIACION_CADA_MIN = '0';
   fetchMock = vi.fn(
     async () =>
       new Response(JSON.stringify({ status: true, data: { sent: true } }), {
@@ -278,6 +281,33 @@ describe('job_run y scheduler', () => {
     expect(await tickScheduler(new Date('2026-11-08T12:30:00.000Z'))).toEqual(
       [],
     );
+  });
+
+  it('conciliación periódica: una por bloque, desde la hora diaria, sin repetir', async () => {
+    process.env.EXPEDIENTES_CONCILIACION_CADA_MIN = '60';
+    expect(
+      claveConciliacionPeriodica(new Date('2026-11-07T11:59:00.000Z'), '08:00'),
+    ).toBeNull(); // 07:59 Caracas: todavía no
+    const ocho = new Date('2026-11-07T12:00:00.000Z'); // 08:00 Caracas
+    expect(await tickScheduler(ocho)).toEqual(['diaria', 'conciliacion']);
+    expect(await tickScheduler(new Date(ocho.getTime() + 30 * 60_000))).toEqual(
+      [],
+    ); // 08:30: mismo bloque
+    const nueve = new Date(ocho.getTime() + 60 * 60_000); // 09:00
+    expect(await tickScheduler(nueve)).toEqual(['conciliacion']);
+    // Tras un reinicio no se repite el bloque (único job + clave).
+    _resetScheduler();
+    process.env.EXPEDIENTES_JOBS_ENABLED = 'true';
+    expect(await tickScheduler(new Date(nueve.getTime() + 60_000))).toEqual(
+      [],
+    );
+    const claves = db.mktExpedienteJobRun
+      ._rows()
+      .filter((r: any) => r.job === 'conciliacion')
+      .map((r: any) => r.fecha);
+    expect(claves).toEqual(['2026-11-07~c8', '2026-11-07~c9']);
+    process.env.EXPEDIENTES_CONCILIACION_CADA_MIN = '0';
+    expect(claveConciliacionPeriodica(nueve, '08:00')).toBeNull();
   });
 });
 
