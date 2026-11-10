@@ -8,7 +8,10 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { caracasParts } from './expedientes.domain';
-import { expedientesJobsEnabled } from './expedientes.env';
+import {
+  conciliacionCadaMin,
+  expedientesJobsEnabled,
+} from './expedientes.env';
 import {
   alertaReporteFallido,
   MAX_REINTENTOS_NOCTURNA,
@@ -28,6 +31,8 @@ export interface EjecutarJobOpts {
   reintento?: number;
   /** Solo nocturna: día del reporte (YYYY-MM-DD, Caracas); por defecto, el de `ahora`. */
   fechaReporte?: string;
+  /** Clave propia de la ejecución (conciliación periódica `<fecha>~c<n>`); por defecto la del día. */
+  clave?: string;
 }
 
 export type JobResultado =
@@ -70,11 +75,13 @@ export async function ejecutarJob(
 ): Promise<JobResultado> {
   const ahora = opts.ahora ?? new Date();
   const { fecha } = caracasParts(ahora);
-  const clave = opts.reintento
-    ? `${opts.fechaReporte ?? fecha}~reintento~${opts.reintento}`
-    : opts.origen === 'manual' && opts.forzar
-      ? `${fecha}~manual~${ahora.getTime()}`
-      : fecha;
+  const clave = opts.clave
+    ? opts.clave
+    : opts.reintento
+      ? `${opts.fechaReporte ?? fecha}~reintento~${opts.reintento}`
+      : opts.origen === 'manual' && opts.forzar
+        ? `${fecha}~manual~${ahora.getTime()}`
+        : fecha;
 
   let runId: number;
   try {
@@ -200,6 +207,25 @@ export async function reintentarNocturna(
 
 const TICK_MS = 60 * 1000;
 const yaCorrio: Partial<Record<JobName, string>> = {};
+let ultimaConciliacion: string | null = null;
+
+/**
+ * Conciliación durante el día: trae al monitor las emisiones nuevas y sus documentos del OCR
+ * sin esperar a la tarea diaria (la IA los valida en su pasada de 5 min). Una por bloque de
+ * EXPEDIENTES_CONCILIACION_CADA_MIN minutos, desde la hora de la tarea diaria; el único
+ * (job, clave) evita repetirla tras reinicios o con varias instancias. null = no toca.
+ */
+export function claveConciliacionPeriodica(
+  ahora: Date,
+  horaDiaria: string,
+): string | null {
+  const cada = conciliacionCadaMin();
+  if (!cada) return null;
+  const { fecha, hora } = caracasParts(ahora);
+  if (hora < horaDiaria) return null;
+  const [hh, mm] = hora.split(':').map(Number);
+  return `${fecha}~c${Math.floor((hh * 60 + mm) / cada)}`;
+}
 let corriendo = false;
 let timer: NodeJS.Timeout | null = null;
 
@@ -232,6 +258,17 @@ export async function tickScheduler(
     }
     const reintento = await reintentarNocturna(ahora);
     if (reintento && !reintento.omitido) corridos.push('nocturna');
+    const periodica = claveConciliacionPeriodica(ahora, config.horaDiaria);
+    if (periodica && ultimaConciliacion !== periodica) {
+      const r = await ejecutarJob('conciliacion', {
+        origen: 'auto',
+        ahora,
+        actor: 'scheduler',
+        clave: periodica,
+      });
+      ultimaConciliacion = periodica;
+      if (!r.omitido) corridos.push('conciliacion');
+    }
   } catch (err) {
     logger.error(
       `[expedientes] scheduler: ${err instanceof Error ? err.message : 'error'}`,
@@ -299,6 +336,7 @@ export function iniciarSchedulerExpedientes(): void {
 /** Solo pruebas. */
 export function _resetScheduler(): void {
   for (const k of Object.keys(yaCorrio)) delete yaCorrio[k as JobName];
+  ultimaConciliacion = null;
   corriendo = false;
   iaCorriendo = false;
   if (timer) clearInterval(timer);

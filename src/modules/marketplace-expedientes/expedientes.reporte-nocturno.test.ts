@@ -141,6 +141,8 @@ beforeEach(() => {
   _resetScheduler();
   process.env.EXPEDIENTES_ENABLED = 'true';
   process.env.EXPEDIENTES_JOBS_ENABLED = 'true';
+  // Sin la conciliación periódica: aquí solo se prueban la tarea diaria y el reporte nocturno.
+  process.env.EXPEDIENTES_CONCILIACION_CADA_MIN = '0';
   process.env.NEST_API_KEY = 'k';
   process.env.EXPEDIENTES_PUBLIC_URL = 'https://nexusqa.test/portal-lm';
   process.env.EXPEDIENTES_MAIL_WHITELIST = 'lm@test.com';
