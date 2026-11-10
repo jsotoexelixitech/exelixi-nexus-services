@@ -477,6 +477,21 @@ describe('canal con sus gestores (catálogo de nest-api)', () => {
     ).toEqual(['900']);
   });
 
+  it('«emitida por» de una póliza de canal muestra el canal, no el usuario de la integración', async () => {
+    const a = await crear('P-1', { ...CANAL_900, cusuario: '7' });
+    const b = await crear('P-2', { ...CANAL_900, cusuario: '7', xlogin: 'jperez' });
+    const c = await crear('P-3', { ...CANAL_901, cusuario: '7' });
+    const d = await crear('P-4', { ...GESTOR_12, cusuario: '315' });
+    const items = (await svc.listar({})).items as any[];
+    const por = (id: number) => items.find((i) => i.id === id);
+    expect(por(a).vendedor).toBe('Farmacia Centro (canal 900)');
+    expect(por(a).vendedorDetalle.canalNombre).toBe('Farmacia Centro');
+    expect(por(b).vendedor).toBe('Farmacia Centro (canal 900) · jperez');
+    expect(por(c).vendedor).toBe('Canal 901'); // sin nombre en el catálogo: el código
+    expect(por(d).vendedor).toBe('Usuario 315'); // gestor: sin cambios
+    expect((await svc.detalle(a)).vendedor).toBe('Farmacia Centro (canal 900)');
+  });
+
   it('excluir el canal detiene también los correos de las pólizas de sus gestores', async () => {
     const canal = await crear('P-1', CANAL_900);
     const delGestor = await crear('P-2', GESTOR_12);
