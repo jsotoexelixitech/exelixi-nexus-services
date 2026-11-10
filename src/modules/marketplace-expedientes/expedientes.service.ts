@@ -10,7 +10,11 @@ import type {
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import prisma from '../../config/prisma';
-import { catalogoCanales, gestorCanalEnCache } from './expedientes.canales';
+import {
+  catalogoCanales,
+  gestorCanalEnCache,
+  nombresCanalEnCache,
+} from './expedientes.canales';
 import {
   actorDeCotizacion,
   DatosCotizacion,
@@ -1504,7 +1508,18 @@ export class ExpedientesService {
   ) {
     const aplicables = requisitosAplicables(e.producto, config);
     const porTipo = new Map(reqs.map((r) => [r.tipo, r]));
+    // Póliza de canal alterno: el cusuario es el de la integración (siempre el mismo), así que
+    // «emitida por» muestra el canal (nombre del catálogo de nest-api) y el login SSO si vino.
+    const ccanal = String(e.ccanalalt ?? '').trim();
+    const canalNombre = ccanal ? (nombresCanalEnCache()?.get(ccanal) ?? null) : null;
+    const porCanal =
+      e.centidad === 'C' && ccanal
+        ? [canalNombre ? `${canalNombre} (canal ${ccanal})` : `Canal ${ccanal}`, e.xlogin]
+            .filter(Boolean)
+            .join(' · ')
+        : null;
     const vendedor =
+      porCanal ||
       e.xlogin ||
       (e.cusuario ? `Usuario ${e.cusuario}` : null) ||
       // El gestor no se muestra como área ni como vendedor: se muestra el canal.
@@ -1525,6 +1540,7 @@ export class ExpedientesService {
         citem: e.citem,
         cgestor: e.cgestor,
         ccanalalt: e.ccanalalt,
+        canalNombre,
         cusuario: e.cusuario,
         xlogin: e.xlogin,
         cproductor: valorActor(e, 'intermediario'),
@@ -1696,6 +1712,8 @@ export class ExpedientesService {
       }),
     ]);
     const reqs = await this.requisitosDe(exps.map((e) => e.id));
+    // Nombres de canal para «emitida por» (caché 10 min; si nest-api no responde, queda el código).
+    await catalogoCanales();
     return {
       items: exps.map((e) =>
         this.toItem(e, reqs.get(e.id) ?? [], exclusiones, config),
@@ -1836,6 +1854,7 @@ export class ExpedientesService {
       }),
       this.exclusionesActivas(),
     ]);
+    await catalogoCanales();
     const item = this.toItem(e, reqs, exclusiones, config);
     const texto = (v: unknown) => (typeof v === 'string' ? v : null);
     return {
