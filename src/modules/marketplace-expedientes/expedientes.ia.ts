@@ -49,8 +49,14 @@ export type MotivoAnalisis =
  *   para el certificado RCV, conductor para la licencia, tomador/asegurados/titular para la cédula y
  *   beneficiario (marcado como tal), y lo leído por el OCR al escanear (`documents[tipo].ocr`) para
  *   los datos cambiados en el formulario. Fuera de la huella. Los observados v<7 se recomparan.
+ * v8 (9-nov): certificado RCV — la identidad del vehículo es placa + serial de carrocería: solo esos
+ *   dos dan no_coincide o datos cambiados; serial de motor, marca, modelo, año y propietario quedan
+ *   informativos (estado `difiere`). Rótulos del OCR (TIPODOCPROPIETARIO, PLACA…) y basura («V»,
+ *   solo signos) son lectura fallida: no se comparan y en un campo clave dan sin_certeza. Cédula RCV
+ *   acepta RIF (tomador J o RIF personal V/E). Licencia sin datos del conductor: no se afirma que se
+ *   cambió la cédula. Los observados v<8 se recomparan con lo ya leído.
  */
-export const VERSION_COMPARADOR = 7;
+export const VERSION_COMPARADOR = 8;
 
 /**
  * La v4 a la v7 solo cambian contra quién se compara en personas y licencias (y el orden
@@ -71,7 +77,9 @@ export type EstadoCampo =
   | 'parecido'
   | 'no_aplica'
   /** v3: la póliza no dice lo que el OCR leyó del documento al emitir (se cambió a mano). */
-  | 'modificado_en_formulario';
+  | 'modificado_en_formulario'
+  /** v8: dato informativo del vehículo que difiere (no marca el documento como errado). */
+  | 'difiere';
 
 export interface CampoDiagnostico {
   campo: string;
@@ -746,18 +754,82 @@ function textoRoles(roles: RolPersona[]): string {
   return `${roles.slice(0, -1).join(', ')} ni ${roles[roles.length - 1]}`;
 }
 
-/** Rótulos que a veces devuelve el OCR en lugar del dato (lectura fallida, no otra persona). */
+/**
+ * Rótulos que a veces devuelve el OCR en lugar del dato (lectura fallida, no otro dato), comparados
+ * en mayúsculas sin espacios ni signos. v8: también los del certificado y el carnet.
+ */
 const ROTULOS_OCR = new Set([
   'NOMBRE',
   'NOMBRES',
   'APELLIDO',
   'APELLIDOS',
-  'NOMBRE APELLIDO',
-  'NOMBRES APELLIDOS',
+  'NOMBREAPELLIDO',
+  'NOMBRESAPELLIDOS',
+  'NOMBREYAPELLIDO',
+  'NOMBRESYAPELLIDOS',
+  'RAZONSOCIAL',
   'NULL',
   'UNDEFINED',
-  'N A',
+  'NONE',
+  'NA',
+  'PLACA',
+  'SERIAL',
+  'SERIALMOTOR',
+  'SERIALDEMOTOR',
+  'MOTOR',
+  'SERIALCARROCERIA',
+  'SERIALDECARROCERIA',
+  'CARROCERIA',
+  'SERIALNIV',
+  'NIV',
+  'VIN',
+  'MODELO',
+  'MARCA',
+  'ANIO',
+  'ANO',
+  'COLOR',
+  'CLASE',
+  'USO',
+  'VERSION',
+  'LINEA',
+  'CEDULA',
+  'IDENTIFICACION',
+  'DOCUMENTO',
+  'PROPIETARIO',
+  'IDENTIFICACIONPROPIETARIO',
 ]);
+
+/** v8: ¿el OCR devolvió el rótulo de un campo (TIPODOCPROPIETARIO, PLACA, NOMBRE…) y no el dato? */
+export function esRotuloOcr(v?: string | null): boolean {
+  const s = normTexto(v).replace(/ /g, '');
+  if (!s || /\d/.test(s)) return false;
+  return ROTULOS_OCR.has(s) || s.startsWith('TIPODOC');
+}
+
+/** v8: basura del OCR: 1 o 2 caracteres («V») o solo signos. */
+function esBasuraOcr(v?: string | null): boolean {
+  const s = String(v ?? '').trim();
+  return !!s && normTexto(s).replace(/ /g, '').length <= 2;
+}
+
+/** Campos en que un valor de 1–2 caracteres no es un dato (no aplica a nombres ni tipo de doc). */
+const CAMPOS_SIN_VALORES_CORTOS = new Set([
+  'documento',
+  'placa',
+  'serialCarroceria',
+  'serialMotor',
+  'marca',
+  'modelo',
+  'anio',
+]);
+
+/** v8: lectura fallida de un campo (rótulo o basura): no se compara. */
+export function lecturaFallida(campo: string, v?: string | null): boolean {
+  if (!v) return false;
+  return (
+    esRotuloOcr(v) || (CAMPOS_SIN_VALORES_CORTOS.has(campo) && esBasuraOcr(v))
+  );
+}
 
 /** Un solo dígito distinto (lectura dudosa del OCR) en un número de 6 o más dígitos. */
 function casiIgual(a: string, b: string): boolean {
@@ -792,15 +864,19 @@ function compararPersona(
   ctx: ContextoPoliza,
   hoy: string,
 ): ComparacionPersona {
-  const rifOcr = pick(ex, ['rif']);
-  const docRaw =
+  const rifLeido = pick(ex, ['rif']);
+  const docLeido =
     pick(ex, [
       'identificacion',
       'documento',
       'cedula',
       'numeroDocumento',
       'numeroPasaporte',
-    ]) ?? rifOcr;
+    ]) ?? rifLeido;
+  // v8: un rótulo («CEDULA») o basura («V») en el número es lectura fallida: no se compara.
+  const docFallido = lecturaFallida('documento', docLeido);
+  const rifOcr = docFallido ? null : rifLeido;
+  const docRaw = docFallido ? null : docLeido;
   const docOcr = docRaw
     ? tipo === 'pasaporte'
       ? normSerial(docRaw).replace(/^0+(?=.)/, '')
@@ -975,15 +1051,19 @@ function compararPersona(
   const sinTomador =
     enPersonas && !todas.some((p) => p.roles.includes('tomador'));
   // El OCR devolvió el rótulo del campo («nombre») en vez del dato: lectura fallida.
+  // v8: también el número del documento (rótulo o basura).
   const rotulo = [
     original(['nombre', 'nombres', 'razonSocial']),
     original(['apellido', 'apellidos']),
-  ].some((v) => !!v && ROTULOS_OCR.has(normTexto(v)));
+  ].some((v) => esRotuloOcr(v));
   if (sinComparar) {
     aviso = sinComparar;
-  } else if (rotulo) {
-    aviso =
-      'El OCR no leyó el nombre del documento (devolvió el rótulo del campo); hay que revisarlo.';
+  } else if (rotulo || docFallido) {
+    const noLeido = [
+      ...(docFallido ? ['el número'] : []),
+      ...(rotulo ? ['el nombre'] : []),
+    ].join(' ni ');
+    aviso = `El OCR no leyó ${noLeido} del documento (devolvió el rótulo del campo o un valor sin sentido); hay que revisarlo.`;
   } else if (exacto && !objetivos.includes(exacto)) {
     // Es de otra persona de la póliza: no es un documento falso, pero tampoco el pedido.
     aviso = enPersonas
@@ -1065,11 +1145,45 @@ function compararPersona(
   };
 }
 
+/** v8: identidad del vehículo (los únicos que dan no_coincide o datos cambiados). */
+const CLAVE_VEHICULO = ['placa', 'serialCarroceria'];
+
 function compararVehiculo(
-  ex: Record<string, unknown>,
+  exLeido: Record<string, unknown>,
   ctx: ContextoPoliza,
-): { campos: CampoDiagnostico[]; crudos: Crudos } {
+): {
+  campos: CampoDiagnostico[];
+  crudos: Crudos;
+  /** v8: campos clave que el OCR no leyó (rótulo o basura). */
+  claveNoLeida: CampoDiagnostico[];
+} {
   const v = vehiculoDe(ctx) ?? {};
+  // v8: rótulos y basura del OCR no se comparan (lectura fallida del campo).
+  const fallidos = new Set<string>();
+  const CAMPO_DE_CLAVE: Record<string, string> = {
+    placa: 'placa',
+    xplaca: 'placa',
+    serialCarroceria: 'serialCarroceria',
+    serial_carroceria: 'serialCarroceria',
+    serial: 'serialCarroceria',
+    serialNiv: 'serialCarroceria',
+    serialMotor: 'serialMotor',
+    serial_motor: 'serialMotor',
+    marca: 'marca',
+    modelo: 'modelo',
+    linea: 'modelo',
+    anio: 'anio',
+    año: 'anio',
+    ano: 'anio',
+  };
+  const ex: Record<string, unknown> = { ...exLeido };
+  for (const [k, c] of Object.entries(CAMPO_DE_CLAVE)) {
+    const val = texto(ex[k]);
+    if (val && lecturaFallida(c, val)) {
+      delete ex[k];
+      fallidos.add(c);
+    }
+  }
   const serialIgual =
     (a: string, b: string, largoMin: number) => (): boolean | 'parecido' => {
       const x = normSerial(a);
@@ -1164,6 +1278,21 @@ function compararVehiculo(
       ),
     );
   }
+  // v8: motor, marca, modelo (catálogo cmarca/cmodelo del formulario), año y propietario son
+  // informativos: se muestran como «difiere», pero no marcan el documento como errado.
+  for (const c of campos) {
+    if (CLAVE_VEHICULO.includes(c.campo)) continue;
+    if (c.estado === 'no_coincide' || c.estado === 'parecido') {
+      c.estado = 'difiere';
+      c.coincide = false;
+    }
+  }
+  const claveNoLeida = campos.filter(
+    (c) =>
+      CLAVE_VEHICULO.includes(c.campo) &&
+      fallidos.has(c.campo) &&
+      c.enDocumento == null,
+  );
   const crudos: Crudos = {
     placa: { pol: placaPol, doc: placaDoc },
     serialCarroceria: { pol: carrPol, doc: carrDoc },
@@ -1172,7 +1301,7 @@ function compararVehiculo(
     modelo: { pol: modeloPol, doc: modeloDoc },
     anio: { pol: anioPol, doc: anioDoc },
   };
-  return { campos, crudos };
+  return { campos, crudos, claveNoLeida };
 }
 
 // ─── v3: datos cambiados en el formulario ──────────────────────────────────
@@ -1272,7 +1401,12 @@ function marcarModificados(
   campos: CampoDiagnostico[],
   crudos: Crudos,
   ol: Record<string, unknown>,
-  o: { conDv: boolean; detectar: boolean },
+  o: {
+    conDv: boolean;
+    detectar: boolean;
+    /** v8: solo estos campos pueden quedar como cambiados (certificado: placa y carrocería). */
+    soloEn?: string[];
+  },
 ): CampoDiagnostico[] {
   const out: CampoDiagnostico[] = [];
   for (const c of campos) {
@@ -1282,6 +1416,9 @@ function marcarModificados(
     c.enOcrAlEmitir = mostrarOcrLeido(c.campo, leido, ol, tipo);
     const cr = crudos[c.campo];
     if (!o.detectar || !cr?.pol) continue;
+    if (o.soloEn && !o.soloEn.includes(c.campo)) continue;
+    // v8: el OCR al emitir devolvió un rótulo o basura: lectura fallida, no un dato cambiado.
+    if (lecturaFallida(c.campo, leido)) continue;
     const igual = (a: string, b: string) =>
       mismoDato(c.campo, a, b, { tipo, conDv: o.conDv });
     const difiere = cr.doc
@@ -1446,12 +1583,14 @@ export function diagnosticar(
   let conDv = false;
   let respaldo = false;
   let sinDatos = false;
+  let claveNoLeida: CampoDiagnostico[] = [];
   if (tipo === 'certificado') {
     const r = compararVehiculo(ex, ctx);
     campos = r.campos;
     crudos = r.crudos;
+    claveNoLeida = r.claveNoLeida;
     rol = 'vehiculo';
-    clave = ['placa', 'serialCarroceria'];
+    clave = CLAVE_VEHICULO;
   } else if (TIPOS_PERSONA.has(tipo)) {
     const r = compararPersona(tipo, ex, ctx, hoy);
     campos = r.campos;
@@ -1474,17 +1613,31 @@ export function diagnosticar(
   const modificados = Object.keys(ol).length
     ? marcarModificados(tipo, campos, crudos, ol, {
         conDv,
+        // v8: licencia sin datos del conductor: se comparó con el tomador o el titular, pero puede
+        // ser del conductor habitual; no se afirma que la cédula se cambió en el formulario.
         detectar:
-          (!aviso || sinDatos) &&
+          (!aviso || (sinDatos && tipo !== 'licencia')) &&
           !respaldo &&
           !(tipo === 'certificado' && !vehiculoDe(ctx)),
+        soloEn: tipo === 'certificado' ? CLAVE_VEHICULO : undefined,
       })
     : [];
 
-  const fallan = campos.filter((c) => c.coincide === false);
+  // v8: los informativos del vehículo (`difiere`) no cuentan como error.
+  const fallan = campos.filter(
+    (c) => c.coincide === false && c.estado !== 'difiere',
+  );
+  const difieren = campos.filter((c) => c.estado === 'difiere');
   const parecidos = campos.filter((c) => c.estado === 'parecido');
   const coinciden = campos.filter((c) => c.coincide === true);
   const rolTexto = rol === 'vehiculo' || !rol ? 'asegurado' : rol;
+  const informativo = difieren.length
+    ? ` Difiere (informativo, no cuenta): ${listaEtiquetas(difieren)}.`
+    : '';
+  // v8: un campo clave del vehículo que el OCR no leyó (devolvió el rótulo o basura).
+  const avisoNoLeida = claveNoLeida.length
+    ? `El OCR no leyó ${claveNoLeida.map((c) => articuloCampo(tipo, c)).join(' ni ')} ${DEL_DOCUMENTO[tipo] ?? 'del documento'} (devolvió el rótulo del campo o un valor sin sentido); hay que revisarlo.`
+    : null;
 
   if (modificados.length) {
     const otros = fallan.filter((c) => c.estado === 'no_coincide');
@@ -1528,11 +1681,22 @@ export function diagnosticar(
       .map((c) => fraseDiferencia(tipo, c, rolTexto));
     if (fallan.length > 3)
       frases.push(`Hay ${fallan.length - 3} diferencia(s) más.`);
+    if (avisoNoLeida) frases.push(avisoNoLeida);
     return {
       ...base,
       resultado: 'no_coincide',
       campos,
       resumen: conNota(frases.join(' ')),
+      comparadoCon: rol,
+    };
+  }
+
+  if (avisoNoLeida && vehiculoDe(ctx)) {
+    return {
+      ...base,
+      resultado: 'sin_certeza',
+      campos,
+      resumen: avisoNoLeida + informativo,
       comparadoCon: rol,
     };
   }
@@ -1559,7 +1723,7 @@ export function diagnosticar(
       ...base,
       resultado: 'sin_certeza',
       campos,
-      resumen,
+      resumen: resumen + informativo,
       comparadoCon: rol,
     };
   }
@@ -1568,7 +1732,7 @@ export function diagnosticar(
       ...base,
       resultado: 'sin_certeza',
       campos,
-      resumen: `${listaEtiquetas(parecidos)}: casi igual a la póliza (un carácter distinto).`,
+      resumen: `${listaEtiquetas(parecidos)}: casi igual a la póliza (un carácter distinto).${informativo}`,
       comparadoCon: rol,
     };
   }
@@ -1578,7 +1742,8 @@ export function diagnosticar(
       resultado: 'sin_certeza',
       campos,
       resumen:
-        'Los datos coinciden, pero la lectura del documento fue parcial.',
+        'Los datos coinciden, pero la lectura del documento fue parcial.' +
+        informativo,
       comparadoCon: rol,
     };
   }
@@ -1591,7 +1756,8 @@ export function diagnosticar(
       `Coincide con la póliza: ${listaEtiquetas(coinciden)}.` +
         (sinDato.length
           ? ` Sin dato en la póliza: ${listaEtiquetas(sinDato)}.`
-          : ''),
+          : '') +
+        informativo,
     ),
     comparadoCon: rol,
   };

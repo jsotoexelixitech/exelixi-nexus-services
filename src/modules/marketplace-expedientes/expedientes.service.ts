@@ -144,11 +144,22 @@ function mensajeErrorOcr(err: unknown): string {
 /**
  * Cédula o RIF en el mismo documento: patrimoniales (igual que la emisión) y personas: con tomador
  * J/G/C su documento de identidad es el RIF (v4); con tomador V/E vale su RIF personal si el número
- * es el de su cédula y el nombre es compatible (v5; lo decide el comparador).
+ * es el de su cédula y el nombre es compatible (v5; lo decide el comparador). v8: también RCV
+ * (tomador J contra su RIF; V/E su RIF personal con el mismo número).
  */
 function aceptaRifEn(producto: string, tipo: string): boolean {
   if (tipo !== 'cedula') return false;
-  return producto === 'patrimonial' || producto === 'personas';
+  return (
+    producto === 'patrimonial' || producto === 'personas' || producto === 'rcv'
+  );
+}
+
+/**
+ * Comparador desde el que el RIF vale en la cédula del producto: la relectura de un «parece ser un
+ * RIF» se hace una sola vez (con un diagnóstico anterior a esa versión), no en cada subida.
+ */
+function versionRifEn(producto: string): number {
+  return producto === 'rcv' ? 8 : 5;
 }
 
 type Exp = MktExpediente;
@@ -2328,11 +2339,15 @@ export class ExpedientesService {
       // v4/v5: el OCR lo rechazó por «parece ser un RIF» y ahora el RIF vale (personas con tomador
       // J o V/E): sin datos leídos que comparar, se vuelve a leer UNA vez el mismo archivo aceptando
       // RIF; después queda con el comparador vigente y no se repite.
+      // v8: RCV también, solo los rechazos que mencionan el RIF y una sola vez por producto.
+      const previoRif = rec(r.diagnostico);
       const releerConRif =
         motivo === 'cambio_comparador' &&
         aceptaRif &&
         (!r.ocrDatos || typeof r.ocrDatos !== 'object') &&
-        fueOtroTipoDeDocumento(r.diagnostico);
+        fueOtroTipoDeDocumento(r.diagnostico) &&
+        Number(previoRif.comparador ?? 1) < versionRifEn(exp.producto) &&
+        (exp.producto !== 'rcv' || /RIF/.test(String(previoRif.resumen ?? '')));
       if (
         (motivo === 'cambio_poliza' || motivo === 'cambio_comparador') &&
         r.analisisRef === r.ref &&
