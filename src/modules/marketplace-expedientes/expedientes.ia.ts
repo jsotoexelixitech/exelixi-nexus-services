@@ -55,8 +55,12 @@ export type MotivoAnalisis =
  *   solo signos) son lectura fallida: no se comparan y en un campo clave dan sin_certeza. Cédula RCV
  *   acepta RIF (tomador J o RIF personal V/E). Licencia sin datos del conductor: no se afirma que se
  *   cambió la cédula. Los observados v<8 se recomparan con lo ya leído.
+ * v9 (11-nov): documento que difiere en un dígito — texto neutral (puede ser lectura del documento o
+ *   transcripción en el formulario), la posición del dígito que cambia y una máscara que lo deja
+ *   ver; con lo leído por el OCR del wizard se precisa si la diferencia es entre lecturas o si la
+ *   cédula se cambió en el formulario. Solo recompara lo ya leído (sin llamar al OCR).
  */
-export const VERSION_COMPARADOR = 8;
+export const VERSION_COMPARADOR = 9;
 
 /**
  * La v4 a la v7 solo cambian contra quién se compara en personas y licencias (y el orden
@@ -290,6 +294,41 @@ function normSerial(v?: string | null): string {
     .replace(/[^A-Z0-9]/g, '')
     .replace(/[OQ]/g, '0')
     .replace(/I/g, '1');
+}
+
+/** v9: posición (desde 1) del único dígito distinto entre dos números del mismo largo; si no, null. */
+export function posicionDigitoDistinto(a: string, b: string): number | null {
+  if (!a || a.length !== b.length) return null;
+  let pos: number | null = null;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (pos !== null) return null;
+    pos = i + 1;
+  }
+  return pos;
+}
+
+/** «1.er», «2.º», «3.er», «4.º»… */
+function ordinalDigito(n: number): string {
+  return n === 1 || n === 3 ? `${n}.er` : `${n}.º`;
+}
+
+/**
+ * v9: como maskDocumento, pero deja ver también el dígito de la posición `pos` (desde 1) cuando
+ * cae fuera de los últimos 4: así dos números que difieren en ese dígito no se ven iguales.
+ */
+export function maskDocumentoConDigito(
+  tipoDoc: string | null | undefined,
+  documento: string | null | undefined,
+  pos: number | null,
+): string | null {
+  const n = numeroDocumento(documento);
+  if (!n || !pos || pos > n.length - 4) return maskDocumento(tipoDoc, documento);
+  const tipo = tipoDoc ? `${String(tipoDoc).toUpperCase()}-` : '';
+  return (
+    tipo +
+    Array.from(n, (ch, i) => (i >= n.length - 4 || i === pos - 1 ? ch : '*')).join('')
+  );
 }
 
 /** Números de documento en textos: solo los últimos 4 (V-****5678). */
@@ -853,6 +892,8 @@ interface ComparacionPersona {
   respaldo: boolean;
   /** v5: el aviso es solo por falta de datos de las personas (no impide ver datos cambiados). */
   sinDatos: boolean;
+  /** v9: el número difiere en un dígito: comienzo del aviso (sin la conclusión). */
+  avisoParecido: string | null;
 }
 
 /** Valores sin enmascarar de cada campo comparado: póliza y lo que lee ahora el documento. */
@@ -1046,6 +1087,8 @@ function compararPersona(
     nombres.some((c) => c.coincide === true) &&
     nombres.every((c) => c.coincide !== false);
   let aviso: string | null = null;
+  /** v9: comienzo del aviso de un dígito distinto, para precisarlo con lo leído en el wizard. */
+  let avisoParecido: string | null = null;
   let nota: string | null = null;
   let sinDatos = false;
   const sinTomador =
@@ -1078,9 +1121,26 @@ function compararPersona(
   ) {
     docCampo.coincide = null;
     docCampo.estado = 'parecido';
+    // v9: la máscara de los últimos 4 podía mostrar dos números iguales; se deja ver el dígito
+    // que cambia y se dice en qué posición. Texto neutral: no se culpa al OCR.
+    const nDoc = numeroDocumento(docOcr);
+    const nPol = numeroDocumento(docDe(persona));
+    const pos = posicionDigitoDistinto(nDoc, nPol);
+    if (tipo !== 'pasaporte') {
+      docCampo.enDocumento = maskDocumentoConDigito(tipoOcr, docOcr, pos);
+      docCampo.enPoliza = maskDocumentoConDigito(persona.tipoDoc, docPol, pos);
+    }
+    const cual = pos
+      ? `difiere en el ${ordinalDigito(pos)} dígito del`
+      : nDoc.length > nPol.length
+        ? 'tiene un dígito de más respecto del'
+        : 'tiene un dígito de menos respecto del';
+    avisoParecido =
+      `El número del documento (${docCampo.enDocumento}) ${cual} registrado para el ` +
+      `${rol ?? 'titular'} (${docCampo.enPoliza}) y el nombre coincide`;
     aviso =
-      `Posible error de lectura: el número del documento (${docCampo.enDocumento}) ` +
-      `difiere en un dígito del ${rol ?? 'titular'} (${docCampo.enPoliza}) y el nombre coincide.`;
+      `${avisoParecido}: puede ser un error de lectura del documento o de transcripción en el ` +
+      'formulario; revisar cuál es el correcto.';
   } else if (respaldo) {
     const sinRol = `La póliza no trae la cédula del ${esperadoTexto}; se comparó con la del ${respaldo}.`;
     if (docCampo.coincide === false) aviso = sinRol;
@@ -1142,6 +1202,7 @@ function compararPersona(
     conDv,
     respaldo: !!respaldo,
     sinDatos,
+    avisoParecido,
   };
 }
 
@@ -1583,6 +1644,7 @@ export function diagnosticar(
   let conDv = false;
   let respaldo = false;
   let sinDatos = false;
+  let avisoParecido: string | null = null;
   let claveNoLeida: CampoDiagnostico[] = [];
   if (tipo === 'certificado') {
     const r = compararVehiculo(ex, ctx);
@@ -1602,6 +1664,7 @@ export function diagnosticar(
     conDv = r.conDv;
     respaldo = r.respaldo;
     sinDatos = r.sinDatos;
+    avisoParecido = r.avisoParecido;
     clave = ['documento'];
   }
   const conNota = (t: string) => (nota ? `${t} ${nota}` : t);
@@ -1622,6 +1685,25 @@ export function diagnosticar(
         soloEn: tipo === 'certificado' ? CLAVE_VEHICULO : undefined,
       })
     : [];
+  // v9: un dígito distinto y lo que leyó el OCR del wizard al escanear: si leyó lo mismo que trae
+  // la póliza, la diferencia es entre lecturas del documento; si leyó otro número, la cédula se
+  // cambió en el formulario.
+  const leidoDoc = texto(ol.documento);
+  const docPolCrudo = crudos.documento?.pol;
+  if (
+    avisoParecido &&
+    leidoDoc &&
+    docPolCrudo &&
+    !lecturaFallida('documento', leidoDoc)
+  ) {
+    const igualPol = mismoDato('documento', leidoDoc, docPolCrudo, {
+      tipo,
+      conDv,
+    });
+    aviso = igualPol
+      ? `${avisoParecido}. El OCR del formulario leyó el mismo número que trae la póliza: la diferencia es entre las lecturas del documento; revisar la imagen.`
+      : `${avisoParecido}. El OCR del formulario leyó otro número (${mostrarOcrLeido('documento', leidoDoc, ol, tipo) ?? 'distinto'}) y la póliza trae uno distinto: la cédula se cambió en el formulario; revisar cuál es el correcto.`;
+  }
 
   // v8: los informativos del vehículo (`difiere`) no cuentan como error.
   const fallan = campos.filter(

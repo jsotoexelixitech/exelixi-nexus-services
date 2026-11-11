@@ -488,8 +488,30 @@ describe('canal con sus gestores (catálogo de nest-api)', () => {
     expect(por(a).vendedorDetalle.canalNombre).toBe('Farmacia Centro');
     expect(por(b).vendedor).toBe('Farmacia Centro (canal 900) · jperez');
     expect(por(c).vendedor).toBe('Canal 901'); // sin nombre en el catálogo: el código
-    expect(por(d).vendedor).toBe('Usuario 315'); // gestor: sin cambios
+    // Gestor: el gestor y su canal (del catálogo), nunca el cusuario de Sis2000.
+    expect(por(d).vendedor).toBe('Gestor 12 · Farmacia Centro (canal 900)');
     expect((await svc.detalle(a)).vendedor).toBe('Farmacia Centro (canal 900)');
+  });
+
+  it('«emitida por» de gestor: nombre del catálogo, canal y login; Usuario solo al final', async () => {
+    _resetCatalogoCanales({
+      nombres: new Map([['27', 'REPUESTOS LOS SAMANES']]),
+      gestorCanal: new Map([['12', '27']]),
+      gestorNombre: new Map([['12', 'PUNTO CENTRO']]),
+    });
+    const a = await crear('P-1', { ...GESTOR_12, cusuario: '3391' });
+    const b = await crear('P-2', { ...GESTOR_12, cusuario: '3391', xlogin: 'mlopez' });
+    const c = await crear('P-3', { ...GESTOR_13, cusuario: '3391' });
+    const f = await crear('P-6', { cusuario: '3391' });
+    const items = (await svc.listar({})).items as any[];
+    const por = (id: number) => items.find((i) => i.id === id).vendedor;
+    expect(por(a)).toBe('PUNTO CENTRO (gestor 12) · REPUESTOS LOS SAMANES (canal 27)');
+    expect(por(b)).toBe(
+      'PUNTO CENTRO (gestor 12) · REPUESTOS LOS SAMANES (canal 27) · mlopez',
+    );
+    expect(por(c)).toBe('Gestor 13'); // sin nombre ni canal en el catálogo
+    expect(por(f)).toBe('Usuario 3391'); // último recurso
+    for (const i of items) expect(String(i.vendedor)).not.toMatch(/vendedor/i);
   });
 
   it('excluir el canal detiene también los correos de las pólizas de sus gestores', async () => {

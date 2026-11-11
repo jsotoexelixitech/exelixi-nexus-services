@@ -229,6 +229,58 @@ export function valorActor(e: VendedorActores, tipo: TipoActor): string | null {
   return normalizarCodigoActor(e.cproductor ?? porEntidad('P'));
 }
 
+// ─── «Emitida por» ───────────────────────────────────────────────────────────
+
+/** Catálogos (opcionales) para nombrar a quien emitió. Claves normalizadas. */
+export interface NombresActores {
+  /** ccanalalt → nombre del canal. */
+  canal?: Map<string, string> | null;
+  /** cgestor → nombre del gestor (punto de comercialización). */
+  gestor?: Map<string, string> | null;
+  /** cgestor → ccanalalt del canal al que pertenece. */
+  gestorCanal?: Map<string, string> | null;
+}
+
+/** «Nombre (canal N)» o «Canal N». */
+export function textoCanal(
+  cod: string,
+  nombres?: NombresActores | null,
+): string {
+  const n = nombres?.canal?.get(normalizarCodigoActor(cod) ?? '') ?? null;
+  return n ? `${n} (canal ${cod})` : `Canal ${cod}`;
+}
+
+/**
+ * Gestor (y su canal) o productor que emitió, para «emitida por». Null si la póliza no es de
+ * un gestor ni de un productor. Nunca devuelve el cusuario: ese es el último recurso del caller.
+ */
+export function textoActorEmisor(
+  e: VendedorActores,
+  nombres?: NombresActores | null,
+  nombresSnapshot: { gestor?: string | null; productor?: string | null } = {},
+): string | null {
+  const c = String(e.centidad ?? '')
+    .trim()
+    .toUpperCase();
+  const gestor = valorActor(e, 'gestor');
+  if (gestor && (c === 'G' || e.cgestor)) {
+    const nombre = nombres?.gestor?.get(gestor) || nombresSnapshot.gestor || null;
+    const canal = canalDeExpediente(e, nombres?.gestorCanal);
+    return [
+      nombre ? `${nombre} (gestor ${gestor})` : `Gestor ${gestor}`,
+      canal !== SIN_IDENTIFICAR ? textoCanal(canal, nombres) : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+  const productor = valorActor(e, 'intermediario');
+  if (productor && (c === 'P' || e.cproductor)) {
+    const nombre = nombresSnapshot.productor || null;
+    return nombre ? `${nombre} (productor ${productor})` : `Productor ${productor}`;
+  }
+  return null;
+}
+
 // ─── Áreas visibles: Canales y Productores ──────────────────────────────────
 
 /** Código del grupo «Canal sin identificar» / «Productor sin identificar». */
