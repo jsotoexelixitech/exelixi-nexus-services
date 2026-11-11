@@ -1215,7 +1215,7 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     }
   });
 
-  it('caso 274: un dígito distinto (8127 vs 5127) con el mismo nombre → sin_certeza «posible error de lectura»', () => {
+  it('caso 274: un dígito distinto (8127 vs 5127) con el mismo nombre → sin_certeza, texto neutral', () => {
     const ctx = contextoPoliza({
       producto: 'personas',
       snapshot: {
@@ -1242,7 +1242,7 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     );
     expect(d.resultado).toBe('sin_certeza');
     expect(d.resumen).toBe(
-      'Posible error de lectura: el número del documento (V-****8127) difiere en un dígito del tomador (V-****5127) y el nombre coincide.',
+      'El número del documento (V-****8127) difiere en el 5.º dígito del registrado para el tomador (V-****5127) y el nombre coincide: puede ser un error de lectura del documento o de transcripción en el formulario; revisar cuál es el correcto.',
     );
     expect(d.campos.find((c) => c.campo === 'documento')).toMatchObject({
       coincide: null,
@@ -1286,6 +1286,72 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     expect(diagnosticar('cedula', juan, conTitular).resultado).toBe(
       'no_coincide',
     );
+  });
+
+  describe('v9: un dígito distinto', () => {
+    const tomador = {
+      tipoDoc: 'V',
+      documento: '17349126',
+      nombre: 'Rosa',
+      apellido: 'Díaz',
+    };
+    const leida = (identificacion: string) => ({
+      extraido: { identificacion, tipoDoc: 'V', nombre: 'ROSA', apellido: 'DIAZ' },
+      confianza: 1,
+    });
+
+    it('el dígito que cambia está antes de los últimos 4: la máscara lo deja ver y dice la posición', () => {
+      const ctx = contextoPoliza({ producto: 'personas', snapshot: { tomador } });
+      const d = diagnosticar('cedula', leida('17389126'), ctx);
+      expect(d.resultado).toBe('sin_certeza');
+      expect(d.resumen).toBe(
+        'El número del documento (V-***89126) difiere en el 4.º dígito del registrado para el tomador (V-***49126) y el nombre coincide: puede ser un error de lectura del documento o de transcripción en el formulario; revisar cuál es el correcto.',
+      );
+      expect(d.resumen).not.toMatch(/Posible error de lectura/);
+      const doc = d.campos.find((c) => c.campo === 'documento')!;
+      expect(doc.enDocumento).not.toBe(doc.enPoliza);
+    });
+
+    it('un dígito de menos', () => {
+      const ctx = contextoPoliza({ producto: 'personas', snapshot: { tomador } });
+      const d = diagnosticar('cedula', leida('1734126'), ctx);
+      expect(d.resumen).toContain('tiene un dígito de menos respecto del registrado para el tomador');
+    });
+
+    it('el OCR del wizard leyó lo mismo que la póliza: la diferencia es entre lecturas del documento', () => {
+      const ctx = contextoPoliza({
+        producto: 'personas',
+        snapshot: {
+          tomador,
+          ocrLeido: { cedula: { tipoDoc: 'V', documento: '17349126' } },
+        },
+      });
+      const d = diagnosticar('cedula', leida('17389126'), ctx);
+      expect(d.resultado).toBe('sin_certeza');
+      expect(d.resumen).toContain('difiere en el 4.º dígito');
+      expect(d.resumen).toContain(
+        'El OCR del formulario leyó el mismo número que trae la póliza: la diferencia es entre las lecturas del documento',
+      );
+      expect(d.resumen).not.toContain('se cambió en el formulario');
+    });
+
+    it('el OCR del wizard leyó otro número y la póliza trae uno distinto: se cambió en el formulario', () => {
+      const ctx = contextoPoliza({
+        producto: 'personas',
+        snapshot: {
+          tomador,
+          ocrLeido: { cedula: { tipoDoc: 'V', documento: '17389126' } },
+        },
+      });
+      const d = diagnosticar('cedula', leida('17389126'), ctx);
+      expect(d.resumen).toContain('difiere en el 4.º dígito');
+      expect(d.resumen).toContain('la cédula se cambió en el formulario');
+      expect(d.resumen).toMatch(/leyó otro número \(V-\*+9126\)/);
+    });
+
+    it('maskDocumento sin cambios para el resto de textos', () => {
+      expect(maskDocumento('V', '17349126')).toBe('V-****9126');
+    });
   });
 
   it('al desplegar: diagnósticos del comparador anterior se vuelven a comparar con lo ya leído, sin OCR', async () => {

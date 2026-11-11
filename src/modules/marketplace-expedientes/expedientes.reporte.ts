@@ -28,6 +28,7 @@ import {
   aseguradoProtegido,
   areasEnAlcance,
   canalDeExpediente,
+  textoActorEmisor,
   caracasInicioDia,
   caracasParts,
   diasCaracasEntre,
@@ -328,6 +329,21 @@ export function emitidaPor(
   catalogo?: CatalogoCanales | null,
 ): string {
   const usuario = e.xlogin || (e.cusuario ? `Usuario ${e.cusuario}` : null);
+  const gestorOProductor = () =>
+    textoActorEmisor(
+      e,
+      catalogo
+        ? {
+            canal: catalogo.nombres,
+            gestor: catalogo.gestorNombre ?? null,
+            gestorCanal: catalogo.gestorCanal,
+          }
+        : null,
+      {
+        gestor: nombreActorDeSnapshot(e.snapshot, 'gestor'),
+        productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
+      },
+    );
   const g = grupoArea(e.area);
   if (g === 'productor') {
     const cod = productorDeExpediente(e);
@@ -344,11 +360,13 @@ export function emitidaPor(
       (cod !== SIN_IDENTIFICAR ? catalogo?.nombres.get(cod) : null) ??
       nombreActorDeSnapshot(e.snapshot, 'canal') ??
       (cod !== SIN_IDENTIFICAR ? `Canal ${cod}` : null) ??
+      // Gestor sin canal resuelto: el gestor antes que el cusuario de Sis2000.
+      gestorOProductor() ??
       usuario ??
       'Canal sin identificar'
     );
   }
-  return usuario ?? 'No identificado';
+  return gestorOProductor() ?? usuario ?? 'No identificado';
 }
 
 /** Próxima corrida de la tarea diaria (recordatorios) después de `ahora`. */
