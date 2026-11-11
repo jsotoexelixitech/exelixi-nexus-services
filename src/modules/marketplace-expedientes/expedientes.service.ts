@@ -114,6 +114,12 @@ import {
 } from './expedientes.schema';
 import { calcularKpis } from './expedientes.kpis';
 import { desgloseIncompletos } from './expedientes.categorias';
+import {
+  contactosDeWizard,
+  correosDe,
+  correosDelSnapshot,
+  unirCorreos,
+} from './expedientes.correos';
 
 const CONFIG_KEY = 'global';
 
@@ -831,6 +837,10 @@ export class ExpedientesService {
           prima: extra.monto ?? (jd.monto != null ? Number(jd.monto) : null),
         } as Record<string, unknown>)),
       ...(ocrLeido ? { ocrLeido } : {}),
+      // v1.4: tomador y asegurado/titular (sin migración). Sin el campo, se resuelve al enviar.
+      ...(Array.isArray(p.correos)
+        ? { correos: unirCorreos([email, ...p.correos]) }
+        : {}),
     };
 
     return {
@@ -922,12 +932,23 @@ export class ExpedientesService {
     // v1.3: un reenvío sin `ocrLeido` no borra lo que el OCR leyó al emitir.
     const ocrNuevo = rec(rec(datos.snapshot).ocrLeido);
     const hayOcrNuevo = Object.keys(ocrNuevo).length > 0;
-    if (p.snapshot || hayOcrNuevo) {
+    // v1.4: los correos se acumulan (un reenvío no borra los ya conocidos).
+    const correosNuevos = correosDelSnapshot(datos.snapshot);
+    const correosPrevios = correosDelSnapshot(exp.snapshot);
+    const correos =
+      correosNuevos || correosPrevios
+        ? unirCorreos([...(correosPrevios ?? []), ...(correosNuevos ?? [])])
+        : null;
+    const hayCorreosNuevos =
+      !!correosNuevos &&
+      correosNuevos.some((c) => !(correosPrevios ?? []).includes(c));
+    if (p.snapshot || hayOcrNuevo || hayCorreosNuevos) {
       const base = p.snapshot ? rec(datos.snapshot) : rec(exp.snapshot);
       const ocrLeido = hayOcrNuevo ? ocrNuevo : rec(rec(exp.snapshot).ocrLeido);
       out.snapshot = {
         ...base,
         ...(Object.keys(ocrLeido).length ? { ocrLeido } : {}),
+        ...(correos ? { correos } : {}),
       };
     }
     if (p.producto && exp.producto !== datos.producto)
@@ -2879,6 +2900,172 @@ export class ExpedientesService {
 
   // ─── Correos por evento (3, 4 y 5) ─────────────────────────────────────
 
+  /**
+   * v1.4: destinatarios de los avisos al cliente (tomador y asegurado/titular). Expediente anterior
+   * sin `snapshot.correos`: busca el correo del tomador en la cotización del wizard (solo lectura) y,
+   * con `persistir`, deja el resultado en el snapshot para no volver a buscarlo. Nunca lanza: ante
+   * cualquier fallo, el correo de siempre.
+   */
+  async correosDestino(
+    exp: Pick<
+      Exp,
+      | 'id'
+      | 'empresaId'
+      | 'cnpoliza'
+      | 'producto'
+      | 'aseguradoEmail'
+      | 'aseguradoKey'
+      | 'snapshot'
+    >,
+    opts: { persistir?: boolean } = {},
+  ): Promise<string[]> {
+    const r = await this.resolverCorreos(exp, opts);
+    return r.correos;
+  }
+
+  /**
+   * Relleno de correos (idempotente): `snapshot.correos` ya presente → nada que hacer. Si no, busca en
+   * la cotización del wizard y en la mesa técnica (solo lectura). Con `persistir` y algo encontrado:
+   * guarda `snapshot.correos`, completa `aseguradoEmail` si estaba vacío o inválido (misma regla de
+   * Emisión: titular o, si no, tomador) y `aseguradoKey` si no tenía. Nunca lanza.
+   */
+  async resolverCorreos(
+    exp: Pick<
+      Exp,
+      | 'id'
+      | 'empresaId'
+      | 'cnpoliza'
+      | 'producto'
+      | 'aseguradoEmail'
+      | 'aseguradoKey'
+      | 'snapshot'
+    >,
+    opts: { persistir?: boolean } = {},
+  ): Promise<{
+    correos: string[];
+    origen: 'snapshot' | 'recuperado' | 'columna' | 'ninguno';
+  }> {
+    if (correosDelSnapshot(exp.snapshot) != null) {
+      const correos = correosDe(exp);
+      return { correos, origen: correos.length ? 'snapshot' : 'ninguno' };
+    }
+    let principal: string | null = null;
+    let encontrados: string[] = [];
+    try {
+      const enlace = await this.cotizacionDe(exp);
+      if (enlace.estado === 'unica') {
+        const c = contactosDeWizard(enlace.jsonData);
+        principal = c.principal;
+        encontrados = c.correos;
+      }
+    } catch {
+      /* sin cotización */
+    }
+    try {
+      const sub = await prisma.funeralSubmission.findFirst({
+        where: { empresaId: exp.empresaId, cnpoliza: exp.cnpoliza },
+        orderBy: { createdAt: 'desc' },
+        select: { snapshotJson: true },
+      });
+      if (sub?.snapshotJson) {
+        const c = contactosDeWizard(sub.snapshotJson);
+        principal = principal ?? c.principal;
+        encontrados = unirCorreos([...encontrados, ...c.correos]);
+      }
+    } catch {
+      /* sin mesa técnica */
+    }
+    const actualValido = emailValido(exp.aseguradoEmail)
+      ? String(exp.aseguradoEmail).trim().toLowerCase()
+      : null;
+    const correos = unirCorreos([actualValido ?? principal, ...encontrados]);
+    if (!encontrados.length)
+      return { correos, origen: correos.length ? 'columna' : 'ninguno' };
+    if (opts.persistir !== false) {
+      try {
+        const actual = await prisma.mktExpediente.findUnique({
+          where: { id: exp.id },
+          select: { snapshot: true, aseguradoEmail: true, aseguradoKey: true },
+        });
+        if (actual && correosDelSnapshot(actual.snapshot) == null) {
+          const nuevoPrincipal = emailValido(actual.aseguradoEmail)
+            ? null
+            : (principal ?? correos[0] ?? null);
+          await prisma.mktExpediente.update({
+            where: { id: exp.id },
+            data: {
+              snapshot: {
+                ...rec(actual.snapshot),
+                correos,
+              } as Prisma.InputJsonValue,
+              ...(nuevoPrincipal ? { aseguradoEmail: nuevoPrincipal } : {}),
+              ...(!actual.aseguradoKey && nuevoPrincipal
+                ? { aseguradoKey: `mail:${nuevoPrincipal}` }
+                : {}),
+            },
+          });
+          await this.evento(exp.id, 'correos_recuperados', 'sistema', {
+            cantidad: correos.length,
+            principalCompletado: !!nuevoPrincipal,
+          });
+        }
+      } catch {
+        /* solo relleno: se vuelve a intentar en el próximo envío */
+      }
+    }
+    return {
+      correos,
+      origen: encontrados.some((c) => c !== actualValido)
+        ? 'recuperado'
+        : 'columna',
+    };
+  }
+
+  /**
+   * Relleno de correos de los expedientes del monitor (no descartados) que aún no tienen
+   * `snapshot.correos`. Vista previa por defecto (no escribe). Idempotente. Solo cifras.
+   */
+  async rellenarCorreos(opts: { ejecutar?: boolean } = {}) {
+    const exps = await prisma.mktExpediente.findMany({
+      where: { estadoDocumental: { not: ESTADO_DESCARTADA } },
+      select: {
+        id: true,
+        empresaId: true,
+        cnpoliza: true,
+        producto: true,
+        estadoDocumental: true,
+        aseguradoEmail: true,
+        aseguradoKey: true,
+        snapshot: true,
+      },
+    });
+    const r = {
+      modo: opts.ejecutar ? 'ejecucion' : 'vista_previa',
+      revisados: exps.length,
+      yaResueltos: 0,
+      conCorreoAntes: 0,
+      recuperados: 0,
+      sinCorreo: 0,
+      incompletos: { conCorreoAntes: 0, conCorreoDespues: 0, sinCorreo: 0 },
+    };
+    for (const e of exps) {
+      const antes = emailValido(e.aseguradoEmail);
+      if (antes) r.conCorreoAntes++;
+      const inc = e.estadoDocumental === 'incompleto';
+      if (inc && antes) r.incompletos.conCorreoAntes++;
+      const x = await this.resolverCorreos(e, {
+        persistir: opts.ejecutar === true,
+      });
+      if (x.origen === 'snapshot') r.yaResueltos++;
+      else if (x.origen === 'recuperado') r.recuperados++;
+      if (!x.correos.length) {
+        r.sinCorreo++;
+        if (inc) r.incompletos.sinCorreo++;
+      } else if (inc) r.incompletos.conCorreoDespues++;
+    }
+    return r;
+  }
+
   async registrarNotificacion(data: {
     expedienteId: number | null;
     aseguradoKey?: string | null;
@@ -2921,9 +3108,10 @@ export class ExpedientesService {
         return;
       }
       const nombre = primerNombre(exp);
-      const [config, reqs] = await Promise.all([
+      const [config, reqs, correos] = await Promise.all([
         this.getConfig(),
         this.requisitosDe([exp.id]),
+        this.correosDestino(exp),
       ]);
       const documentos = documentosCorreo(
         [exp],
@@ -2942,7 +3130,7 @@ export class ExpedientesService {
           documento: requisitoLabel(extra.tipo ?? ''),
         });
       } else {
-        const link = emailValido(exp.aseguradoEmail)
+        const link = correos.length
           ? await this.crearEnlace(exp.aseguradoKey, [exp.id])
           : null;
         const motivo = extra.motivo || 'el documento no se pudo verificar';
@@ -2960,7 +3148,8 @@ export class ExpedientesService {
           enlace: link?.url ?? null,
         });
       }
-      const r = await entregarCorreo([exp.aseguradoEmail], nombre, content);
+      // v1.4: tomador y asegurado/titular en una sola entrega.
+      const r = await entregarCorreo(correos, nombre, content);
       await this.registrarNotificacion({
         expedienteId: exp.id,
         aseguradoKey: exp.aseguradoKey,

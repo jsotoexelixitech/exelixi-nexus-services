@@ -50,6 +50,13 @@ export const expedientePayloadSchema = z
       .nullable()
       .catch(null),
     snapshot: z.record(z.unknown()).optional().nullable().catch(null),
+    /** v1.4: correos del tomador y del asegurado/titular (los avisos van a todos los válidos). */
+    correos: z
+      .array(z.string().trim().max(200))
+      .max(10)
+      .optional()
+      .nullable()
+      .catch(null),
     documentos: z
       .record(
         z
