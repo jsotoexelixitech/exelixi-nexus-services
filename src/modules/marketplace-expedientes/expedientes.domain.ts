@@ -251,34 +251,100 @@ export function textoCanal(
 }
 
 /**
- * Gestor (y su canal) o productor que emitió, para «emitida por». Null si la póliza no es de
- * un gestor ni de un productor. Nunca devuelve el cusuario: ese es el último recurso del caller.
+ * Código de gestor de Sis2000: número o compuesto productor-gestor («348-342»). Un login o
+ * correo (el `cgestor_in` del SSO de SysIP, p. ej. «agonzale@lam…») no lo es.
  */
-export function textoActorEmisor(
-  e: VendedorActores,
+export function esCodigoGestor(v?: string | null): boolean {
+  return /^\d+(-\d+)*$/.test(String(v ?? '').trim());
+}
+
+/** Número del gestor (último tramo de «348-342»). */
+function numeroGestor(cod: string): string {
+  const partes = cod.split('-');
+  return partes[partes.length - 1];
+}
+
+export interface EmisorTexto {
+  /** Texto «emitida por» sin login ni cusuario (eso lo decide el caller). Null: sin actor. */
+  texto: string | null;
+  /** Póliza de canal sin canal resuelto (ni ccanalalt ni el catálogo de nest-api). */
+  canalSinIdentificar: boolean;
+  /** Canal resuelto (ccanalalt de la póliza o el del gestor en el catálogo). */
+  canal: string | null;
+}
+
+/**
+ * Quién emitió, para «emitida por» (Monitor, reporte nocturno y Excel). Solo existen Canales y
+ * Productores: nunca aparece la palabra «gestor» (ni «vendedor»).
+ * - Canal: «Nombre (canal 27)» o «Canal 27».
+ * - Gestor: el canal al que pertenece con el número del gestor: «Nombre (canal 27-749)» o
+ *   «Canal 27-749». El canal sale de ccanalalt o del catálogo (magestor.ccanalalt); si no hay
+ *   forma: «Canal sin identificar (-749)».
+ * - cgestor que no es un código (login del SSO): canal si se puede deducir; si no, el login.
+ * - Productor: «Productor N» / «Nombre (productor N)», con el canal delante si la póliza lo trae.
+ */
+export function textoEmisor(
+  e: VendedorActores & { area?: string | null },
   nombres?: NombresActores | null,
-  nombresSnapshot: { gestor?: string | null; productor?: string | null } = {},
-): string | null {
+  nombresSnapshot: { canal?: string | null; productor?: string | null } = {},
+): EmisorTexto {
   const c = String(e.centidad ?? '')
     .trim()
     .toUpperCase();
-  const gestor = valorActor(e, 'gestor');
-  if (gestor && (c === 'G' || e.cgestor)) {
-    const nombre = nombres?.gestor?.get(gestor) || nombresSnapshot.gestor || null;
-    const canal = canalDeExpediente(e, nombres?.gestorCanal);
-    return [
-      nombre ? `${nombre} (gestor ${gestor})` : `Gestor ${gestor}`,
-      canal !== SIN_IDENTIFICAR ? textoCanal(canal, nombres) : null,
-    ]
-      .filter(Boolean)
-      .join(' · ');
-  }
+  const gestorRaw = valorActor(e, 'gestor');
+  const esGestor = !!gestorRaw && (c === 'G' || !!e.cgestor);
+  const gestor = esGestor && esCodigoGestor(gestorRaw) ? gestorRaw : null;
+  const login =
+    esGestor && !gestor
+      ? String(e.cgestor ?? e.citem ?? '').trim().slice(0, 64) || null
+      : null;
+  const canalDirecto = valorActor(e, 'canal');
+  const canalDelGestor = gestor
+    ? (nombres?.gestorCanal?.get(gestor) ??
+      nombres?.gestorCanal?.get(numeroGestor(gestor)))
+    : undefined;
+  const canal = canalDirecto ?? normalizarCodigoActor(canalDelGestor);
+  const sufijo = gestor ? `-${numeroGestor(gestor)}` : '';
+  const textoDeCanal = (() => {
+    if (!canal) return null;
+    const n =
+      nombres?.canal?.get(canal) ??
+      (canalDirecto ? (nombresSnapshot.canal ?? null) : null);
+    return n ? `${n} (canal ${canal}${sufijo})` : `Canal ${canal}${sufijo}`;
+  })();
   const productor = valorActor(e, 'intermediario');
-  if (productor && (c === 'P' || e.cproductor)) {
-    const nombre = nombresSnapshot.productor || null;
-    return nombre ? `${nombre} (productor ${productor})` : `Productor ${productor}`;
+  const grupo = e.area ? grupoArea(e.area) : 'desconocida';
+
+  const deProductor =
+    grupo === 'productor' ||
+    (grupo !== 'canal' &&
+      !esGestor &&
+      c !== 'C' &&
+      (!!nombresSnapshot.productor ||
+        (!!productor && (c === 'P' || !!e.cproductor))));
+  if (deProductor) {
+    const p = productor
+      ? nombresSnapshot.productor
+        ? `${nombresSnapshot.productor} (productor ${productor})`
+        : `Productor ${productor}`
+      : (nombresSnapshot.productor ?? null);
+    const texto =
+      [canalDirecto ? textoDeCanal : null, p].filter(Boolean).join(' · ') ||
+      null;
+    return { texto, canalSinIdentificar: false, canal: canalDirecto };
   }
-  return null;
+
+  const deCanal = grupo === 'canal' || esGestor || c === 'C' || !!canal;
+  if (!deCanal) return { texto: null, canalSinIdentificar: false, canal: null };
+  if (textoDeCanal)
+    return { texto: textoDeCanal, canalSinIdentificar: false, canal };
+  if (gestor)
+    return {
+      texto: `Canal sin identificar (-${numeroGestor(gestor)})`,
+      canalSinIdentificar: true,
+      canal: null,
+    };
+  return { texto: login, canalSinIdentificar: true, canal: null };
 }
 
 // ─── Áreas visibles: Canales y Productores ──────────────────────────────────

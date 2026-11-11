@@ -15,6 +15,7 @@ import type {
   MktExpedienteRequisito,
 } from '@prisma/client';
 import prisma from '../../config/prisma';
+import logger from '../../utils/logger';
 import { CatalogoCanales, catalogoCanales } from './expedientes.canales';
 import {
   CATEGORIAS_INCOMPLETO,
@@ -27,8 +28,7 @@ import {
   AreaExpediente,
   aseguradoProtegido,
   areasEnAlcance,
-  canalDeExpediente,
-  textoActorEmisor,
+  textoEmisor,
   caracasInicioDia,
   caracasParts,
   diasCaracasEntre,
@@ -36,11 +36,9 @@ import {
   ESTADO_DESCARTADA,
   ExpedientesConfig,
   grupoArea,
-  productorDeExpediente,
   proximoEnvio,
   requisitoLabel,
   requisitosAplicables,
-  SIN_IDENTIFICAR,
 } from './expedientes.domain';
 import { conDatosModificados, diagnosticoVigente } from './expedientes.ia';
 import { estaExcluido, nombreActorDeSnapshot } from './expedientes.service';
@@ -312,7 +310,11 @@ export function ultimoResultadoLabel(resultado?: string | null): string {
   return (resultado && RESULTADO_LABEL[resultado]) || 'Aún no enviado';
 }
 
-/** Canal (nombre del catálogo), productor, o el usuario que emitió si no hay canal. */
+/**
+ * «Emitida por» del reporte y del Excel: el mismo texto que el Monitor (textoEmisor), sin el
+ * login. Canal «Nombre (canal 27)»; gestor «Nombre (canal 27-749)» (nunca la palabra «gestor»);
+ * productor «Productor N». Sin actor: el login o el usuario de Sis2000.
+ */
 export function emitidaPor(
   e: Pick<
     Exp,
@@ -329,44 +331,42 @@ export function emitidaPor(
   catalogo?: CatalogoCanales | null,
 ): string {
   const usuario = e.xlogin || (e.cusuario ? `Usuario ${e.cusuario}` : null);
-  const gestorOProductor = () =>
-    textoActorEmisor(
-      e,
-      catalogo
-        ? {
-            canal: catalogo.nombres,
-            gestor: catalogo.gestorNombre ?? null,
-            gestorCanal: catalogo.gestorCanal,
-          }
-        : null,
-      {
-        gestor: nombreActorDeSnapshot(e.snapshot, 'gestor'),
-        productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
-      },
-    );
+  const { texto } = textoEmisor(
+    e,
+    catalogo
+      ? { canal: catalogo.nombres, gestorCanal: catalogo.gestorCanal }
+      : null,
+    {
+      canal: nombreActorDeSnapshot(e.snapshot, 'canal'),
+      productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
+    },
+  );
+  if (texto) return texto;
   const g = grupoArea(e.area);
-  if (g === 'productor') {
-    const cod = productorDeExpediente(e);
-    return (
-      nombreActorDeSnapshot(e.snapshot, 'intermediario') ??
-      (cod !== SIN_IDENTIFICAR ? `Productor ${cod}` : null) ??
-      usuario ??
-      'Productor sin identificar'
-    );
-  }
-  if (g === 'canal') {
-    const cod = canalDeExpediente(e, catalogo?.gestorCanal);
-    return (
-      (cod !== SIN_IDENTIFICAR ? catalogo?.nombres.get(cod) : null) ??
-      nombreActorDeSnapshot(e.snapshot, 'canal') ??
-      (cod !== SIN_IDENTIFICAR ? `Canal ${cod}` : null) ??
-      // Gestor sin canal resuelto: el gestor antes que el cusuario de Sis2000.
-      gestorOProductor() ??
-      usuario ??
-      'Canal sin identificar'
-    );
-  }
-  return gestorOProductor() ?? usuario ?? 'No identificado';
+  return (
+    usuario ??
+    (g === 'productor'
+      ? 'Productor sin identificar'
+      : g === 'canal'
+        ? 'Canal sin identificar'
+        : 'No identificado')
+  );
+}
+
+/** El catálogo de nest-api hace falta para nombrar canales y resolver el canal de un gestor. */
+function necesitaCatalogo(e: Pick<Exp, 'area' | 'ccanalalt' | 'cgestor'>): boolean {
+  return grupoArea(e.area) === 'canal' || !!e.ccanalalt || !!e.cgestor;
+}
+
+/** Póliza de canal sin canal resuelto (ni ccanalalt ni el canal del gestor en el catálogo). */
+export function canalSinIdentificar(
+  e: Pick<Exp, 'area' | 'centidad' | 'citem' | 'cgestor' | 'ccanalalt' | 'cproductor'>,
+  catalogo?: CatalogoCanales | null,
+): boolean {
+  return textoEmisor(
+    e,
+    catalogo ? { canal: catalogo.nombres, gestorCanal: catalogo.gestorCanal } : null,
+  ).canalSinIdentificar;
 }
 
 /** Próxima corrida de la tarea diaria (recordatorios) después de `ahora`. */
@@ -566,7 +566,7 @@ export async function armarReporteDiario(
       ultimaDe.set(n.expedienteId, n.resultado);
   }
 
-  const catalogo = incompletasHoy.some((e) => grupoArea(e.area) === 'canal')
+  const catalogo = incompletasHoy.some(necesitaCatalogo)
     ? await catalogoCanales()
     : null;
   const prioridad = (e: Exp) => {
@@ -868,9 +868,18 @@ export async function armarReporteSimple(
     if (n.expedienteId != null && !ultimaDe.has(n.expedienteId))
       ultimaDe.set(n.expedienteId, n);
   }
-  const catalogo = cartera.some((e) => grupoArea(e.area) === 'canal')
+  const catalogo = cartera.some(necesitaCatalogo)
     ? await catalogoCanales()
     : null;
+  // Pólizas de canal cuyo canal no se pudo resolver (gestor sin ccanalalt ni canal en
+  // magestor): se muestran «Canal sin identificar (-N)». Solo el conteo, sin datos personales.
+  const sinCanal = cartera.filter(
+    (e) => canalSinIdentificar(e, catalogo),
+  ).length;
+  if (sinCanal)
+    logger.info(
+      `[expedientes] reporte ${grupo}: ${sinCanal} póliza(s) de canal sin canal identificado`,
+    );
   const comunes = (e: Exp) => ({
     poliza: e.cnpoliza,
     asegurado: nombreCompleto(e),
