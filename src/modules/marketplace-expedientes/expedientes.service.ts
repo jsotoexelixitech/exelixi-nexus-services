@@ -13,6 +13,7 @@ import prisma from '../../config/prisma';
 import {
   catalogoCanales,
   gestorCanalEnCache,
+  nombresActoresEnCache,
   nombresCanalEnCache,
 } from './expedientes.canales';
 import {
@@ -36,6 +37,8 @@ import {
   grupoArea,
   productorDeExpediente,
   SIN_IDENTIFICAR,
+  textoActorEmisor,
+  textoCanal,
   calcularEstadoDocumental,
   emailValido,
   ESTADO_DESCARTADA,
@@ -1518,13 +1521,22 @@ export class ExpedientesService {
             .filter(Boolean)
             .join(' · ')
         : null;
+    // Gestor (con su canal) o productor: código y nombre del catálogo/snapshot. El cusuario de
+    // Sis2000 («Usuario 3391») no le dice nada a nadie: solo como último recurso.
+    const nombres = nombresActoresEnCache();
+    const actor = porCanal
+      ? null
+      : textoActorEmisor(e, nombres, {
+          gestor: nombreActorDeSnapshot(e.snapshot, 'gestor'),
+          productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
+        });
     const vendedor =
       porCanal ||
+      (actor ? [actor, e.xlogin].filter(Boolean).join(' · ') : null) ||
       e.xlogin ||
-      (e.cusuario ? `Usuario ${e.cusuario}` : null) ||
-      // El gestor no se muestra como área ni como vendedor: se muestra el canal.
-      (e.ccanalalt ? `Canal ${e.ccanalalt}` : null) ||
-      (e.citem ? `${e.centidad ?? ''}${e.citem}` : null);
+      (ccanal ? textoCanal(ccanal, nombres) : null) ||
+      (e.citem ? `${e.centidad ?? ''}${e.citem}` : null) ||
+      (e.cusuario ? `Usuario ${e.cusuario}` : null);
     const noEnviarPor = exclusionesQueAplican(e, exclusiones);
     return {
       id: e.id,

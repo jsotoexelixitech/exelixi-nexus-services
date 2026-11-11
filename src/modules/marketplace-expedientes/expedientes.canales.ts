@@ -4,7 +4,7 @@
  * mostrar el nombre del canal. Caché de 10 minutos; nunca lanza (sin catálogo → null).
  */
 import logger from '../../utils/logger';
-import { normalizarCodigoActor } from './expedientes.domain';
+import { NombresActores, normalizarCodigoActor } from './expedientes.domain';
 import { nestMailConfig } from './expedientes.env';
 
 /** Canal activo con el código tal como lo guarda el OCR en `ocrOpcional.canales`. */
@@ -25,6 +25,8 @@ export interface CatalogoCanales {
   nombres: Map<string, string>;
   /** cgestor → ccanalalt del canal al que pertenece. */
   gestorCanal: Map<string, string>;
+  /** cgestor → nombre del gestor (xgestor), también los que no tienen canal. */
+  gestorNombre?: Map<string, string>;
   /** Canales en el orden de nest-api (también los que no traen nombre). */
   canales?: CanalCatalogo[];
   /**
@@ -56,7 +58,14 @@ export async function catalogoCanales(
     if (res.ok && body.data) {
       const canales: CanalCatalogo[] = [];
       const puntos = new Map<string, PuntoCatalogo[]>();
-      valor = { nombres: new Map(), gestorCanal: new Map(), canales, puntos };
+      const gestorNombre = new Map<string, string>();
+      valor = {
+        nombres: new Map(),
+        gestorCanal: new Map(),
+        gestorNombre,
+        canales,
+        puntos,
+      };
       for (const raw of body.data.canales ?? []) {
         const c = (raw ?? {}) as Record<string, unknown>;
         const cod = normalizarCodigoActor(
@@ -79,6 +88,8 @@ export async function catalogoCanales(
           g.ccanalalt == null ? null : String(g.ccanalalt),
         );
         if (gestor && canal) valor.gestorCanal.set(gestor, canal);
+        const xgestor = typeof g.xgestor === 'string' ? g.xgestor.trim() : '';
+        if (gestor && xgestor) gestorNombre.set(gestor, xgestor.slice(0, 120));
         const codigoPunto = g.cgestor == null ? '' : String(g.cgestor).trim();
         const codigoCanal =
           g.ccanalalt == null ? '' : String(g.ccanalalt).trim();
@@ -125,6 +136,14 @@ export function gestorCanalEnCache(): Map<string, string> | null {
 /** ccanalalt → nombre del último catálogo cargado (o null). Para «emitida por» en la bandeja. */
 export function nombresCanalEnCache(): Map<string, string> | null {
   return cache?.valor?.nombres ?? null;
+}
+
+/** Catálogos del último cargado para «emitida por» (canal, gestor y gestor → canal). */
+export function nombresActoresEnCache(): NombresActores | null {
+  const v = cache?.valor;
+  return v
+    ? { canal: v.nombres, gestor: v.gestorNombre ?? null, gestorCanal: v.gestorCanal }
+    : null;
 }
 
 /** Solo pruebas. */
