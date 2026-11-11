@@ -370,7 +370,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       'V-84555221',
       'RCV',
       'Canales',
-      'Farmatodo',
+      'Farmatodo (canal 900)',
     ]);
     expect(filaP2[6]).toEqual(new Date(Date.UTC(2026, 10, 7)));
     expect(filaP2.slice(7)).toEqual([
@@ -406,7 +406,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
     ]);
     expect(fc.slice(1).map((f) => [f[0], f[4], f[5]])).toEqual([
       ['P-9', 'Productores', 'Productor 777'],
-      ['P-4', 'Canales', 'Farmatodo'],
+      ['P-4', 'Canales', 'Farmatodo (canal 900)'],
     ]);
     expect(fc[2][7]).toEqual(new Date(Date.UTC(2026, 10, 7)));
 

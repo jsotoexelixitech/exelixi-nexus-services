@@ -14,7 +14,6 @@ import {
   catalogoCanales,
   gestorCanalEnCache,
   nombresActoresEnCache,
-  nombresCanalEnCache,
 } from './expedientes.canales';
 import {
   actorDeCotizacion,
@@ -37,8 +36,7 @@ import {
   grupoArea,
   productorDeExpediente,
   SIN_IDENTIFICAR,
-  textoActorEmisor,
-  textoCanal,
+  textoEmisor,
   calcularEstadoDocumental,
   emailValido,
   ESTADO_DESCARTADA,
@@ -1511,30 +1509,27 @@ export class ExpedientesService {
   ) {
     const aplicables = requisitosAplicables(e.producto, config);
     const porTipo = new Map(reqs.map((r) => [r.tipo, r]));
-    // Póliza de canal alterno: el cusuario es el de la integración (siempre el mismo), así que
-    // «emitida por» muestra el canal (nombre del catálogo de nest-api) y el login SSO si vino.
+    // «Emitida por»: solo Canales y Productores (nunca «gestor»). Canal: «Nombre (canal 27)»;
+    // gestor: su canal con el número del gestor, «Nombre (canal 27-749)»; productor:
+    // «Productor N». El login SSO va al final; el cusuario de Sis2000 solo como último recurso.
     const ccanal = String(e.ccanalalt ?? '').trim();
-    const canalNombre = ccanal ? (nombresCanalEnCache()?.get(ccanal) ?? null) : null;
-    const porCanal =
-      e.centidad === 'C' && ccanal
-        ? [canalNombre ? `${canalNombre} (canal ${ccanal})` : `Canal ${ccanal}`, e.xlogin]
-            .filter(Boolean)
-            .join(' · ')
-        : null;
-    // Gestor (con su canal) o productor: código y nombre del catálogo/snapshot. El cusuario de
-    // Sis2000 («Usuario 3391») no le dice nada a nadie: solo como último recurso.
     const nombres = nombresActoresEnCache();
-    const actor = porCanal
-      ? null
-      : textoActorEmisor(e, nombres, {
-          gestor: nombreActorDeSnapshot(e.snapshot, 'gestor'),
-          productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
-        });
+    const emisor = textoEmisor(e, nombres, {
+      canal: nombreActorDeSnapshot(e.snapshot, 'canal'),
+      productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
+    });
+    const canalResuelto = emisor.canal ?? (ccanal || null);
+    const canalNombre = canalResuelto
+      ? (nombres?.canal?.get(normalizarCodigoActor(canalResuelto) ?? '') ?? null)
+      : null;
+    const login =
+      e.xlogin &&
+      !(emisor.texto ?? '').toLowerCase().includes(e.xlogin.toLowerCase())
+        ? e.xlogin
+        : null;
     const vendedor =
-      porCanal ||
-      (actor ? [actor, e.xlogin].filter(Boolean).join(' · ') : null) ||
+      (emisor.texto ? [emisor.texto, login].filter(Boolean).join(' · ') : null) ||
       e.xlogin ||
-      (ccanal ? textoCanal(ccanal, nombres) : null) ||
       (e.citem ? `${e.centidad ?? ''}${e.citem}` : null) ||
       (e.cusuario ? `Usuario ${e.cusuario}` : null);
     const noEnviarPor = exclusionesQueAplican(e, exclusiones);
@@ -1553,6 +1548,8 @@ export class ExpedientesService {
         cgestor: e.cgestor,
         ccanalalt: e.ccanalalt,
         canalNombre,
+        /** Póliza de canal cuyo canal no se pudo resolver (para contarlas). */
+        canalSinIdentificar: emisor.canalSinIdentificar,
         cusuario: e.cusuario,
         xlogin: e.xlogin,
         cproductor: valorActor(e, 'intermediario'),
