@@ -11,7 +11,6 @@ import {
   cadenciaVencida,
   caracasParts,
   diasCaracasEntre,
-  emailValido,
   esPendiente,
   etapaDebida,
   ExpedientesConfig,
@@ -34,6 +33,8 @@ import {
   sinCorreosEnTexto,
 } from './expedientes.mail';
 import { ExcelReporte, excelReporteSimple } from './expedientes.excel';
+import { clasificarExpediente } from './expedientes.clasificacion';
+import { unirCorreos } from './expedientes.correos';
 import {
   armarReporteSimple,
   GRUPOS_REPORTE,
@@ -49,7 +50,7 @@ import {
 type Exp = MktExpediente;
 type Req = MktExpedienteRequisito;
 
-async function requisitosPorExpediente(
+export async function requisitosPorExpediente(
   ids: number[],
 ): Promise<Map<number, Req[]>> {
   const map = new Map<number, Req[]>();
@@ -118,6 +119,8 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
     sinCorreo: 0,
     excluidos: 0,
     agotados: 0,
+    /** Lo único observado es «datos_modificados»: lo revisa el equipo, no se escribe al cliente. */
+    soloDatosModificados: 0,
   };
 
   const porKey = new Map<string, Exp[]>();
@@ -139,6 +142,14 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
         });
         resumen.agotados++;
       }
+      continue;
+    }
+    if (
+      clasificarExpediente(e.producto, reqs.get(e.id) ?? [], config) ===
+      'solo_datos_modificados'
+    ) {
+      // Sin reclamar la etapa: si después hay algo que pedir, sale en la etapa que toque.
+      resumen.soloDatosModificados++;
       continue;
     }
     debidos.set(key, [...(debidos.get(key) ?? []), { exp: e, etapa }]);
@@ -177,9 +188,10 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
     }
     if (!activos.length) continue;
 
-    const email =
-      activos.map((m) => m.exp.aseguradoEmail).find((v) => emailValido(v)) ??
-      null;
+    // v1.4: tomador y asegurado/titular de todas las pólizas del grupo, en una sola entrega.
+    const correos = unirCorreos(
+      (await Promise.all(activos.map((m) => svc.correosDestino(m.exp)))).flat(),
+    );
     const registrar = async (
       resultado: string,
       destinatarioMasked?: string | null,
@@ -199,6 +211,15 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
           error: error ?? null,
           lote,
         });
+        // Bloqueado por la lista blanca: NO consume la etapa (se libera el reclamo). Si la lista
+        // blanca estaba activa por error (producción sin EXPEDIENTES_ENTORNO=produccion), el
+        // correo sale en la próxima corrida en lugar de quedar como enviado.
+        if (resultado === 'bloqueado_whitelist') {
+          await prisma.mktExpediente.updateMany({
+            where: { id: m.exp.id, etapaEnviada: m.etapa },
+            data: { etapaEnviada: m.exp.etapaEnviada },
+          });
+        }
         if (cuenta) {
           await prisma.mktExpediente.update({
             where: { id: m.exp.id },
@@ -218,12 +239,12 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
       }
     };
 
-    if (!email) {
+    if (!correos.length) {
       await registrar('sin_correo');
       resumen.sinCorreo += activos.length;
       continue;
     }
-    if (!whitelistPermite(email, prod, wl)) {
+    if (!correos.some((c) => whitelistPermite(c, prod, wl))) {
       await registrar('bloqueado_whitelist', null);
       resumen.bloqueados += activos.length;
       continue;
@@ -253,7 +274,7 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
     const content = inicial
       ? correoSolicitudInicial(datos)
       : correoRecordatorio(datos);
-    const r = await entregarCorreo([email], nombre, content);
+    const r = await entregarCorreo(correos, nombre, content);
     await registrar(r.resultado, r.destinatarioMasked, r.error);
     if (r.resultado === 'enviado') resumen.enviados += activos.length;
     else if (r.resultado === 'error') resumen.fallidos += activos.length;
