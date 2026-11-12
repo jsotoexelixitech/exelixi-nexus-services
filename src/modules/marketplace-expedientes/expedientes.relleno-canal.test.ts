@@ -112,7 +112,7 @@ describe('relleno de canal desde Sis2000', () => {
     expect(emitidaPor(p1)).toBe('OS_LMDS (canal 27-749)');
     const p2 = await leer('P-2');
     expect(p2.cproductor).toBe('215');
-    expect(emitidaPor(p2)).toBe('CORRETAJE ABC (productor 215) · gestor 80058');
+    expect(emitidaPor(p2)).toBe('CORRETAJE ABC (productor 215)');
     expect(emitidaPor(await leer('P-3'))).toBe('Pendiente de identificar canal');
 
     // Idempotente: lo resuelto no se vuelve a consultar ni a escribir.
