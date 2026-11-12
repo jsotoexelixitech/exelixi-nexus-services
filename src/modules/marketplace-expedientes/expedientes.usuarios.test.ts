@@ -43,7 +43,7 @@ vi.mock('../portal/portal-admin.middleware', () => ({
 import jwt from 'jsonwebtoken';
 import prisma from '../../config/prisma';
 import router from './expedientes.routes';
-import { identidadPermitida } from './expedientes.usuarios';
+import { esSesionSso, identidadPermitida } from './expedientes.usuarios';
 import { startPortalSsoSession } from '../portal/portal-sso-session.service';
 import {
   generatePortalSsoToken,
@@ -215,7 +215,8 @@ describe('OCR por canal en solo lectura', () => {
   it('PUT responde 403 con mensaje claro sin EXPEDIENTES_OCR_CANAL_ESCRITURA', async () => {
     const r = await request(app)
       .put('/api/expedientes/ocr-por-canal')
-      .set(auth({}))
+      // Sesión propia del portal (una SSO recibe antes el 403 de config sin SSO).
+      .set(auth({ email: 'op@exelixi.test' }))
       .send({ producto: 'rcv', canales: [], motivo: 'x' });
     expect(r.status).toBe(403);
     expect(r.body.message).toMatch(/solo lectura/);
@@ -323,6 +324,24 @@ describe('SSO monitor-expedientes', () => {
     expect(db.usuarioPortalPerfil.upsert).not.toHaveBeenCalled();
     const claims = jwt.decode(s.token) as any;
     expect(claims.sisXlogin).toBe('LPerez');
+    // El JWT del canje SSO se reconoce como sesión SSO (config solo lectura).
+    expect(esSesionSso(claims)).toBe(true);
+  });
+
+  it('esSesionSso: correo espejo sso.* o claims Sis2000; login propio no', () => {
+    const base = { id: 1, empresaId: 1, roleId: 1 };
+    expect(
+      esSesionSso({ ...base, email: 'sso.lperez.c900@sis2000.portal' }),
+    ).toBe(true);
+    expect(
+      esSesionSso({ ...base, email: 'x@test', sisXusuario: 'Luis' } as any),
+    ).toBe(true);
+    // Login con clave Sis2000 (correo espejo sin «sso.») y login Nexus: no son SSO.
+    expect(esSesionSso({ ...base, email: 'lperez@sis2000.portal' })).toBe(
+      false,
+    );
+    expect(esSesionSso({ ...base, email: 'admin@exelixi.com' })).toBe(false);
+    expect(esSesionSso(undefined)).toBe(false);
   });
 
   it('el pase de monitor se rechaza en la sesión si el usuario salió de la lista', async () => {
