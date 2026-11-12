@@ -32,7 +32,7 @@ import {
 } from './expedientes.jobs';
 import { excelReporteSimple } from './expedientes.excel';
 import { correoReporteSimple } from './expedientes.mail';
-import { cifrasControl, ReporteSimple } from './expedientes.reporte';
+import { cifrasControl, lineaCuadre, ReporteSimple } from './expedientes.reporte';
 import { expedientesService as svc } from './expedientes.service';
 import { enviarRecordatorios, tareaNocturna } from './expedientes.tareas';
 
@@ -237,7 +237,13 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       completadoEn: new Date(HOY.getTime() + 120 * MIN),
     });
     expediente(p9).estadoDocumental = 'completo';
-    expediente(p6).area = 'desconocida';
+    // Sin canal ni productor por ninguna fuente: «Pendientes de identificar canal».
+    Object.assign(expediente(p6), {
+      area: 'desconocida',
+      centidad: null,
+      ccanalalt: null,
+      xlogin: 'alguien@ejemplo.com',
+    });
     // Sin información documental: no cuenta en ninguna cifra.
     expediente(p7).estadoDocumental = 'sin_informacion';
     await requisito(p2, 'licencia', {
@@ -273,11 +279,14 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       resultado: 'enviado',
       plantilla: 'expediente-reporte-diario-simple',
       areas: 'Canales',
+      total: 7,
       completados: 2,
       incompletos: 5,
       canales: { completos: 1, incompletos: 4 },
       productores: { completos: 1, incompletos: 0 },
+      sinCanal: { completos: 0, incompletos: 1 },
       sinDatos: 1,
+      pendientesCanal: 1,
       excel: true,
       omitidas: { incompletos: 0, completados: 0 },
     });
@@ -297,11 +306,17 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       areas: 'Canales',
       fecha: '07/11/2026',
       corte: '07/11/2026 23:00',
+      total: 7,
       completados: 2,
       incompletos: 5,
       canales: { completos: 1, incompletos: 4 },
       productores: { completos: 1, incompletos: 0 },
       sinDatos: 1,
+      sinCanal: { completos: 0, incompletos: 1 },
+      cuadre: 'Total 7 = Canales 5 + Productores 1 + Sin canal identificado 1',
+      pendientesCanal: ['P-6'],
+      pendientesCanalTotal: 1,
+      nota: "El Monitor puede mostrar otro total: este reporte es la foto al corte y no incluye 1 sin información documental (no son completas ni incompletas); lo emitido después del corte entra en el reporte siguiente.",
       adjunto: true,
       omitidas: { incompletos: 0, completados: 0 },
     });
@@ -324,16 +339,24 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       'Pérez',
       'Rojas',
       'Farmatodo',
+      'alguien@ejemplo.com',
     ])
       expect(cuerpo).not.toContain(prohibido);
-    expect(cuerpo.toLowerCase()).not.toMatch(/vendedor|monitor|enlace/);
+    expect(cuerpo.toLowerCase()).not.toMatch(/vendedor|enlace/);
 
     const wb = await leerExcel(body);
     expect(wb.worksheets.map((w) => w.name)).toEqual([
       'Incompletos',
       'Completados',
       'Resumen',
+      'Pendientes canal (1)',
     ]);
+    // Solo el número de póliza; nunca el login.
+    expect(filas(wb.getWorksheet('Pendientes canal (1)')!)).toEqual([
+      ['Póliza (pendiente de identificar canal)'],
+      ['P-6'],
+    ]);
+    expect(JSON.stringify(filas(wb.getWorksheet('Incompletos')!))).not.toContain('@');
     const inc = wb.getWorksheet('Incompletos')!;
     const fi = filas(inc);
     expect(fi[0]).toEqual([
@@ -356,7 +379,6 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
     // Más recientes primero; P-3 (de hace 3 días) al final.
     expect(fi.slice(1).map((f) => f[0])).toEqual([
       'P-2',
-      'P-6',
       'P-5',
       'P-1',
       'P-3',
@@ -378,18 +400,17 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       'Sin correo válido · 07/11/2026',
       'No',
     ]);
-    expect(fi[2][4]).toBe('Sin datos');
-    expect(fi[3]).toEqual(
+    expect(fi[2]).toEqual(
       expect.arrayContaining(['Excluido · 07/11/2026', 'Sí']),
     );
-    expect(fi[4]).toEqual(
+    expect(fi[3]).toEqual(
       expect.arrayContaining([
         'María José Pérez',
         'V-12345678',
         'Bloqueado · 07/11/2026',
       ]),
     );
-    expect(fi[5][7]).toBe(3);
+    expect(fi[4][7]).toBe(3);
 
     const fc = filas(wb.getWorksheet('Completados')!);
     expect(fc[0]).toEqual([
@@ -409,13 +430,14 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
     expect(fc[2][7]).toEqual(new Date(Date.UTC(2026, 10, 7)));
 
     const fr = filas(wb.getWorksheet('Resumen')!);
-    expect(fr.slice(0, 6)).toEqual([
+    expect(fr.slice(0, 7)).toEqual([
       ['Cifra', 'Valor'],
       ['Completados', 2],
       ['Incompletos', 5],
       ['De canales', '1 completos / 4 incompletos'],
       ['De productores', '1 completos / 0 incompletos'],
-      ['Sin datos de canal o productor', 1],
+      ['Sin canal identificado', '0 completos / 1 incompletos'],
+      ['Cuadre', 'Total 7 = Canales 5 + Productores 1 + Sin canal identificado 1'],
     ]);
 
     // Nunca el correo ni el teléfono del asegurado, tampoco en el Excel.
@@ -486,6 +508,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
         { label: 'Incompletos', value: '1' },
         { label: 'De canales', value: '0 completos / 1 incompletos' },
         { label: 'De productores', value: '0 completos / 0 incompletos' },
+        { label: 'Cuadre', value: 'Total 1 = Canales 1 + Productores 0' },
       ]);
       const json = JSON.stringify(branded);
       expect(json).not.toContain('P-1');
@@ -598,12 +621,34 @@ describe('Excel del control documental: tope de tamaño', () => {
         { area: 'canal', estadoDocumental: 'sin_informacion' },
       ]),
     ).toEqual({
+      total: 4,
       completados: 2,
       incompletos: 2,
       canales: { completos: 1, incompletos: 1 },
       productores: { completos: 0, incompletos: 1 },
+      sinCanal: { completos: 1, incompletos: 0 },
       sinDatos: 1,
     });
+  });
+
+  it('cuadre: completados e incompletos = suma de las filas (caso del 12-nov)', () => {
+    const exps = [
+      ...Array.from({ length: 299 }, () => ({ area: 'canal', estadoDocumental: 'completo' })),
+      ...Array.from({ length: 143 }, () => ({ area: 'gestor', estadoDocumental: 'incompleto' })),
+      { area: 'desconocida', estadoDocumental: 'completo' },
+      ...Array.from({ length: 22 }, () => ({ area: 'desconocida', estadoDocumental: 'incompleto' })),
+    ];
+    const c = cifrasControl(exps);
+    expect(c.completados).toBe(c.canales.completos + c.productores.completos + c.sinCanal.completos);
+    expect(c.incompletos).toBe(c.canales.incompletos + c.productores.incompletos + c.sinCanal.incompletos);
+    expect(c.total).toBe(465);
+    expect(c.sinCanal).toEqual({ completos: 1, incompletos: 22 });
+    expect(lineaCuadre(c)).toBe('Total 465 = Canales 442 + Productores 0 + Sin canal identificado 23');
+    const correo = correoReporteSimple(
+      { areas: 'Canales', fechaLocal: '12/11/2026', corte: '12/11/2026 09:00', cifras: c },
+      null,
+    );
+    expect(correo.fields).toContainEqual({ label: 'Sin canal identificado', value: '1 completos / 22 incompletos' });
   });
 });
 

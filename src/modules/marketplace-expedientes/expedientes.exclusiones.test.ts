@@ -486,7 +486,8 @@ describe('canal con sus gestores (catálogo de nest-api)', () => {
     const por = (id: number) => items.find((i) => i.id === id);
     expect(por(a).vendedor).toBe('Farmacia Centro (canal 900)');
     expect(por(a).vendedorDetalle.canalNombre).toBe('Farmacia Centro');
-    expect(por(b).vendedor).toBe('Farmacia Centro (canal 900) · jperez');
+    // Nunca el login del SSO (12-nov-2026).
+    expect(por(b).vendedor).toBe('Farmacia Centro (canal 900)');
     expect(por(c).vendedor).toBe('Canal 901'); // sin nombre en el catálogo: el código
     // Gestor: su canal (del catálogo) con el número del gestor; nunca «gestor» ni el cusuario.
     expect(por(d).vendedor).toBe('Farmacia Centro (canal 900-12)');
@@ -495,7 +496,7 @@ describe('canal con sus gestores (catálogo de nest-api)', () => {
     expect((await svc.detalle(a)).vendedor).toBe('Farmacia Centro (canal 900)');
   });
 
-  it('«emitida por» de gestor: canal del gestor con su número y login; Usuario solo al final', async () => {
+  it('«emitida por» de gestor: canal del gestor con su número; nunca login ni usuario', async () => {
     _resetCatalogoCanales({
       nombres: new Map([['27', 'REPUESTOS LOS SAMANES']]),
       gestorCanal: new Map([['12', '27']]),
@@ -512,15 +513,15 @@ describe('canal con sus gestores (catálogo de nest-api)', () => {
     const item = (id: number) => items.find((i) => i.id === id);
     const por = (id: number) => item(id).vendedor;
     expect(por(a)).toBe('REPUESTOS LOS SAMANES (canal 27-12)');
-    expect(por(b)).toBe('REPUESTOS LOS SAMANES (canal 27-12) · mlopez');
-    // Sin canal en la póliza ni en el catálogo: se cuenta.
-    expect(por(c)).toBe('Canal sin identificar (-13)');
+    expect(por(b)).toBe('REPUESTOS LOS SAMANES (canal 27-12)');
+    // Sin canal en la póliza ni en el catálogo: pendiente de identificar (se cuenta).
+    expect(por(c)).toBe('Pendiente de identificar canal');
     expect(item(c).vendedorDetalle.canalSinIdentificar).toBe(true);
     expect(por(d)).toBe('REPUESTOS LOS SAMANES (canal 27-13)'); // ccanalalt de la póliza
-    expect(por(g)).toBe('AGONZALE@LAM');
-    expect(por(f)).toBe('Usuario 3391'); // último recurso
+    expect(por(g)).toBe('Pendiente de identificar canal');
+    expect(por(f)).toBe('Pendiente de identificar canal');
     for (const i of items)
-      expect(String(i.vendedor)).not.toMatch(/gestor|vendedor/i);
+      expect(String(i.vendedor)).not.toMatch(/gestor|vendedor|@|usuario d|mlopez/i);
   });
 
   it('excluir el canal detiene también los correos de las pólizas de sus gestores', async () => {

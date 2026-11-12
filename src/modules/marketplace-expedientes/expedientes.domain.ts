@@ -265,23 +265,39 @@ function numeroGestor(cod: string): string {
 }
 
 export interface EmisorTexto {
-  /** Texto «emitida por» sin login ni cusuario (eso lo decide el caller). Null: sin actor. */
+  /**
+   * Texto «emitida por». Nunca un login, correo ni cusuario (fix 12-nov-2026). Null: no se pudo
+   * identificar canal ni productor (la póliza va a «Pendientes de identificar canal»).
+   */
   texto: string | null;
-  /** Póliza de canal sin canal resuelto (ni ccanalalt ni el catálogo de nest-api). */
+  /** Sin canal ni productor resuelto: pendiente de identificar (lo corrige el relleno). */
   canalSinIdentificar: boolean;
   /** Canal resuelto (ccanalalt de la póliza o el del gestor en el catálogo). */
   canal: string | null;
+  /** Grupo visible resuelto: canal, productor o null (pendiente de identificar canal). */
+  grupo: 'canal' | 'productor' | null;
+}
+
+/** Prefijo de un gestor compuesto («80080-1219» → 80080) cuando no es un canal conocido. */
+export function prefijoProductorDeGestor(
+  gestor: string | null,
+  nombres?: NombresActores | null,
+): string | null {
+  if (!gestor || !gestor.includes('-')) return null;
+  const pre = gestor.split('-')[0];
+  if (!pre || /^0+$/.test(pre) || nombres?.canal?.has(pre)) return null;
+  return pre;
 }
 
 /**
  * Quién emitió, para «emitida por» (Monitor, reporte nocturno y Excel). Solo existen Canales y
- * Productores: nunca aparece la palabra «gestor» (ni «vendedor»).
+ * Productores; nunca un login, correo ni usuario.
  * - Canal: «Nombre (canal 27)» o «Canal 27».
- * - Gestor: el canal al que pertenece con el número del gestor: «Nombre (canal 27-749)» o
- *   «Canal 27-749». El canal sale de ccanalalt o del catálogo (magestor.ccanalalt); si no hay
- *   forma: «Canal sin identificar (-749)».
- * - cgestor que no es un código (login del SSO): canal si se puede deducir; si no, el login.
+ * - Gestor con canal (ccanalalt de la póliza o magestor): «Nombre (canal 27-749)».
+ * - Gestor sin canal pero con productor (cproductor, citem si centidad = P o el prefijo de un
+ *   gestor compuesto «80080-1219»): Productores, «Nombre (productor 80080) · gestor 1219».
  * - Productor: «Productor N» / «Nombre (productor N)», con el canal delante si la póliza lo trae.
+ * - Nada de lo anterior: texto null y `canalSinIdentificar` (pendiente de identificar canal).
  */
 export function textoEmisor(
   e: VendedorActores & { area?: string | null },
@@ -294,10 +310,6 @@ export function textoEmisor(
   const gestorRaw = valorActor(e, 'gestor');
   const esGestor = !!gestorRaw && (c === 'G' || !!e.cgestor);
   const gestor = esGestor && esCodigoGestor(gestorRaw) ? gestorRaw : null;
-  const login =
-    esGestor && !gestor
-      ? String(e.cgestor ?? e.citem ?? '').trim().slice(0, 64) || null
-      : null;
   const canalDirecto = valorActor(e, 'canal');
   const canalDelGestor = gestor
     ? (nombres?.gestorCanal?.get(gestor) ??
@@ -314,6 +326,12 @@ export function textoEmisor(
   })();
   const productor = valorActor(e, 'intermediario');
   const grupo = e.area ? grupoArea(e.area) : 'desconocida';
+  const textoProductor = (cod: string | null) =>
+    cod
+      ? nombresSnapshot.productor
+        ? `${nombresSnapshot.productor} (productor ${cod})`
+        : `Productor ${cod}`
+      : (nombresSnapshot.productor ?? null);
 
   const deProductor =
     grupo === 'productor' ||
@@ -323,28 +341,47 @@ export function textoEmisor(
       (!!nombresSnapshot.productor ||
         (!!productor && (c === 'P' || !!e.cproductor))));
   if (deProductor) {
-    const p = productor
-      ? nombresSnapshot.productor
-        ? `${nombresSnapshot.productor} (productor ${productor})`
-        : `Productor ${productor}`
-      : (nombresSnapshot.productor ?? null);
+    const p = textoProductor(productor);
     const texto =
       [canalDirecto ? textoDeCanal : null, p].filter(Boolean).join(' · ') ||
       null;
-    return { texto, canalSinIdentificar: false, canal: canalDirecto };
+    return {
+      texto,
+      canalSinIdentificar: !texto,
+      canal: canalDirecto,
+      grupo: texto ? 'productor' : null,
+    };
   }
 
-  const deCanal = grupo === 'canal' || esGestor || c === 'C' || !!canal;
-  if (!deCanal) return { texto: null, canalSinIdentificar: false, canal: null };
   if (textoDeCanal)
-    return { texto: textoDeCanal, canalSinIdentificar: false, canal };
-  if (gestor)
     return {
-      texto: `Canal sin identificar (-${numeroGestor(gestor)})`,
-      canalSinIdentificar: true,
-      canal: null,
+      texto: textoDeCanal,
+      canalSinIdentificar: false,
+      canal,
+      grupo: 'canal',
     };
-  return { texto: login, canalSinIdentificar: true, canal: null };
+  // Gestor (o login) sin canal: el productor de la póliza o el prefijo del gestor compuesto.
+  const prodGestor =
+    productor ?? (gestor ? prefijoProductorDeGestor(gestor, nombres) : null);
+  if (prodGestor || nombresSnapshot.productor) {
+    const p = textoProductor(prodGestor);
+    return {
+      texto: gestor ? `${p} · gestor ${numeroGestor(gestor)}` : p,
+      canalSinIdentificar: false,
+      canal: null,
+      grupo: 'productor',
+    };
+  }
+  return { texto: null, canalSinIdentificar: true, canal: null, grupo: null };
+}
+
+/** Grupo visible resuelto: canal, productor o null (pendiente de identificar canal). */
+export function grupoEmisor(
+  e: VendedorActores & { area?: string | null },
+  nombres?: NombresActores | null,
+  nombresSnapshot: { canal?: string | null; productor?: string | null } = {},
+): 'canal' | 'productor' | null {
+  return textoEmisor(e, nombres, nombresSnapshot).grupo;
 }
 
 // ─── Áreas visibles: Canales y Productores ──────────────────────────────────

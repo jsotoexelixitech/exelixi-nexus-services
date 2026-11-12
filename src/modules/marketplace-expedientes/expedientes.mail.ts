@@ -21,6 +21,7 @@ import type {
   ReporteDiario,
   ReporteSimple,
 } from './expedientes.reporte';
+import { lineaCuadre, textoNotaCuadre } from './expedientes.cuadre';
 
 export type TipoCorreoAsegurado =
   | 'solicitud'
@@ -651,8 +652,12 @@ function porArea(c: { completos: number; incompletos: number }): string {
  * listado, nombres, documentos, enlaces ni mención al monitor: el detalle va solo en el adjunto.
  * Respaldo `branded` con las mismas cifras y sin adjunto.
  */
+/** Pólizas pendientes de identificar canal que se listan en el cuerpo (todas van en el Excel). */
+export const MAX_PENDIENTES_CANAL_CORREO = 50;
+
 export function correoReporteSimple(
-  r: Pick<ReporteSimple, 'areas' | 'fechaLocal' | 'corte' | 'cifras'>,
+  r: Pick<ReporteSimple, 'areas' | 'fechaLocal' | 'corte' | 'cifras'> &
+    Partial<Pick<ReporteSimple, 'pendientesCanal' | 'nota'>>,
   excel: {
     filename: string;
     buffer: Buffer;
@@ -662,6 +667,12 @@ export function correoReporteSimple(
   const c = r.cifras;
   const subject = asuntoReporteDiario(r.areas, r.fechaLocal);
   const corte = `Corte: ${r.corte} (hora de Caracas).`;
+  const sinCanal = c.sinCanal ?? { completos: 0, incompletos: c.sinDatos };
+  const total = c.total ?? c.completados + c.incompletos;
+  const cuadre = lineaCuadre({ ...c, total });
+  const nota = textoNotaCuadre(r.nota);
+  const pendientes = r.pendientesCanal ?? [];
+  const listaPendientes = pendientes.slice(0, MAX_PENDIENTES_CANAL_CORREO);
   return {
     subject,
     eyebrow: 'Control documental',
@@ -674,13 +685,20 @@ export function correoReporteSimple(
       { label: 'De canales', value: porArea(c.canales) },
       { label: 'De productores', value: porArea(c.productores) },
       ...(c.sinDatos
+        ? [{ label: 'Sin canal identificado', value: porArea(sinCanal) }]
+        : []),
+      { label: 'Cuadre', value: cuadre },
+      ...(pendientes.length
         ? [
             {
-              label: 'Sin datos de canal o productor',
-              value: String(c.sinDatos),
+              label: `Pendientes de identificar canal (${pendientes.length})`,
+              value:
+                listaPendientes.join(', ') +
+                (pendientes.length > listaPendientes.length ? ', …' : ''),
             },
           ]
         : []),
+      ...(nota ? [{ label: 'Nota', value: nota }] : []),
     ],
     reporteSimple: {
       data: {
@@ -688,11 +706,17 @@ export function correoReporteSimple(
         areas: r.areas,
         fecha: r.fechaLocal,
         corte: r.corte,
+        total,
         completados: c.completados,
         incompletos: c.incompletos,
         canales: c.canales,
         productores: c.productores,
         sinDatos: c.sinDatos,
+        sinCanal,
+        cuadre,
+        pendientesCanal: listaPendientes,
+        pendientesCanalTotal: pendientes.length,
+        nota,
         adjunto: !!excel,
         ...(excel ? { omitidas: excel.omitidas } : {}),
       },

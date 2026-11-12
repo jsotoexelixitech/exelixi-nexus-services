@@ -113,6 +113,7 @@ import {
 } from './expedientes.schema';
 import { calcularKpis } from './expedientes.kpis';
 import { desgloseIncompletos } from './expedientes.categorias';
+import { contarPendientesCanal } from './expedientes.relleno-canal';
 import {
   contactosDeWizard,
   correosDe,
@@ -1531,9 +1532,9 @@ export class ExpedientesService {
   ) {
     const aplicables = requisitosAplicables(e.producto, config);
     const porTipo = new Map(reqs.map((r) => [r.tipo, r]));
-    // «Emitida por»: solo Canales y Productores (nunca «gestor»). Canal: «Nombre (canal 27)»;
-    // gestor: su canal con el número del gestor, «Nombre (canal 27-749)»; productor:
-    // «Productor N». El login SSO va al final; el cusuario de Sis2000 solo como último recurso.
+    // «Emitida por»: solo Canales y Productores. Canal: «Nombre (canal 27)»; gestor: su canal con
+    // el número del gestor, «Nombre (canal 27-749)»; gestor de productor: «Nombre (productor N) ·
+    // gestor M»; productor: «Productor N». Nunca un login, correo ni usuario (12-nov-2026).
     const ccanal = String(e.ccanalalt ?? '').trim();
     const nombres = nombresActoresEnCache();
     const emisor = textoEmisor(e, nombres, {
@@ -1544,16 +1545,7 @@ export class ExpedientesService {
     const canalNombre = canalResuelto
       ? (nombres?.canal?.get(normalizarCodigoActor(canalResuelto) ?? '') ?? null)
       : null;
-    const login =
-      e.xlogin &&
-      !(emisor.texto ?? '').toLowerCase().includes(e.xlogin.toLowerCase())
-        ? e.xlogin
-        : null;
-    const vendedor =
-      (emisor.texto ? [emisor.texto, login].filter(Boolean).join(' · ') : null) ||
-      e.xlogin ||
-      (e.citem ? `${e.centidad ?? ''}${e.citem}` : null) ||
-      (e.cusuario ? `Usuario ${e.cusuario}` : null);
+    const vendedor = emisor.texto ?? 'Pendiente de identificar canal';
     const noEnviarPor = exclusionesQueAplican(e, exclusiones);
     return {
       id: e.id,
@@ -1561,7 +1553,8 @@ export class ExpedientesService {
       cnpoliza: e.cnpoliza,
       cnrecibo: e.cnrecibo,
       producto: e.producto,
-      area: areaVisible(e.area),
+      // Grupo visible resuelto (un gestor de productor cuenta en Productores).
+      area: emisor.grupo ?? areaVisible(e.area),
       areaCodigo: AREA_CODIGO[e.area] ?? null,
       vendedor,
       vendedorDetalle: {
@@ -1778,9 +1771,15 @@ export class ExpedientesService {
       }),
       prisma.emision.count({ where: rango ? { createdAt: rango } : {} }),
     ]);
+    // Grupo visible resuelto: canal, productor (incluye gestores de productor) o sin canal.
+    await catalogoCanales();
+    const nombres = nombresActoresEnCache();
     const porArea = { canales: 0, productores: 0, sinDatos: 0 };
     for (const e of exps) {
-      const g = grupoArea(e.area);
+      const g = textoEmisor(e, nombres, {
+        canal: nombreActorDeSnapshot(e.snapshot, 'canal'),
+        productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
+      }).grupo;
       if (g === 'canal') porArea.canales++;
       else if (g === 'productor') porArea.productores++;
       else porArea.sinDatos++;
@@ -1797,8 +1796,10 @@ export class ExpedientesService {
        * emisión no la guarda. Sin filtro de área: total + descartadas ≈ emisionesNexus.
        */
       emisionesNexus,
-      /** El mismo `total` por grupo visible: canal (incluye gestores), productor o sin datos de quién emitió. */
+      /** El mismo `total` por grupo visible: canal (incluye gestores), productor o sin canal identificado. */
       porArea,
+      /** Sin canal ni productor identificado (deben ser 0; el relleno de canal las corrige). */
+      pendientesCanal: porArea.sinDatos,
       completos: exps.filter((e) => e.estadoDocumental === 'completo').length,
       incompletos: exps.filter((e) => e.estadoDocumental === 'incompleto')
         .length,
@@ -3537,7 +3538,14 @@ export class ExpedientesService {
         createdAt: ev.createdAt,
       }));
     });
-    return { ...config, cambios };
+    // Contador para el equipo: pólizas sin canal ni productor identificado (solo el número).
+    let pendientesCanal: { pendientes: number; polizas: string[] } | null = null;
+    try {
+      pendientesCanal = await contarPendientesCanal();
+    } catch {
+      pendientesCanal = null;
+    }
+    return { ...config, cambios, pendientesCanal };
   }
 }
 
