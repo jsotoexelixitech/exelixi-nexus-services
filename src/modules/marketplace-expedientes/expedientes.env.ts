@@ -104,6 +104,19 @@ export function conciliacionCadaMin(): number {
   return Math.min(720, Math.max(15, Math.floor(n)));
 }
 
+/**
+ * Timeout de cada llamada Nexus → OCR que lee un documento con IA (/documento y /analizar).
+ * El monitor usa el modelo pro primero (gemini-3.1-pro-preview): en GCIA tarda de 13 s a 146 s.
+ * Sin variable = 240 s. Rango 30 s a 600 s. Si vence, el documento queda pendiente de análisis
+ * (error técnico, se reintenta) y nunca validado.
+ */
+export function ocrTimeoutMs(): number {
+  const raw = String(process.env.EXPEDIENTES_OCR_TIMEOUT_MS ?? '').trim();
+  const n = Number(raw);
+  if (raw === '' || !Number.isFinite(n) || n <= 0) return 240_000;
+  return Math.min(600_000, Math.max(30_000, Math.floor(n)));
+}
+
 export function ocrInternalConfig(): { url: string; key: string } | null {
   const url = String(process.env.OCR_INTERNAL_URL ?? '')
     .trim()

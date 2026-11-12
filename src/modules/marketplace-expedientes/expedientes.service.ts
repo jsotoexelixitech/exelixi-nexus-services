@@ -60,6 +60,7 @@ import {
   expedientesEnabled,
   linkDias,
   ocrInternalConfig,
+  ocrTimeoutMs,
   publicBaseUrl,
 } from './expedientes.env';
 import {
@@ -148,7 +149,7 @@ function mensajeErrorOcr(err: unknown): string {
   if (err instanceof OcrNoConfiguradoError) return 'OCR no configurado.';
   const name = (err as { name?: string })?.name;
   if (name === 'TimeoutError' || name === 'AbortError')
-    return 'el OCR no respondió en 90 s.';
+    return `el OCR no respondió en ${Math.round(ocrTimeoutMs() / 1000)} s.`;
   return 'OCR no disponible.';
 }
 
@@ -2424,6 +2425,8 @@ export class ExpedientesService {
             extraido: r.ocrDatos,
             confianza: r.ocrConfianza,
             proveedor: str(previo.proveedor) ?? null,
+            modelo: str(previo.modelo) ?? null,
+            modelos: previo.modelos,
           },
           ctx,
           { motivoAnalisis: motivo },

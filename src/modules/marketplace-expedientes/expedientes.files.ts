@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'crypto';
 import { Readable, Transform } from 'stream';
 import type { Request } from 'express';
 import { AppError } from '../../utils/app-error';
-import { ocrInternalConfig } from './expedientes.env';
+import { ocrInternalConfig, ocrTimeoutMs } from './expedientes.env';
 
 // ─── Token del enlace ───────────────────────────────────────────────────────
 
@@ -36,6 +36,14 @@ export interface ArchivoCargado {
   mimetype: 'image/jpeg' | 'image/png' | 'image/heic' | 'application/pdf';
   size: number;
 }
+
+/** Extensión del archivo según el tipo detectado por sus primeros bytes. */
+const EXTENSION_POR_TIPO: Record<ArchivoCargado['mimetype'], string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/heic': '.heic',
+  'application/pdf': '.pdf',
+};
 
 const HEIC_BRANDS = new Set([
   'heic',
@@ -132,10 +140,14 @@ export async function leerMultipart(
   if (!mimetype) {
     throw new AppError('Formato no permitido. Use JPG, PNG, HEIC o PDF.', 415);
   }
-  const filename =
+  // La extensión sale del tipo DETECTADO por contenido, nunca de la que manda el cliente:
+  // un «cedula.html» que empiece con %PDF no puede quedar servido como HTML por el OCR.
+  const nombreBase =
     String(f.name || 'documento')
-      .replace(/[^\w.\- ]/g, '_')
-      .slice(0, 120) || 'documento';
+      .replace(/\.[^.]*$/, '')
+      .replace(/[^\w\- ]/g, '_')
+      .slice(0, 110) || 'documento';
+  const filename = `${nombreBase}${EXTENSION_POR_TIPO[mimetype]}`;
   return { file: { buffer, filename, mimetype, size: buffer.length }, fields };
 }
 
@@ -149,6 +161,9 @@ export interface OcrLectura {
   proveedor?: string;
   /** 'tecnica' = sin lectura real (se reintenta); 'tipo_documento' = no es el documento pedido. */
   falla?: string;
+  /** Auditoría (OCR v1.3): modelo de Gemini que leyó y los intentados en la cadena. */
+  modelo?: string;
+  modelos?: { modelo: string; resultado: string }[];
 }
 
 export interface OcrDocumentoResultado {
@@ -186,7 +201,7 @@ function mensajeOcr(body: Record<string, unknown>, fallback: string): string {
  * multipart: file, tipo, cnpoliza, cnrecibo, documento, empresaId, empresaNombre?
  * header x-expediente-key. Responde { ok, ref, ubicacion, ocr: { extraido, confianza, motivo?, proveedor } }.
  * Errores: 401 / 503 (sin clave) = técnicos; 400 / 413 / 422 = archivo rechazado.
- * La lectura puede tardar decenas de segundos: timeout 90 s.
+ * La lectura con el modelo pro puede tardar minutos: timeout EXPEDIENTES_OCR_TIMEOUT_MS (240 s).
  */
 export async function enviarDocumentoAlOcr(params: {
   file: ArchivoCargado;
@@ -221,7 +236,7 @@ export async function enviarDocumentoAlOcr(params: {
     method: 'POST',
     headers: { 'x-expediente-key': cfg.key, Accept: 'application/json' },
     body: form,
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(ocrTimeoutMs()),
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (res.status === 413) {
@@ -269,7 +284,8 @@ export interface OcrAnalisisResultado {
  * Validación automática con IA: POST {OCR_INTERNAL_URL}/api/internal/expedientes/analizar
  * JSON { ref, tipo, aceptaRif? } con x-expediente-key. El OCR lee el archivo YA guardado en
  * EXPEDIENTES_ROOT/ref (sin copiarlo ni moverlo) y responde { ok, ref, hash, ocr }.
- * Timeout 90 s por llamada. Cualquier respuesta no 200 es error técnico (OcrAnalisisError).
+ * Timeout EXPEDIENTES_OCR_TIMEOUT_MS (240 s) por llamada. Cualquier respuesta no 200 es error
+ * técnico (OcrAnalisisError).
  */
 export async function analizarEnOcr(params: {
   ref: string;
@@ -290,7 +306,7 @@ export async function analizarEnOcr(params: {
       tipo: params.tipo,
       ...(params.aceptaRif ? { aceptaRif: true } : {}),
     }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(ocrTimeoutMs()),
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok || body.ok !== true) {

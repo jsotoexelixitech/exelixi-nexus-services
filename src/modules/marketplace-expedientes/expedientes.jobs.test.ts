@@ -151,6 +151,37 @@ describe('lista blanca', () => {
     await enviarRecordatorios(BASE);
     expect(notifs('error')).toHaveLength(1);
   });
+
+  it('error de nest-api: la etapa no se pierde y la solicitud inicial sale en la diaria siguiente', async () => {
+    process.env.EXPEDIENTES_MAIL_WHITELIST = 'luis@test.com';
+    await crear('P-1');
+    fetchMock.mockImplementationOnce(
+      async () => new Response('{}', { status: 500 }),
+    );
+    await enviarRecordatorios(BASE);
+    expect(notifs('error')).toHaveLength(1);
+    expect(db.mktExpediente._rows()[0].etapaEnviada).toBeLessThan(0);
+
+    await enviarRecordatorios(new Date(BASE.getTime() + DIA));
+    expect(notifs('enviado')).toHaveLength(1);
+    expect(bodyDe(mailCalls()[1]).data.subject).not.toMatch(/^Recordatorio/);
+    expect(db.mktExpediente._rows()[0].etapaEnviada).toBe(0);
+  });
+
+  it('error de nest-api: tope de 3 fallos por etapa (no reintenta para siempre)', async () => {
+    process.env.EXPEDIENTES_MAIL_WHITELIST = 'luis@test.com';
+    await crear('P-1');
+    fetchMock.mockImplementation(
+      async () => new Response('{}', { status: 500 }),
+    );
+    for (let d = 0; d < 3; d++)
+      await enviarRecordatorios(new Date(BASE.getTime() + d * DIA));
+    expect(notifs('error')).toHaveLength(3);
+    // Tercer fallo: la etapa queda consumida; la siguiente corrida del mismo período no reintenta.
+    expect(db.mktExpediente._rows()[0].etapaEnviada).toBe(0);
+    await enviarRecordatorios(new Date(BASE.getTime() + 2 * DIA + 1000));
+    expect(notifs('error')).toHaveLength(3);
+  });
 });
 
 describe('cadencia 0/3/7/14', () => {
