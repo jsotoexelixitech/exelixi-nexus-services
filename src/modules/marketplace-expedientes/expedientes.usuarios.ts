@@ -98,6 +98,47 @@ export function sesionPermitida(
   return permitidoPorCorreoSis2000(norm(user.email));
 }
 
+export const MENSAJE_CONFIG_SIN_SSO =
+  'La configuración del monitor no se puede cambiar desde una sesión abierta por SSO (Sis2000/SysIP). Entre al portal con su usuario para modificarla.';
+
+/**
+ * ¿La sesión del portal viene del SSO de Sis2000/SysIP (POST /api/portal/sso-session)?
+ * Ese canje firma el JWT con el correo espejo `sso.<login>…@sis2000.portal` y los claims
+ * sisXlogin/sisXusuario/sisEmail; el login propio (Nexus o usuario/clave Sis2000) no los lleva.
+ */
+export function esSesionSso(
+  user:
+    | (AuthRequest['user'] & SesionSis2000Claims & { sso?: unknown })
+    | undefined,
+): boolean {
+  if (!user) return false;
+  if (user.sso === true) return true;
+  const email = norm(user.email);
+  if (
+    email.startsWith('sso.') &&
+    email.endsWith(`@${SIS2000_PORTAL_EMAIL_DOMAIN}`)
+  )
+    return true;
+  return Boolean(user.sisXlogin || user.sisXusuario || user.sisEmail);
+}
+
+/** Middleware: 403 en las rutas que escriben configuración si la sesión es SSO. */
+export function requireSinSso(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (!esSesionSso(req.user)) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    status: 'error',
+    success: false,
+    message: MENSAJE_CONFIG_SIN_SSO,
+  });
+}
+
 /** Middleware tras `authenticate`: 403 si la sesión no está en la lista del monitor. */
 export function requireListaMonitor(
   req: AuthRequest,

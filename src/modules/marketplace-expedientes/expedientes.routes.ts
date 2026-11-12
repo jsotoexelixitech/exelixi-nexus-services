@@ -9,6 +9,8 @@
  * QA con EXPEDIENTES_ACCESO_LIBRE (nunca en producción): sin Authorization, todas las rutas
  * internas entran como administrador ficticio (actor `qa-acceso-libre`). Con sesión real,
  * se usa la sesión real. Las rutas públicas no cambian.
+ * Sesión abierta por SSO (Sis2000/SysIP): las rutas que ESCRIBEN configuración (config,
+ * OCR por canal, exclusiones) responden 403 (`sinSso`); las lecturas no cambian.
  */
 import { NextFunction, Request, Response, Router } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -24,7 +26,11 @@ import {
   MENSAJE_OCR_CANAL_SOLO_LECTURA,
   ocrCanalEscrituraHabilitada,
 } from './expedientes.env';
-import { requireListaMonitor, sesionPermitida } from './expedientes.usuarios';
+import {
+  requireListaMonitor,
+  requireSinSso,
+  sesionPermitida,
+} from './expedientes.usuarios';
 import { expedientesService as svc } from './expedientes.service';
 import {
   actoresQuerySchema,
@@ -142,6 +148,12 @@ const sesionSinLista = sesionBase(false);
 function admin(req: Request, res: Response, next: NextFunction) {
   if ((req as ExpedientesRequest).accesoLibre) return next();
   return requirePortalAdmin(req as AuthRequest, res, next);
+}
+
+/** Escritura de configuración: no desde una sesión SSO (la pestaña tampoco se muestra). */
+function sinSso(req: Request, res: Response, next: NextFunction) {
+  if ((req as ExpedientesRequest).accesoLibre) return next();
+  return requireSinSso(req as AuthRequest, res, next);
 }
 
 export function actorDe(req: AuthRequest): string {
@@ -277,6 +289,7 @@ router.put(
   internoLimiter,
   sesion,
   admin,
+  sinSso,
   h(async (req, res) => {
     const body = configUpdateSchema.shape.body.parse(req.body ?? {});
     return ok(
@@ -330,6 +343,7 @@ router.put(
   internoLimiter,
   sesion,
   admin,
+  sinSso,
   h(async (req, res) => {
     // Cambia si el OCR es obligatorio en la emisión: solo con la variable explícita.
     if (!ocrCanalEscrituraHabilitada())
@@ -360,6 +374,7 @@ router.post(
   internoLimiter,
   sesion,
   admin,
+  sinSso,
   h(async (req, res) => {
     const body = exclusionCreateSchema.shape.body.parse(req.body ?? {});
     return ok(res, await svc.crearExclusion(body, actorDe(req)), 201);
@@ -372,6 +387,7 @@ router.post(
   internoLimiter,
   sesion,
   admin,
+  sinSso,
   h(async (req, res) => {
     const body = exclusionLoteSchema.shape.body.parse(req.body ?? {});
     return ok(res, await svc.crearExclusionesLote(body, actorDe(req)), 201);
@@ -395,6 +411,7 @@ router.delete(
   internoLimiter,
   sesion,
   admin,
+  sinSso,
   h(async (req, res) => {
     const motivoRaw = req.body?.motivo ?? req.query.motivo;
     const motivo =
