@@ -42,6 +42,8 @@ import {
 } from './expedientes.domain';
 import { conDatosModificados, diagnosticoVigente } from './expedientes.ia';
 import { estaExcluido, nombreActorDeSnapshot } from './expedientes.service';
+import { resolverCanales } from './expedientes.relleno-canal';
+export { lineaCuadre, textoNotaCuadre } from './expedientes.cuadre';
 
 type Exp = MktExpediente;
 type Req = MktExpedienteRequisito;
@@ -330,7 +332,6 @@ export function emitidaPor(
   >,
   catalogo?: CatalogoCanales | null,
 ): string {
-  const usuario = e.xlogin || (e.cusuario ? `Usuario ${e.cusuario}` : null);
   const { texto } = textoEmisor(
     e,
     catalogo
@@ -341,16 +342,29 @@ export function emitidaPor(
       productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
     },
   );
-  if (texto) return texto;
-  const g = grupoArea(e.area);
-  return (
-    usuario ??
-    (g === 'productor'
-      ? 'Productor sin identificar'
-      : g === 'canal'
-        ? 'Canal sin identificar'
-        : 'No identificado')
-  );
+  // Nunca un login, correo ni usuario (12-nov-2026): sin canal ni productor, pendiente.
+  return texto ?? PENDIENTE_CANAL;
+}
+
+/** Texto de las pólizas cuyo canal aún no se identificó (van en su propia sección). */
+export const PENDIENTE_CANAL = 'Pendiente de identificar canal';
+
+/** Grupo visible resuelto de una póliza: Canales, Productores o null (pendiente de canal). */
+export function grupoVisible(
+  e: Pick<
+    Exp,
+    'area' | 'centidad' | 'citem' | 'cgestor' | 'ccanalalt' | 'cproductor' | 'snapshot'
+  >,
+  catalogo?: CatalogoCanales | null,
+): 'canal' | 'productor' | null {
+  return textoEmisor(
+    e,
+    catalogo ? { canal: catalogo.nombres, gestorCanal: catalogo.gestorCanal } : null,
+    {
+      canal: nombreActorDeSnapshot(e.snapshot, 'canal'),
+      productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
+    },
+  ).grupo;
 }
 
 /** El catálogo de nest-api hace falta para nombrar canales y resolver el canal de un gestor. */
@@ -700,15 +714,32 @@ export async function armarReporteDiario(
 // detalle va en un Excel adjunto (expedientes.excel). El Excel sí trae nombre y documento del
 // asegurado (lo pidió La Mundial); nunca correo ni teléfono, y nada de esto va a logs.
 
-export type AreaReporte = 'Canales' | 'Productores' | 'Sin datos';
+export type AreaReporte = 'Canales' | 'Productores' | 'Sin canal identificado';
 
 export interface CifrasControl {
+  /** completados + incompletos = canales + productores + sinCanal (cuadre). */
+  total: number;
   completados: number;
   incompletos: number;
   canales: { completos: number; incompletos: number };
+  /** Productores, incluidos los gestores de un productor (p. ej. «80080-1219»). */
   productores: { completos: number; incompletos: number };
-  /** Pólizas sin datos de quién las emitió (área desconocida). */
+  /** Sin canal ni productor identificado (tiende a 0 con el relleno de canal). */
+  sinCanal: { completos: number; incompletos: number };
+  /** Compatibilidad con la plantilla anterior: sinCanal.completos + sinCanal.incompletos. */
   sinDatos: number;
+}
+
+/**
+ * Por qué el Monitor puede mostrar otro total: el reporte cuenta solo completos e incompletos
+ * del alcance al corte; el Monitor también cuenta las «sin información documental» y lo emitido
+ * después del corte.
+ */
+export interface NotaCuadre {
+  /** Del alcance, sin información documental (el Monitor las cuenta en su total). */
+  sinInformacion: number;
+  /** Completos/incompletos fuera del alcance configurado (no van en este reporte). */
+  fueraDeAlcance: number;
 }
 
 export interface FilaIncompleto {
@@ -748,9 +779,12 @@ export interface ReporteSimple {
   /** «DD/MM/AAAA HH:MM» (Caracas). */
   corte: string;
   cifras: CifrasControl;
-  /** Más recientes primero. */
+  /** Más recientes primero. Sin las pendientes de identificar canal. */
   incompletos: FilaIncompleto[];
   completados: FilaCompletado[];
+  /** Pólizas sin canal ni productor identificado: SOLO el número de póliza. */
+  pendientesCanal?: string[];
+  nota?: NotaCuadre;
 }
 
 /**
@@ -767,37 +801,50 @@ export function areasReporteSimple(
 
 export function areaReporte(area: string): AreaReporte {
   const g = grupoArea(area);
+  return areaDeGrupo(g === 'desconocida' ? null : g);
+}
+
+export function areaDeGrupo(g: 'canal' | 'productor' | null): AreaReporte {
   return g === 'canal'
     ? 'Canales'
     : g === 'productor'
       ? 'Productores'
-      : 'Sin datos';
+      : 'Sin canal identificado';
 }
 
-/** Completados e incompletos por área visible; la suma de las áreas da el total. */
-export function cifrasControl(
-  exps: Pick<Exp, 'area' | 'estadoDocumental'>[],
+/**
+ * Completados e incompletos por grupo visible (canal, productor o sin canal identificado); la
+ * suma de los tres da el total, tanto en completos como en incompletos.
+ */
+export function cifrasControl<T extends Pick<Exp, 'area' | 'estadoDocumental'>>(
+  exps: T[],
+  grupoDe: (e: T) => 'canal' | 'productor' | null = (e) => {
+    const g = grupoArea(e.area);
+    return g === 'desconocida' ? null : g;
+  },
 ): CifrasControl {
   const c: CifrasControl = {
+    total: 0,
     completados: 0,
     incompletos: 0,
     canales: { completos: 0, incompletos: 0 },
     productores: { completos: 0, incompletos: 0 },
+    sinCanal: { completos: 0, incompletos: 0 },
     sinDatos: 0,
   };
   for (const e of exps) {
     const completo = e.estadoDocumental === 'completo';
     if (!completo && e.estadoDocumental !== 'incompleto') continue;
+    c.total++;
     if (completo) c.completados++;
     else c.incompletos++;
-    const g = grupoArea(e.area);
-    if (g === 'desconocida') c.sinDatos++;
-    else {
-      const a = g === 'canal' ? c.canales : c.productores;
-      if (completo) a.completos++;
-      else a.incompletos++;
-    }
+    const g = grupoDe(e);
+    const a =
+      g === 'canal' ? c.canales : g === 'productor' ? c.productores : c.sinCanal;
+    if (completo) a.completos++;
+    else a.incompletos++;
   }
+  c.sinDatos = c.sinCanal.completos + c.sinCanal.incompletos;
   return c;
 }
 
@@ -834,7 +881,7 @@ export async function armarReporteSimple(
 ): Promise<ReporteSimple> {
   const { config, fecha, ahora, exclusiones } = opts;
   const areas = areasReporteSimple(grupo, config.alcance);
-  const cartera = areas.length
+  let cartera = areas.length
     ? await prisma.mktExpediente.findMany({
         where: {
           area: { in: areas },
@@ -842,12 +889,27 @@ export async function armarReporteSimple(
         },
       })
     : [];
+  const catalogo = cartera.length ? await catalogoCanales() : null;
+  // Canal siempre identificado (12-nov-2026): completa y guarda desde Sis2000 (póliza), el
+  // catálogo o la cotización lo que falte. Si falla, sigue con lo que hay.
+  try {
+    cartera = (await resolverCanales(cartera, { ejecutar: true, catalogo }))
+      .exps;
+  } catch (err) {
+    logger.warn(
+      `[expedientes] reporte ${grupo}: no se pudo completar canales: ${err instanceof Error ? err.name : 'error'}`,
+    );
+  }
+  const grupoDe = (e: Exp) => grupoVisible(e, catalogo);
   const recientes = (a: Exp, b: Exp) =>
     b.emitidaEn.getTime() - a.emitidaEn.getTime() || b.id - a.id;
-  const incompletos = cartera
+  // Sin canal ni productor: solo en «Pendientes de identificar canal» (número de póliza).
+  const pendientes = cartera.filter((e) => grupoDe(e) === null).sort(recientes);
+  const conCanal = cartera.filter((e) => grupoDe(e) !== null);
+  const incompletos = conCanal
     .filter((e) => e.estadoDocumental === 'incompleto')
     .sort(recientes);
-  const completados = cartera
+  const completados = conCanal
     .filter((e) => e.estadoDocumental === 'completo')
     .sort(recientes);
 
@@ -868,24 +930,30 @@ export async function armarReporteSimple(
     if (n.expedienteId != null && !ultimaDe.has(n.expedienteId))
       ultimaDe.set(n.expedienteId, n);
   }
-  const catalogo = cartera.some(necesitaCatalogo)
-    ? await catalogoCanales()
-    : null;
-  // Pólizas de canal cuyo canal no se pudo resolver (gestor sin ccanalalt ni canal en
-  // magestor): se muestran «Canal sin identificar (-N)». Solo el conteo, sin datos personales.
-  const sinCanal = cartera.filter(
-    (e) => canalSinIdentificar(e, catalogo),
-  ).length;
-  if (sinCanal)
-    logger.info(
-      `[expedientes] reporte ${grupo}: ${sinCanal} póliza(s) de canal sin canal identificado`,
+  // Alerta: pólizas sin canal ni productor tras todas las fuentes. Solo el conteo.
+  if (pendientes.length)
+    logger.warn(
+      `[expedientes] ALERTA reporte ${grupo}: ${pendientes.length} póliza(s) pendientes de identificar canal`,
     );
+  const [sinInformacion, fueraDeAlcance] = await Promise.all([
+    areas.length
+      ? prisma.mktExpediente.count({
+          where: { area: { in: areas }, estadoDocumental: 'sin_informacion' },
+        })
+      : Promise.resolve(0),
+    prisma.mktExpediente.count({
+      where: {
+        area: { notIn: areas },
+        estadoDocumental: { in: ['completo', 'incompleto'] },
+      },
+    }),
+  ]);
   const comunes = (e: Exp) => ({
     poliza: e.cnpoliza,
     asegurado: nombreCompleto(e),
     documento: documentoCompleto(e),
     producto: productoLabel(e),
-    area: areaReporte(e.area),
+    area: areaDeGrupo(grupoDe(e)),
     canalOProductor: recortar(emitidaPor(e, catalogo), 80),
     emitidaEn: e.emitidaEn,
   });
@@ -897,7 +965,9 @@ export async function armarReporteSimple(
     fecha,
     fechaLocal: fechaLocal(fecha),
     corte: `${fechaLocal(caracasParts(ahora).fecha)} ${hora}`,
-    cifras: cifrasControl(cartera),
+    cifras: cifrasControl(cartera, grupoDe),
+    pendientesCanal: pendientes.map((e) => e.cnpoliza),
+    nota: { sinInformacion, fueraDeAlcance },
     incompletos: incompletos.map((e) => {
       const u = ultimaDe.get(e.id);
       return {

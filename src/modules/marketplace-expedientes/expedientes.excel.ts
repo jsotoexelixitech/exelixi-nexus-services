@@ -13,6 +13,7 @@ import type {
   FilaIncompleto,
   ReporteSimple,
 } from './expedientes.reporte';
+import { lineaCuadre, textoNotaCuadre } from './expedientes.cuadre';
 
 export const MAX_BYTES_EXCEL = 5 * 1024 * 1024;
 export const XLSX_CONTENT_TYPE =
@@ -131,8 +132,14 @@ export function filasResumen(c: CifrasControl): [string, string | number][] {
       `${c.productores.completos} completos / ${c.productores.incompletos} incompletos`,
     ],
     ...(c.sinDatos
-      ? ([['Sin datos de canal o productor', c.sinDatos]] as [string, number][])
+      ? ([
+          [
+            'Sin canal identificado',
+            `${c.sinCanal.completos} completos / ${c.sinCanal.incompletos} incompletos`,
+          ],
+        ] as [string, string][])
       : []),
+    ['Cuadre', lineaCuadre(c)],
   ];
 }
 
@@ -155,7 +162,19 @@ async function construir(
   ];
   res.getRow(1).font = { bold: true };
   for (const fila of filasResumen(r.cifras)) res.addRow(fila);
+  const nota = textoNotaCuadre(r.nota);
+  if (nota) res.addRow(['Nota', nota]);
   res.addRow([]);
+  // Solo el número de póliza: el equipo las corrige y el relleno de canal las completa.
+  const pend = r.pendientesCanal ?? [];
+  if (pend.length) {
+    const ws = wb.addWorksheet(`Pendientes canal (${pend.length})`.slice(0, 31), {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    ws.columns = [{ header: 'Póliza (pendiente de identificar canal)', width: 40 }];
+    ws.getRow(1).font = { bold: true };
+    for (const p of pend) ws.addRow([p]);
+  }
   res.addRow(['Control documental diario', r.fechaLocal]);
   res.addRow(['Corte (hora de Caracas)', r.corte]);
   return Buffer.from(await wb.xlsx.writeBuffer());

@@ -122,20 +122,24 @@ describe('indicadores: cuadre con Nexus', () => {
       { alcance: { productores: true }, motivo: 'prueba' } as any,
       'portal:1',
     );
-    await exp({ area: 'canal' });
-    await exp({ area: 'gestor' });
-    await exp({ area: 'productor' });
+    await exp({ area: 'canal', centidad: 'C', ccanalalt: '27' });
+    await exp({ area: 'gestor', centidad: 'G', cgestor: '749', ccanalalt: '27' });
+    await exp({ area: 'productor', centidad: 'P', cproductor: '80080' });
+    // Gestor de un productor («80080-1219», sin canal en magestor): cuenta en Productores.
+    await exp({ area: 'gestor', centidad: 'P', cgestor: '80080-1219' });
     await exp({ area: 'desconocida' });
-    await exp({ area: 'desconocida' });
+    await exp({ area: 'desconocida', xlogin: 'usuario@ejemplo.com' });
     await exp({ area: 'desconocida', estadoDocumental: 'descartada' });
     const ind = await svc.indicadores({});
-    expect(ind.porArea).toEqual({ canales: 2, productores: 1, sinDatos: 2 });
+    expect(ind.porArea).toEqual({ canales: 2, productores: 2, sinDatos: 2 });
+    expect(ind.pendientesCanal).toBe(2);
     expect(
       ind.porArea.canales + ind.porArea.productores + ind.porArea.sinDatos,
     ).toBe(ind.total);
+    // Filtro Canales (área guardada canal/gestor): el gestor de productor se ve en Productores.
     expect((await svc.indicadores({ area: 'C' })).porArea).toEqual({
       canales: 2,
-      productores: 0,
+      productores: 1,
       sinDatos: 0,
     });
   });

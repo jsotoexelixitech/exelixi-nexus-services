@@ -48,14 +48,37 @@ describe('textoEmisor', () => {
     expect(texto({ cgestor: '348-12' })).toBe('OS_LMDS (canal 27-12)');
   });
 
-  it('gestor sin canal por ninguna vía: «Canal sin identificar (-N)» y se marca', () => {
+  it('gestor sin canal ni productor: texto null (pendiente), nunca «Canal sin identificar»', () => {
     const r = textoEmisor({ centidad: 'G', cgestor: '749' }, nombres);
-    expect(r.texto).toBe('Canal sin identificar (-749)');
+    expect(r.texto).toBeNull();
+    expect(r.grupo).toBeNull();
     expect(r.canalSinIdentificar).toBe(true);
-    expect(texto({ cgestor: '736' }, null)).toBe('Canal sin identificar (-736)');
+    expect(texto({ cgestor: '736' }, null)).toBeNull();
   });
 
-  it('cgestor que es un login del SSO: canal si se deduce; si no, el login', () => {
+  it('magestor con cgestor compuesto: el catálogo resuelve por el último tramo', () => {
+    const n = { ...nombres, gestorCanal: new Map([['0-1162', '27'], ['1162', '27']]) };
+    expect(texto({ centidad: 'G', cgestor: '1162' }, n)).toBe('OS_LMDS (canal 27-1162)');
+  });
+
+  it('gestor de productor (sin canal): Productores «Nombre (productor N) · gestor M»', () => {
+    // Prefijo de productor en el código compuesto.
+    const a = textoEmisor({ area: 'gestor', centidad: 'P', cgestor: '80080-1219' }, nombres);
+    expect(a.texto).toBe('Productor 80080 · gestor 1219');
+    expect(a.grupo).toBe('productor');
+    // cproductor guardado (de la emisión o de la póliza en Sis2000) con su nombre.
+    const b = textoEmisor(
+      { area: 'gestor', centidad: 'P', cgestor: '80058', cproductor: '215' },
+      nombres,
+      { productor: 'CORRETAJE ABC' },
+    );
+    expect(b.texto).toBe('CORRETAJE ABC (productor 215) · gestor 80058');
+    expect(b.grupo).toBe('productor');
+    // Si el prefijo es un canal conocido, no es productor.
+    expect(textoEmisor({ cgestor: '27-749' }, nombres).grupo).toBeNull();
+  });
+
+  it('cgestor que es un login del SSO: canal si se deduce; si no, pendiente (nunca el login)', () => {
     expect(esCodigoGestor('AGONZALE@LAM')).toBe(false);
     expect(esCodigoGestor('749')).toBe(true);
     expect(esCodigoGestor('348-342')).toBe(true);
@@ -63,7 +86,7 @@ describe('textoEmisor', () => {
       texto({ centidad: 'P', cgestor: 'agonzale@lam', ccanalalt: '27' }),
     ).toBe('OS_LMDS (canal 27)');
     const r = textoEmisor({ centidad: 'P', cgestor: 'AGONZALE@LAM' }, nombres);
-    expect(r.texto).toBe('AGONZALE@LAM');
+    expect(r.texto).toBeNull();
     expect(r.canalSinIdentificar).toBe(true);
   });
 
@@ -79,12 +102,12 @@ describe('textoEmisor', () => {
     ).toBe('OS_LMDS (canal 27) · Productor 80080');
   });
 
-  it('sin actor: null (el caller decide el último recurso)', () => {
+  it('sin actor: null y pendiente de identificar', () => {
     expect(texto({})).toBeNull();
-    expect(textoEmisor({}, nombres).canalSinIdentificar).toBe(false);
+    expect(textoEmisor({}, nombres).canalSinIdentificar).toBe(true);
   });
 
-  it('nunca la palabra «gestor» ni «vendedor»', () => {
+  it('canal: nunca la palabra «gestor» ni «vendedor»', () => {
     for (const e of [
       { centidad: 'G', cgestor: '749' },
       { centidad: 'G', cgestor: '12' },
@@ -123,7 +146,7 @@ describe('emitidaPor (reporte nocturno y Excel)', () => {
     ).toBe('OS_LMDS (canal 27-12)');
     expect(
       emitidaPor({ ...base, area: 'gestor', centidad: 'G', cgestor: '749' }, catalogo),
-    ).toBe('Canal sin identificar (-749)');
+    ).toBe('Pendiente de identificar canal');
   });
 
   it('canal alterno: nombre y código', () => {
@@ -138,9 +161,9 @@ describe('emitidaPor (reporte nocturno y Excel)', () => {
     ).toBe('Productor 80080');
   });
 
-  it('sin actor: «Usuario N» como último recurso; nunca «vendedor»', () => {
-    const t = emitidaPor({ ...base, area: 'desconocida' }, catalogo);
-    expect(t).toBe('Usuario 3391');
+  it('sin actor: pendiente; nunca «Usuario N», login ni correo', () => {
+    const t = emitidaPor({ ...base, area: 'desconocida', xlogin: 'u@x.com' }, catalogo);
+    expect(t).toBe('Pendiente de identificar canal');
     expect(t).not.toMatch(/vendedor/i);
   });
 
