@@ -14,7 +14,16 @@ vi.mock('../../middlewares/auth.middleware', () => ({
   authenticate: (req: any, res: any, next: any) => {
     if (!req.headers.authorization)
       return res.status(401).json({ success: false });
-    req.user = { id: 1, email: 'op@test', empresaId: 1, roleId: 1 };
+    req.user =
+      req.headers['x-test-sso'] === '1'
+        ? {
+            id: 2,
+            email: 'sso.jperez.monitor@sis2000.portal',
+            empresaId: 1,
+            roleId: 1,
+            sisXlogin: 'jperez',
+          }
+        : { id: 1, email: 'op@test', empresaId: 1, roleId: 1 };
     next();
   },
 }));
@@ -421,5 +430,69 @@ describe('acceso libre QA (EXPEDIENTES_ACCESO_LIBRE)', () => {
       ._rows()
       .find((x: any) => x.tipo === 'config_actualizada');
     expect(ev.actor).toContain('portal:1');
+  });
+});
+
+describe('sesión SSO (Sis2000/SysIP): configuración solo lectura', () => {
+  const SSO = { ...ADMIN, 'x-test-sso': '1' };
+  const MSG = /sesión abierta por SSO/;
+
+  it('escrituras de configuración: 403 con mensaje claro', async () => {
+    const res = await Promise.all([
+      request(app)
+        .put('/api/expedientes/config')
+        .set(SSO)
+        .send({ horaDiaria: '07:30', motivo: 'x' }),
+      request(app)
+        .put('/api/expedientes/ocr-por-canal')
+        .set(SSO)
+        .send({}),
+      request(app)
+        .post('/api/expedientes/exclusiones')
+        .set(SSO)
+        .send({ alcance: 'asegurado', expedienteId: 1, motivo: 'x' }),
+      request(app)
+        .post('/api/expedientes/exclusiones/lote')
+        .set(SSO)
+        .send({}),
+      request(app)
+        .delete('/api/expedientes/exclusiones/1')
+        .set(SSO)
+        .send({ motivo: 'x' }),
+    ]);
+    for (const r of res) {
+      expect(r.status).toBe(403);
+      expect(r.body.message).toMatch(MSG);
+    }
+    expect(
+      db.mktExpedienteEvento
+        ._rows()
+        .some((x: any) => x.tipo === 'config_actualizada'),
+    ).toBe(false);
+  });
+
+  it('lecturas y bandeja siguen igual', async () => {
+    const r = await crearRcvConCedulaRecibida('P-SSO');
+    expect(
+      (await request(app).get('/api/expedientes/config').set(SSO)).status,
+    ).toBe(200);
+    expect(
+      (await request(app).get('/api/expedientes/exclusiones').set(SSO)).status,
+    ).toBe(200);
+    expect((await request(app).get('/api/expedientes').set(SSO)).status).toBe(
+      200,
+    );
+    const val = await request(app)
+      .post(`/api/expedientes/${r!.id}/requisitos/cedula/validar`)
+      .set(SSO);
+    expect(val.status).not.toBe(403);
+  });
+
+  it('sesión normal del portal: sigue escribiendo', async () => {
+    const ok = await request(app)
+      .put('/api/expedientes/config')
+      .set(ADMIN)
+      .send({ horaDiaria: '07:30', motivo: 'ajuste' });
+    expect(ok.status).toBe(200);
   });
 });
