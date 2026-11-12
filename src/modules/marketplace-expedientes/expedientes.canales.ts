@@ -105,6 +105,17 @@ export async function catalogoCanales(
           puntos.set(codigoCanal, lista);
         }
       }
+      // magestor.cgestor es VARCHAR y puede venir compuesto («215-2168», «0-1162»): el monitor
+      // guarda a veces solo el número. Se indexa también el último tramo si no es ambiguo.
+      const porNumero = new Map<string, string | null>();
+      for (const [cod, canal] of valor.gestorCanal) {
+        if (!cod.includes('-')) continue;
+        const num = cod.split('-').pop() as string;
+        const previo = porNumero.get(num);
+        porNumero.set(num, previo === undefined || previo === canal ? canal : null);
+      }
+      for (const [num, canal] of porNumero)
+        if (canal && !valor.gestorCanal.has(num)) valor.gestorCanal.set(num, canal);
       for (const lista of puntos.values()) {
         lista.sort(
           (a, b) =>
@@ -149,4 +160,77 @@ export function nombresActoresEnCache(): NombresActores | null {
 /** Solo pruebas. */
 export function _resetCatalogoCanales(valor?: CatalogoCanales | null): void {
   cache = valor === undefined ? null : { en: Date.now(), valor };
+}
+
+// ─── Canal/productor registrado en la póliza (Sis2000, solo lectura) ───────
+
+/** Lo que Sis2000 tiene en adpoliza (o adrecibos) de una póliza: la fuente de verdad. */
+export interface EmisorPoliza {
+  cnpoliza: string;
+  ccanalalt: string | null;
+  xcanalalt: string | null;
+  cproductor: string | null;
+  xproductor: string | null;
+  cgestor: string | null;
+}
+
+const LOTE_POLIZAS = 50;
+
+function texto(v: unknown, max: number): string | null {
+  const s = v == null ? '' : String(v).trim();
+  return s ? s.slice(0, max) : null;
+}
+
+/**
+ * nest-api GET /api/v1/canal/polizas-emisor?cnpoliza=a,b,… (apikey de Nexus). Lotes de 50.
+ * Nunca lanza: si nest-api no responde (o aún no tiene la ruta) devuelve lo que haya podido.
+ * Solo devuelve pólizas encontradas; los ccanalalt/cproductor 0 o vacíos llegan como null.
+ */
+export async function emisoresDePolizas(
+  cnpolizas: string[],
+): Promise<Map<string, EmisorPoliza>> {
+  const out = new Map<string, EmisorPoliza>();
+  const { url, apiKey } = nestMailConfig();
+  const lista = [...new Set(cnpolizas.map((p) => p.trim()).filter(Boolean))];
+  if (!apiKey || !lista.length) return out;
+  for (let i = 0; i < lista.length; i += LOTE_POLIZAS) {
+    const lote = lista.slice(i, i + LOTE_POLIZAS);
+    try {
+      const res = await fetch(
+        `${url}/api/v1/canal/polizas-emisor?cnpoliza=${encodeURIComponent(lote.join(','))}`,
+        {
+          headers: { Accept: 'application/json', apikey: apiKey },
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!res.ok) {
+        logger.warn(`[expedientes] canal de pólizas en Sis2000: HTTP ${res.status}`);
+        // 404: nest-api sin la ruta todavía; no tiene sentido seguir con los demás lotes.
+        if (res.status === 404 || res.status === 403) break;
+        continue;
+      }
+      const body = (await res.json().catch(() => ({}))) as { data?: unknown[] };
+      for (const raw of Array.isArray(body.data) ? body.data : []) {
+        const r = (raw ?? {}) as Record<string, unknown>;
+        const cnpoliza = texto(r.cnpoliza, 64);
+        if (!cnpoliza) continue;
+        const canal = texto(r.ccanalalt, 32);
+        const prod = texto(r.cproductor, 32);
+        out.set(cnpoliza, {
+          cnpoliza,
+          ccanalalt: canal && canal !== '0' ? canal : null,
+          xcanalalt: texto(r.xcanalalt, 120),
+          cproductor: prod && prod !== '0' ? prod : null,
+          xproductor: texto(r.xproductor, 150),
+          cgestor: texto(r.cgestor, 50),
+        });
+      }
+    } catch (err) {
+      logger.warn(
+        `[expedientes] canal de pólizas en Sis2000 no disponible: ${err instanceof Error ? err.name : 'error'}`,
+      );
+      break;
+    }
+  }
+  return out;
 }

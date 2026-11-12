@@ -343,6 +343,8 @@ export interface EnvioReporte {
   canales?: { completos: number; incompletos: number };
   productores?: { completos: number; incompletos: number };
   sinDatos?: number;
+  /** Pólizas sin canal ni productor identificado (alerta; deben ser 0). */
+  pendientesCanal?: number;
   /** false: el Excel no se pudo generar y el correo salió sin él. */
   excel?: boolean;
   /** Filas que no cupieron en el Excel por tamaño. */
@@ -415,6 +417,19 @@ async function reporteDeGrupo(
     ahora: ctx.ahora,
     exclusiones: ctx.exclusiones,
   });
+  const pendientesCanal = reporte.pendientesCanal?.length ?? 0;
+  if (pendientesCanal) {
+    // Alerta (sin datos personales): el equipo las ve en Configuración y las corrige.
+    try {
+      await svc.evento(null, 'canal_pendiente', 'sistema', {
+        fecha,
+        grupo,
+        pendientes: pendientesCanal,
+      });
+    } catch {
+      /* la alerta no frena el reporte */
+    }
+  }
   let excel: ExcelReporte | null = null;
   const destinatarios =
     grupo === 'productores'
@@ -459,6 +474,7 @@ async function reporteDeGrupo(
     ...(r.plantilla ? { plantilla: r.plantilla } : {}),
     areas: reporte.areas,
     ...reporte.cifras,
+    pendientesCanal,
     ...(destinatarios.length
       ? {
           excel: !!excel,
