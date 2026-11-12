@@ -237,20 +237,20 @@ function problemaObservado(r: ReqLike): string {
 }
 
 function aplicablesDe(
-  e: Pick<Exp, 'producto'>,
+  e: Pick<Exp, 'producto'> & { snapshot?: unknown },
   reqs: ReqLike[],
   config: ExpedientesConfig,
 ): ReqLike[] {
   const porTipo = new Map(reqs.map((r) => [r.tipo, r]));
   // Igual que calcularEstadoDocumental: el requisito aplicable sin fila cuenta como faltante.
-  return requisitosAplicables(e.producto, config).map(
+  return requisitosAplicables(e, config).map(
     (tipo) => porTipo.get(tipo) ?? { tipo, estado: 'faltante' },
   );
 }
 
 /** Motivo corto: «Falta cédula», «Licencia ilegible», «No se pudo leer el archivo (cédula)»… */
 export function observacionCorta(
-  e: Pick<Exp, 'producto' | 'estadoDocumental'>,
+  e: Pick<Exp, 'producto' | 'estadoDocumental'> & { snapshot?: unknown },
   reqs: ReqLike[],
   config: ExpedientesConfig,
 ): string {

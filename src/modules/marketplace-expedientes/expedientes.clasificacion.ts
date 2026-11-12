@@ -25,7 +25,7 @@ type ReqClasificable = Pick<
 >;
 
 export function clasificarExpediente(
-  producto: string,
+  producto: string | { producto: string; snapshot?: unknown },
   reqs: ReqClasificable[],
   config: ExpedientesConfig,
 ): ClasificacionExpediente {

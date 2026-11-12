@@ -240,7 +240,9 @@ export const listQuerySchema = z.object({
   estadoPago: z.enum(['pagada', 'pendiente']).optional(),
   // C / G / P (centidad del SSO) o el nombre del área.
   area: z.string().trim().max(20).optional(),
-  producto: z.enum(['rcv', 'personas', 'patrimonial']).optional(),
+  producto: z
+    .enum(['rcv', 'personas', 'patrimonial', 'pastora', 'viajero'])
+    .optional(),
   desde: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)

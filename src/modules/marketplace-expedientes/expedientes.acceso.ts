@@ -127,7 +127,7 @@ export async function expedientesAccesibles(
     where: { expedienteId: { in: activos.map((e) => e.id) } },
   });
   return activos.filter((e) =>
-    requisitosAplicables(e.producto, config).some((t) =>
+    requisitosAplicables(e, config).some((t) =>
       esPendiente(
         reqs.find((r) => r.expedienteId === e.id && r.tipo === t)?.estado ??
           'faltante',

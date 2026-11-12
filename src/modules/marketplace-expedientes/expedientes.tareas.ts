@@ -71,7 +71,7 @@ function pendientesDe(
   reqs: Req[],
   config: ExpedientesConfig,
 ): string[] {
-  return requisitosAplicables(e.producto, config).filter((t) =>
+  return requisitosAplicables(e, config).filter((t) =>
     esPendiente(reqs.find((r) => r.tipo === t)?.estado ?? 'faltante'),
   );
 }
@@ -151,7 +151,7 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
       continue;
     }
     if (
-      clasificarExpediente(e.producto, reqs.get(e.id) ?? [], config) ===
+      clasificarExpediente(e, reqs.get(e.id) ?? [], config) ===
       'solo_datos_modificados'
     ) {
       // Sin reclamar la etapa: si después hay algo que pedir, sale en la etapa que toque.

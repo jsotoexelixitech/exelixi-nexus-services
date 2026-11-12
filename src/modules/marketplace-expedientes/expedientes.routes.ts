@@ -56,6 +56,7 @@ import {
 } from './expedientes.ocr-canal';
 import { ejecutarJob } from './expedientes.jobs';
 import { leerMultipart } from './expedientes.files';
+import { crearRouterIntegracion } from './expedientes.integracion.routes';
 import {
   claveAsegurado,
   CODIGO_MINUTOS,
@@ -191,6 +192,10 @@ const internoLimiter = rateLimit({
     message: 'Demasiadas peticiones.',
   },
 });
+
+// ─── API de documentos para integradores (interno nest-api → Nexus) ───────
+// Clave interna propia (x-expediente-key); no usa la sesión del portal ni la lista del monitor.
+router.use('/integracion', crearRouterIntegracion(h, ok));
 
 // ─── Jobs (solo fuera de producción) ───────────────────────────────────────
 
