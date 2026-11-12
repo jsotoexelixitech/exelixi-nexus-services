@@ -117,6 +117,9 @@ export interface Diagnostico {
   /** Solo error_tecnico: número de intento y cuándo se reintenta. */
   intento?: number;
   proximoIntento?: string | null;
+  /** Auditoría: modelo de Gemini que leyó el documento y los intentados en la cadena del OCR. */
+  modelo?: string | null;
+  modelos?: { modelo: string; resultado: string }[];
 }
 
 export interface LecturaOcr {
@@ -126,6 +129,30 @@ export interface LecturaOcr {
   proveedor?: string | null;
   /** 'tecnica' = sin lectura real; 'tipo_documento' = no es el documento pedido. */
   falla?: string | null;
+  /** Auditoría: modelo que leyó y los intentados (OCR v1.3). */
+  modelo?: string | null;
+  modelos?: unknown;
+}
+
+/** Modelo y cadena intentada (solo si el OCR los informa), para auditar cada diagnóstico. */
+function auditoriaModelo(
+  ocr: LecturaOcr | null | undefined,
+): Pick<Diagnostico, 'modelo' | 'modelos'> {
+  const out: Pick<Diagnostico, 'modelo' | 'modelos'> = {};
+  const modelo = texto(ocr?.modelo)?.slice(0, 80);
+  if (modelo) out.modelo = modelo;
+  if (Array.isArray(ocr?.modelos)) {
+    const modelos = (ocr.modelos as unknown[])
+      .slice(0, 6)
+      .map((m) => rec(m))
+      .filter((m) => texto(m.modelo))
+      .map((m) => ({
+        modelo: String(texto(m.modelo)).slice(0, 80),
+        resultado: String(texto(m.resultado) ?? '').slice(0, 20),
+      }));
+    if (modelos.length) out.modelos = modelos;
+  }
+  return out;
 }
 
 export interface PersonaPoliza {
@@ -1586,19 +1613,23 @@ export function diagnosticar(
     comparador: VERSION_COMPARADOR,
     rolEsperado: null as RolPersona | null,
     motivoAnalisis: opts.motivoAnalisis,
+    ...auditoriaModelo(ocr),
   };
   const motivoOcr = texto(ocr?.motivo)?.slice(0, 300) ?? null;
 
   if (ocr?.falla === 'tecnica') {
-    return diagnosticoErrorTecnico(
-      tipo,
-      motivoOcr ?? 'El OCR no pudo leer el documento.',
-      {
-        ahora,
-        motivoAnalisis: opts.motivoAnalisis,
-        proveedor: base.proveedor,
-      },
-    );
+    return {
+      ...diagnosticoErrorTecnico(
+        tipo,
+        motivoOcr ?? 'El OCR no pudo leer el documento.',
+        {
+          ahora,
+          motivoAnalisis: opts.motivoAnalisis,
+          proveedor: base.proveedor,
+        },
+      ),
+      ...auditoriaModelo(ocr),
+    };
   }
   if (ocr?.falla === 'tipo_documento') {
     return {

@@ -96,6 +96,12 @@ export async function recalcularIncompletos(config: ExpedientesConfig) {
 }
 
 /**
+ * Veces que se reintenta (en las diarias siguientes) una etapa cuyo correo falló en nest-api.
+ * Tope para no repetir si un timeout ocultó un envío que sí salió.
+ */
+export const MAX_FALLOS_CORREO_POR_ETAPA = 3;
+
+/**
  * Recordatorios por cadencia (0/3/7/14 por defecto): una vez por etapa,
  * agrupados por asegurado, respetando exclusiones y la lista blanca.
  */
@@ -219,6 +225,23 @@ export async function enviarRecordatorios(ahora: Date = new Date()) {
             where: { id: m.exp.id, etapaEnviada: m.etapa },
             data: { etapaEnviada: m.exp.etapaEnviada },
           });
+        }
+        // nest-api caído o rechazó el envío: la etapa no se pierde (la solicitud inicial tampoco);
+        // se libera para la próxima diaria, hasta MAX_FALLOS_CORREO_POR_ETAPA fallos por etapa.
+        if (resultado === 'error') {
+          const fallos = await prisma.mktExpedienteNotificacion.count({
+            where: {
+              expedienteId: m.exp.id,
+              etapa: m.etapa,
+              resultado: 'error',
+            },
+          });
+          if (fallos < MAX_FALLOS_CORREO_POR_ETAPA) {
+            await prisma.mktExpediente.updateMany({
+              where: { id: m.exp.id, etapaEnviada: m.etapa },
+              data: { etapaEnviada: m.exp.etapaEnviada },
+            });
+          }
         }
         if (cuenta) {
           await prisma.mktExpediente.update({
