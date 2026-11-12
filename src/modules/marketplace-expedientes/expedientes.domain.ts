@@ -295,7 +295,7 @@ export function prefijoProductorDeGestor(
  * - Canal: «Nombre (canal 27)» o «Canal 27».
  * - Gestor con canal (ccanalalt de la póliza o magestor): «Nombre (canal 27-749)».
  * - Gestor sin canal pero con productor (cproductor, citem si centidad = P o el prefijo de un
- *   gestor compuesto «80080-1219»): Productores, «Nombre (productor 80080) · gestor 1219».
+ *   gestor compuesto «80080-1219»): Productores, «Nombre (productor 80080)», sin la palabra «gestor».
  * - Productor: «Productor N» / «Nombre (productor N)», con el canal delante si la póliza lo trae.
  * - Nada de lo anterior: texto null y `canalSinIdentificar` (pendiente de identificar canal).
  */
@@ -366,7 +366,7 @@ export function textoEmisor(
   if (prodGestor || nombresSnapshot.productor) {
     const p = textoProductor(prodGestor);
     return {
-      texto: gestor ? `${p} · gestor ${numeroGestor(gestor)}` : p,
+      texto: p,
       canalSinIdentificar: false,
       canal: null,
       grupo: 'productor',

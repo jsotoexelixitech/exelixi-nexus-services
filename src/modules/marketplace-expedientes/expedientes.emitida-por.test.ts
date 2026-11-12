@@ -61,10 +61,10 @@ describe('textoEmisor', () => {
     expect(texto({ centidad: 'G', cgestor: '1162' }, n)).toBe('OS_LMDS (canal 27-1162)');
   });
 
-  it('gestor de productor (sin canal): Productores «Nombre (productor N) · gestor M»', () => {
+  it('gestor de productor (sin canal): Productores «Nombre (productor N)», sin «gestor»', () => {
     // Prefijo de productor en el código compuesto.
     const a = textoEmisor({ area: 'gestor', centidad: 'P', cgestor: '80080-1219' }, nombres);
-    expect(a.texto).toBe('Productor 80080 · gestor 1219');
+    expect(a.texto).toBe('Productor 80080');
     expect(a.grupo).toBe('productor');
     // cproductor guardado (de la emisión o de la póliza en Sis2000) con su nombre.
     const b = textoEmisor(
@@ -72,7 +72,7 @@ describe('textoEmisor', () => {
       nombres,
       { productor: 'CORRETAJE ABC' },
     );
-    expect(b.texto).toBe('CORRETAJE ABC (productor 215) · gestor 80058');
+    expect(b.texto).toBe('CORRETAJE ABC (productor 215)');
     expect(b.grupo).toBe('productor');
     // Si el prefijo es un canal conocido, no es productor.
     expect(textoEmisor({ cgestor: '27-749' }, nombres).grupo).toBeNull();

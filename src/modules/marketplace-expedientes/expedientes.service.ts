@@ -1555,7 +1555,7 @@ export class ExpedientesService {
       producto: e.producto,
       // Grupo visible resuelto (un gestor de productor cuenta en Productores).
       area: emisor.grupo ?? areaVisible(e.area),
-      areaCodigo: AREA_CODIGO[e.area] ?? null,
+      areaCodigo: (emisor.grupo ? AREA_CODIGO[emisor.grupo] : AREA_CODIGO[e.area]) ?? null,
       vendedor,
       vendedorDetalle: {
         centidad: e.centidad,
