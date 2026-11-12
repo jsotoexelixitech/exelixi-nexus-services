@@ -115,6 +115,10 @@ import { calcularKpis } from './expedientes.kpis';
 import { desgloseIncompletos } from './expedientes.categorias';
 import { contarPendientesCanal } from './expedientes.relleno-canal';
 import {
+  contextoDeRequisito,
+  tipoDocumentoDeRequisito,
+} from './expedientes.integracion.domain';
+import {
   contactosDeWizard,
   correosDe,
   correosDelSnapshot,
@@ -163,7 +167,11 @@ function mensajeErrorOcr(err: unknown): string {
 function aceptaRifEn(producto: string, tipo: string): boolean {
   if (tipo !== 'cedula') return false;
   return (
-    producto === 'patrimonial' || producto === 'personas' || producto === 'rcv'
+    producto === 'patrimonial' ||
+    producto === 'personas' ||
+    producto === 'rcv' ||
+    // Pastora: cédula o RIF del tomador (12-nov-2026).
+    producto === 'pastora'
   );
 }
 
@@ -322,7 +330,7 @@ export function documentosCorreo(
   const out: DocumentoCorreo[] = [];
   for (const e of exps) {
     const porTipo = new Map((reqs.get(e.id) ?? []).map((r) => [r.tipo, r]));
-    for (const tipo of requisitosAplicables(e.producto, config)) {
+    for (const tipo of requisitosAplicables(e, config)) {
       const r = porTipo.get(tipo);
       let estado = estadoDocCorreo(r?.estado ?? 'faltante');
       if (!estado) continue;
@@ -740,7 +748,7 @@ export class ExpedientesService {
       where: { expedienteId: exp.id, estado: 'sin_informacion' },
       data: { estado: 'faltante' },
     });
-    const aplicables = new Set(requisitosAplicables(exp.producto, config));
+    const aplicables = new Set(requisitosAplicables(exp, config));
     for (const [tipo, raw] of Object.entries(documents)) {
       if (!aplicables.has(tipo)) continue;
       const d = rec(raw);
@@ -965,7 +973,7 @@ export class ExpedientesService {
   }
 
   private async asegurarRequisitos(exp: Exp, config: ExpedientesConfig) {
-    const aplicables = requisitosAplicables(exp.producto, config);
+    const aplicables = requisitosAplicables(exp, config);
     const existentes = await prisma.mktExpedienteRequisito.findMany({
       where: { expedienteId: exp.id },
     });
@@ -993,7 +1001,7 @@ export class ExpedientesService {
     config: ExpedientesConfig,
     origenDoc: 'emision' | 'conciliacion_ocr' = 'emision',
   ) {
-    const aplicables = new Set(requisitosAplicables(exp.producto, config));
+    const aplicables = new Set(requisitosAplicables(exp, config));
     for (const [tipo, d] of Object.entries(documentos)) {
       if (!aplicables.has(tipo) || !d?.recibido) continue;
       const r = await prisma.mktExpedienteRequisito.findUnique({
@@ -1036,7 +1044,7 @@ export class ExpedientesService {
       where: { expedienteId },
     });
     const estado = calcularEstadoDocumental(
-      requisitosAplicables(exp.producto, cfg),
+      requisitosAplicables(exp, cfg),
       reqs,
     );
     if (estado === exp.estadoDocumental) {
@@ -1530,7 +1538,7 @@ export class ExpedientesService {
     exclusiones: MktExpedienteExclusion[],
     config: ExpedientesConfig,
   ) {
-    const aplicables = requisitosAplicables(e.producto, config);
+    const aplicables = requisitosAplicables(e, config);
     const porTipo = new Map(reqs.map((r) => [r.tipo, r]));
     // «Emitida por»: solo Canales y Productores. Canal: «Nombre (canal 27)»; gestor: su canal con
     // el número del gestor, «Nombre (canal 27-749)»; gestor de productor: «Nombre (productor N) ·
@@ -1821,7 +1829,7 @@ export class ExpedientesService {
       validadosIa: exps.filter(
         (e) =>
           e.estadoDocumental === 'completo' &&
-          requisitosAplicables(e.producto, config).every(
+          requisitosAplicables(e, config).every(
             (t) =>
               (reqs.get(e.id) ?? []).find((r) => r.tipo === t)?.validadoPor ===
               'ia',
@@ -1833,7 +1841,7 @@ export class ExpedientesService {
       datosModificados: exps.filter((e) =>
         (reqs.get(e.id) ?? []).some(
           (r) =>
-            requisitosAplicables(e.producto, config).includes(r.tipo) &&
+            requisitosAplicables(e, config).includes(r.tipo) &&
             conDatosModificados(r),
         ),
       ).length,
@@ -1992,7 +2000,7 @@ export class ExpedientesService {
     const motivoTxt = motivo?.trim() ? motivo.trim().slice(0, 500) : null;
     const exp = await prisma.mktExpediente.findUnique({ where: { id } });
     if (!exp) throw new AppError('Expediente no encontrado.', 404);
-    if (!requisitosAplicables(exp.producto, config).includes(tipo)) {
+    if (!requisitosAplicables(exp, config).includes(tipo)) {
       throw new AppError('El requisito no aplica a este expediente.', 400);
     }
     await this.asegurarRequisitos(exp, config);
@@ -2083,7 +2091,7 @@ export class ExpedientesService {
     expedientes: Exp[];
     tipo: string;
     file: ArchivoCargado;
-    origen: 'vendedor' | 'publico';
+    origen: 'vendedor' | 'publico' | 'integracion';
     actor: string;
   }) {
     const { expedientes, tipo, file, origen, actor } = params;
@@ -2091,6 +2099,9 @@ export class ExpedientesService {
       throw new AppError('No hay pólizas para este documento.', 409);
     const config = await this.getConfig();
     const principal = expedientes[0];
+    // Tipo de documento real: igual al requisito salvo en integraciones (Viajero: viajero_N es una
+    // cédula o un pasaporte; Pastora: la cédula puede llegar declarada como RIF).
+    const tipoDoc = tipoDocumentoDeRequisito(principal, tipo);
 
     let ocrRes: OcrDocumentoResultado | null = null;
     let ocrDisponible = true;
@@ -2107,13 +2118,13 @@ export class ExpedientesService {
         () =>
           enviarDocumentoAlOcr({
             file,
-            tipo,
+            tipo: tipoDoc,
             cnpoliza: principal.cnpoliza,
             cnrecibo: principal.cnrecibo,
             documento: principal.aseguradoDocumento,
             empresaId: principal.empresaId,
             empresaNombre,
-            aceptaRif: aceptaRifEn(principal.producto, tipo),
+            aceptaRif: aceptaRifEn(principal.producto, tipoDoc),
           }),
         true,
       );
@@ -2197,8 +2208,8 @@ export class ExpedientesService {
       let completadoAhora = false;
       if (ocrDisponible && ref && this.iaActiva(config)) {
         // La lectura ya la hizo la carga: se compara contra la póliza sin otra llamada al OCR.
-        const ctx = await this.contextoDe(exp);
-        const diag = diagnosticar(tipo, ocrRes?.ocr, ctx, {
+        const ctx = contextoDeRequisito(await this.contextoDe(exp), exp, tipo);
+        const diag = diagnosticar(tipoDoc, ocrRes?.ocr, ctx, {
           motivoAnalisis: 'carga',
         });
         const res = await this.aplicarDiagnostico(exp, recibido, diag, {
@@ -2343,7 +2354,7 @@ export class ExpedientesService {
     const contextos = new Map<number, ContextoPoliza>();
     for (const r of reqs) {
       const exp = porId.get(r.expedienteId);
-      if (!exp || !requisitosAplicables(exp.producto, config).includes(r.tipo))
+      if (!exp || !requisitosAplicables(exp, config).includes(r.tipo))
         continue;
       resumen.revisados++;
       let ctx = contextos.get(exp.id);
@@ -2351,14 +2362,16 @@ export class ExpedientesService {
         ctx = await this.contextoDe(exp);
         contextos.set(exp.id, ctx);
       }
-      const motivo = motivoAnalisis(r, huellaPoliza(ctx), ahora);
+      // Viajero: cada documento se compara con su viajero (misma huella que en la carga).
+      const ctxReq = contextoDeRequisito(ctx, exp, r.tipo);
+      const motivo = motivoAnalisis(r, huellaPoliza(ctxReq), ahora);
       if (!motivo) {
         resumen.sinCambios++;
         continue;
       }
       resumen.motivos[motivo] = (resumen.motivos[motivo] ?? 0) + 1;
       trabajos.push(
-        this.analizarRequisito(exp, r, motivo, ctx, config).then((res) => {
+        this.analizarRequisito(exp, r, motivo, ctxReq, config).then((res) => {
           if (!res) return;
           resumen.analizados++;
           if (res.diagnostico.resultado === 'error_tecnico')
@@ -2386,7 +2399,9 @@ export class ExpedientesService {
       let refActual = r.ref;
       let hash: string | null = r.archivoHash ?? null;
       let lectura: OcrLectura | null | undefined;
-      const aceptaRif = aceptaRifEn(exp.producto, r.tipo);
+      // Tipo de documento real (integraciones: viajero_N es cédula o pasaporte).
+      const tipoDoc = tipoDocumentoDeRequisito(exp, r.tipo);
+      const aceptaRif = aceptaRifEn(exp.producto, tipoDoc);
       // v4/v5: el OCR lo rechazó por «parece ser un RIF» y ahora el RIF vale (personas con tomador
       // J o V/E): sin datos leídos que comparar, se vuelve a leer UNA vez el mismo archivo aceptando
       // RIF; después queda con el comparador vigente y no se repite.
@@ -2421,7 +2436,7 @@ export class ExpedientesService {
         }
         const previo = rec(r.diagnostico);
         diag = diagnosticar(
-          r.tipo,
+          tipoDoc,
           {
             extraido: r.ocrDatos,
             confianza: r.ocrConfianza,
@@ -2437,7 +2452,7 @@ export class ExpedientesService {
           colaIa.ejecutar(() =>
             analizarEnOcr({
               ref,
-              tipo: r.tipo,
+              tipo: tipoDoc,
               aceptaRif,
             }),
           );
@@ -2456,9 +2471,11 @@ export class ExpedientesService {
           }
           hash = res.hash;
           lectura = res.ocr;
-          diag = diagnosticar(r.tipo, res.ocr, ctx, { motivoAnalisis: motivo });
+          diag = diagnosticar(tipoDoc, res.ocr, ctx, {
+            motivoAnalisis: motivo,
+          });
         } catch (err) {
-          diag = diagnosticoErrorTecnico(r.tipo, mensajeErrorOcr(err), {
+          diag = diagnosticoErrorTecnico(tipoDoc, mensajeErrorOcr(err), {
             motivoAnalisis: motivo,
           });
         }
@@ -2666,7 +2683,7 @@ export class ExpedientesService {
     const config = await this.getConfig();
     const exp = await prisma.mktExpediente.findUnique({ where: { id } });
     if (!exp) throw new AppError('Expediente no encontrado.', 404);
-    if (!requisitosAplicables(exp.producto, config).includes(tipo)) {
+    if (!requisitosAplicables(exp, config).includes(tipo)) {
       throw new AppError('El requisito no aplica a este expediente.', 400);
     }
     const r = await prisma.mktExpedienteRequisito.findUnique({
@@ -2775,7 +2792,7 @@ export class ExpedientesService {
         ref: i + 1,
         polizaMasked: maskPoliza(e.cnpoliza),
         producto: e.producto,
-        requisitos: requisitosAplicables(e.producto, config)
+        requisitos: requisitosAplicables(e, config)
           .map((tipo) => {
             const r = porTipo.get(tipo);
             const estado = r?.estado ?? 'faltante';
@@ -2832,7 +2849,7 @@ export class ExpedientesService {
     const { enlace, expedientes } = await this.resolverEnlace(token);
     const reqs = await this.requisitosDe(expedientes.map((e) => e.id));
     const pendienteEn = (e: Exp) =>
-      requisitosAplicables(e.producto, config).includes(tipo) &&
+      requisitosAplicables(e, config).includes(tipo) &&
       esPendiente(
         (reqs.get(e.id) ?? []).find((r) => r.tipo === tipo)?.estado ??
           'faltante',
@@ -2863,7 +2880,7 @@ export class ExpedientesService {
     // Enlace consumido cuando ya no queda nada pendiente.
     const reqsDespues = await this.requisitosDe(expedientes.map((e) => e.id));
     const quedan = expedientes.some((e) =>
-      requisitosAplicables(e.producto, config).some((t) =>
+      requisitosAplicables(e, config).some((t) =>
         esPendiente(
           (reqsDespues.get(e.id) ?? []).find((r) => r.tipo === t)?.estado ??
             'faltante',

@@ -33,7 +33,13 @@ const MAX_BODY_BYTES = MAX_FILE_BYTES + 1024 * 1024;
 export interface ArchivoCargado {
   buffer: Buffer;
   filename: string;
-  mimetype: 'image/jpeg' | 'image/png' | 'image/heic' | 'application/pdf';
+  mimetype:
+    | 'image/jpeg'
+    | 'image/png'
+    | 'image/heic'
+    | 'application/pdf'
+    /** Solo en la API de integradores (leerMultipart con webp: true); el OCR lo normaliza. */
+    | 'image/webp';
   size: number;
 }
 
@@ -43,6 +49,7 @@ const EXTENSION_POR_TIPO: Record<ArchivoCargado['mimetype'], string> = {
   'image/png': '.png',
   'image/heic': '.heic',
   'application/pdf': '.pdf',
+  'image/webp': '.webp',
 };
 
 const HEIC_BRANDS = new Set([
@@ -59,8 +66,15 @@ const HEIC_BRANDS = new Set([
 /** Tipo real por firma (no se confía en el nombre ni en el content-type). */
 export function detectarTipoArchivo(
   buf: Buffer,
+  opts: { webp?: boolean } = {},
 ): ArchivoCargado['mimetype'] | null {
   if (buf.length < 12) return null;
+  if (
+    opts.webp &&
+    buf.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    buf.subarray(8, 12).toString('latin1') === 'WEBP'
+  )
+    return 'image/webp';
   if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff)
     return 'image/jpeg';
   if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
@@ -80,6 +94,8 @@ export function detectarTipoArchivo(
  */
 export async function leerMultipart(
   req: Request,
+  /** webp: también WEBP (API de integradores). Sin opciones, igual que siempre. */
+  opts: { webp?: boolean } = {},
 ): Promise<{ file: ArchivoCargado; fields: Record<string, string> }> {
   const ctype = String(req.headers['content-type'] ?? '');
   if (!ctype.toLowerCase().startsWith('multipart/form-data')) {
@@ -136,9 +152,14 @@ export async function leerMultipart(
     throw new AppError('El archivo supera el máximo de 25 MB.', 413);
   }
   const buffer = Buffer.from(await f.arrayBuffer());
-  const mimetype = detectarTipoArchivo(buffer);
+  const mimetype = detectarTipoArchivo(buffer, opts);
   if (!mimetype) {
-    throw new AppError('Formato no permitido. Use JPG, PNG, HEIC o PDF.', 415);
+    throw new AppError(
+      opts.webp
+        ? 'Formato no permitido. Use PDF, JPG, PNG o WEBP.'
+        : 'Formato no permitido. Use JPG, PNG, HEIC o PDF.',
+      415,
+    );
   }
   // La extensión sale del tipo DETECTADO por contenido, nunca de la que manda el cliente:
   // un «cedula.html» que empiece con %PDF no puede quedar servido como HTML por el OCR.

@@ -27,7 +27,24 @@ export type EstadoDocumental =
 /** Estado documental de las pólizas descartadas por la conciliación con el OCR. */
 export const ESTADO_DESCARTADA = 'descartada';
 export type EstadoPago = 'pagada' | 'pendiente';
-export type ProductoExpediente = 'rcv' | 'personas' | 'patrimonial';
+/**
+ * pastora y viajero (12-nov-2026): pólizas emitidas por las APIs de integración de nest-api
+ * (riesgos-generales ramo 25 y viajero-*); los documentos los carga el integrador.
+ */
+export type ProductoExpediente =
+  | 'rcv'
+  | 'personas'
+  | 'patrimonial'
+  | 'pastora'
+  | 'viajero';
+
+export const PRODUCTOS_EXPEDIENTE: readonly ProductoExpediente[] = [
+  'rcv',
+  'personas',
+  'patrimonial',
+  'pastora',
+  'viajero',
+];
 export type AreaExpediente = 'canal' | 'gestor' | 'productor' | 'desconocida';
 
 export interface AlcanceConfig {
@@ -65,6 +82,11 @@ export const DEFAULT_CONFIG: ExpedientesConfig = {
     rcv: ['cedula', 'licencia', 'certificado'],
     personas: ['cedula'],
     patrimonial: ['cedula'],
+    // Cédula o RIF del tomador (la cédula acepta RIF, como en patrimoniales).
+    pastora: ['cedula'],
+    // Un documento por viajero: la lista real va en el snapshot de cada póliza
+    // (requisitosAplicables con el expediente); esto es solo el respaldo.
+    viajero: ['viajero_1'],
   },
 };
 
@@ -80,7 +102,12 @@ export const REQUISITO_LABELS: Record<string, string> = {
   factura: 'Factura',
 };
 
+/** Requisito de Viajero: un documento (cédula o pasaporte) por viajero, en orden. */
+export const PREFIJO_REQUISITO_VIAJERO = 'viajero_';
+
 export function requisitoLabel(tipo: string): string {
+  const viajero = /^viajero_(\d+)$/.exec(tipo);
+  if (viajero) return `Cédula o pasaporte del viajero ${viajero[1]}`;
   return REQUISITO_LABELS[tipo] ?? tipo;
 }
 
@@ -132,7 +159,8 @@ export function normalizarProducto(
   const h = String(hint ?? '')
     .trim()
     .toLowerCase();
-  if (h === 'rcv' || h === 'personas' || h === 'patrimonial') return h;
+  if ((PRODUCTOS_EXPEDIENTE as readonly string[]).includes(h))
+    return h as ProductoExpediente;
   const p = String(producto ?? '').toLowerCase();
   if (p.includes('rcv')) return 'rcv';
   if (p.includes('patrimon')) return 'patrimonial';
@@ -419,10 +447,43 @@ export function productorDeExpediente(e: VendedorActores): string {
 
 // ─── Estados ────────────────────────────────────────────────────────────────
 
+/**
+ * Requisitos propios de una póliza de integración (snapshot.integracion.requisitos): Viajero pide
+ * un documento por viajero, así que la lista depende de la póliza y no solo del producto.
+ */
+export function requisitosDeSnapshot(snapshot: unknown): string[] | null {
+  const snap =
+    snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+      ? (snapshot as Record<string, unknown>)
+      : null;
+  const integ = snap?.integracion;
+  const lista =
+    integ && typeof integ === 'object' && !Array.isArray(integ)
+      ? (integ as Record<string, unknown>).requisitos
+      : null;
+  if (!Array.isArray(lista)) return null;
+  const tipos = lista
+    .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+    .map((t) => t.trim());
+  return tipos.length ? Array.from(new Set(tipos)) : null;
+}
+
+/**
+ * Requisitos aplicables. Con el expediente (producto + snapshot), las pólizas de integración usan
+ * su propia lista; con solo el producto (o sin lista propia), la de la configuración como siempre.
+ */
 export function requisitosAplicables(
-  producto: string,
+  productoOExpediente: string | { producto: string; snapshot?: unknown },
   config: ExpedientesConfig,
 ): string[] {
+  if (typeof productoOExpediente !== 'string') {
+    const propios = requisitosDeSnapshot(productoOExpediente.snapshot);
+    if (propios) return propios;
+  }
+  const producto =
+    typeof productoOExpediente === 'string'
+      ? productoOExpediente
+      : productoOExpediente.producto;
   const list = config.requisitosPorProducto[producto] ??
     DEFAULT_CONFIG.requisitosPorProducto[producto] ?? ['cedula'];
   return Array.from(new Set(list));

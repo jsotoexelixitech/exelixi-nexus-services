@@ -41,7 +41,7 @@ export interface RequisitoCategoria {
 
 /** Categoría del expediente incompleto; `null` si el expediente no está incompleto. */
 export function categoriaIncompleto(
-  exp: { producto: string; estadoDocumental: string },
+  exp: { producto: string; estadoDocumental: string; snapshot?: unknown },
   reqs: RequisitoCategoria[],
   config: ExpedientesConfig,
 ): CategoriaIncompleto | null {
@@ -49,7 +49,7 @@ export function categoriaIncompleto(
   const porTipo = new Map(reqs.map((r) => [r.tipo, r]));
   // Igual que calcularEstadoDocumental: el requisito aplicable sin fila cuenta como faltante.
   const aplicables: RequisitoCategoria[] = requisitosAplicables(
-    exp.producto,
+    exp,
     config,
   ).map((tipo) => porTipo.get(tipo) ?? { tipo, estado: 'faltante' });
 

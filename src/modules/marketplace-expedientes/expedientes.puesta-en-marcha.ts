@@ -166,7 +166,7 @@ async function correr(opts: OpcionesPuestaEnMarcha) {
       noSeEnvian.yaNotificados++;
       continue;
     }
-    const c = clasificarExpediente(e.producto, reqs.get(e.id) ?? [], config);
+    const c = clasificarExpediente(e, reqs.get(e.id) ?? [], config);
     clasif.set(e.id, c);
     if (c === 'solo_datos_modificados') {
       noSeEnvian.soloDatosModificados++;
