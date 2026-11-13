@@ -619,6 +619,12 @@ model CotizacionRc {
   poliza           Json?     @map("crc_poliza") @db.JsonB
   error            String?   @map("crc_error") @db.Text
   emitiendoEn      DateTime? @map("crc_emitiendo_en") @db.Timestamp(6)
+  /// PDF «Condicionado y anexos» de la opción mandada a pagar (lo genera el cotizador); va adjunto al correo de la póliza.
+  anexosPdf        Bytes?    @map("crc_anexos_pdf")
+  anexosNombre     String?   @map("crc_anexos_nombre") @db.VarChar(150)
+  anexosOpcion     String?   @map("crc_anexos_opcion") @db.VarChar(4)
+  /// Envío automático de la póliza al tomador: { enviadoEn, a, error, adjuntos }.
+  correoPoliza     Json?     @map("crc_correo_poliza") @db.JsonB
   expiraEn         DateTime  @map("crc_expira_en") @db.Timestamp(6)
   createdAt        DateTime  @default(now()) @map("crc_created_at") @db.Timestamp(6)
   updatedAt        DateTime? @map("crc_updated_at") @db.Timestamp(6)

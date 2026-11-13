@@ -354,6 +354,8 @@ export interface FilaCotizacion {
   pago: unknown;
   poliza: unknown;
   error: string | null;
+  /** Envío automático de la póliza: { enviadoEn, a, error, … }. */
+  correoPoliza: unknown;
   expiraEn: Date;
   createdAt: Date;
   updatedAt: Date | null;
@@ -363,6 +365,179 @@ export const vencida = (
   f: Pick<FilaCotizacion, 'expiraEn'>,
   ahora: Date = new Date(),
 ): boolean => new Date(f.expiraEn).getTime() <= ahora.getTime();
+
+// ─── Correo automático de la póliza ─────────────────────────────────────────
+
+/** Tope de nest-api para los adjuntos de un correo (mail-attachments.ts): 8 MB ya decodificados. */
+export const MAX_ADJUNTOS_BYTES = 8 * 1024 * 1024;
+
+const esPdf = (b: Uint8Array): boolean =>
+  b.length > 4 &&
+  b[0] === 0x25 &&
+  b[1] === 0x50 &&
+  b[2] === 0x44 &&
+  b[3] === 0x46;
+
+const nombrePdf = (v: unknown, porDefecto: string): string => {
+  const n = texto(v, 140).replace(/[^\w.\- ]+/g, '_') || porDefecto;
+  return n.toLowerCase().endsWith('.pdf') ? n : `${n}.pdf`;
+};
+
+/**
+ * PDF «Condicionado y anexos» que el cotizador manda con el checkout ({ nombre, base64 }). null si no viene, no es
+ * un PDF o pasa del tope: el checkout sigue y el correo saldrá solo con la póliza.
+ */
+export function anexosDeCheckout(
+  v: unknown,
+): { nombre: string; pdf: Buffer } | null {
+  if (!esObj(v) || typeof v.base64 !== 'string' || !v.base64) return null;
+  if (v.base64.length > Math.ceil((MAX_ADJUNTOS_BYTES * 4) / 3) + 4)
+    return null;
+  const pdf = Buffer.from(v.base64, 'base64');
+  if (!esPdf(pdf) || pdf.length > MAX_ADJUNTOS_BYTES) return null;
+  return { nombre: nombrePdf(v.nombre, 'Condicionado_y_anexos.pdf'), pdf };
+}
+
+const CORREO_RE = /^[^\s@<>()"',;:]+@[^\s@<>()"',;:]+\.[a-z]{2,}$/i;
+export const correoValido = (v: unknown): boolean => {
+  const t = String(v ?? '').trim();
+  return t.length <= 150 && CORREO_RE.test(t);
+};
+
+export interface AdjuntoPoliza {
+  nombre: string;
+  pdf: Uint8Array;
+}
+
+const NOMBRE_PRODUCTO: Record<string, string> = {
+  rcg: 'Responsabilidad Civil General',
+  rcp: 'Responsabilidad Civil Patronal',
+  rce: 'Responsabilidad Civil Empresarial',
+  rc: 'Responsabilidad Civil',
+};
+
+const importe = (n: number): string =>
+  new Intl.NumberFormat('es-VE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
+
+/**
+ * Adjuntos que caben en el tope del correo. Si el total lo supera, la prioridad es: anexos (no tienen enlace),
+ * póliza (si queda fuera va el botón «Ver mi póliza») y recibo. En el correo van en orden póliza, recibo, anexos.
+ */
+export function adjuntosQueCaben(
+  c: {
+    poliza?: AdjuntoPoliza | null;
+    recibo?: AdjuntoPoliza | null;
+    anexos?: AdjuntoPoliza | null;
+  },
+  max: number = MAX_ADJUNTOS_BYTES,
+): { adjuntos: AdjuntoPoliza[]; sinPdfPoliza: boolean; total: number } {
+  let total = 0;
+  const cabe = (x?: AdjuntoPoliza | null): AdjuntoPoliza | null => {
+    if (!x || total + x.pdf.length > max) return null;
+    total += x.pdf.length;
+    return x;
+  };
+  const anexos = cabe(c.anexos);
+  const poliza = cabe(c.poliza);
+  const recibo = cabe(c.recibo);
+  return {
+    adjuntos: [poliza, recibo, anexos].filter((x): x is AdjuntoPoliza => !!x),
+    sinPdfPoliza: !poliza,
+    total,
+  };
+}
+
+/**
+ * Body de POST /api/v1/mail/send (plantilla `branded`) con la póliza emitida: datos de la póliza, enlace
+ * «Ver mi póliza» y los PDF adjuntos (póliza, recibo cobrado y condicionado con anexos). Mismos textos que el envío del cotizador.
+ */
+export function armarCorreoPoliza(
+  f: Pick<
+    FilaCotizacion,
+    'producto' | 'tomadorNombre' | 'tomadorCorreo' | 'moneda' | 'datos'
+  >,
+  poliza: { cnpoliza: string; cnrecibo?: string; urlpoliza?: string },
+  prima: number | null,
+  adjuntos: AdjuntoPoliza[],
+  conAnexos: boolean,
+): Obj {
+  const to = String(f.tomadorCorreo ?? '')
+    .trim()
+    .toLowerCase();
+  const nombre = texto(f.tomadorNombre, 120);
+  const producto =
+    texto(esObj(f.datos) ? f.datos.nombreProducto : '', 120) ||
+    NOMBRE_PRODUCTO[f.producto] ||
+    'Responsabilidad Civil';
+  const url = /^https?:\/\//i.test(poliza.urlpoliza ?? '')
+    ? String(poliza.urlpoliza)
+    : '';
+  const fields = [
+    { label: 'Póliza', value: poliza.cnpoliza },
+    { label: 'Producto', value: producto },
+    ...(prima && prima > 0
+      ? [
+          {
+            label: 'Prima total',
+            value: `${texto(f.moneda, 8)} ${importe(prima)}`.trim(),
+          },
+        ]
+      : []),
+    ...(poliza.cnrecibo ? [{ label: 'Recibo', value: poliza.cnrecibo }] : []),
+  ].map((x) => ({ label: x.label, value: texto(x.value, 250) }));
+  return {
+    to,
+    ...(nombre ? { toName: nombre } : {}),
+    template: 'branded',
+    data: {
+      subject: `La Mundial de Seguros | Póliza N.º ${poliza.cnpoliza}`,
+      eyebrow: 'Póliza',
+      title: 'Su póliza de La Mundial de Seguros',
+      intro:
+        `${nombre ? `Estimado(a) ${nombre}:` : 'Estimado(a) cliente:'} Le enviamos su póliza N.º ${poliza.cnpoliza} de ${producto}` +
+        (conAnexos
+          ? ' con el condicionado general y particular y los anexos de las coberturas contratadas.'
+          : '.') +
+        ' Ante cualquier duda, puede comunicarse con su asesor de seguros.',
+      ...(url ? { ctaLabel: 'Ver mi póliza', ctaUrl: url } : {}),
+      extraNote: conAnexos
+        ? 'Conserve este correo: el condicionado y los anexos forman parte integrante de su contrato de seguro.'
+        : 'Conserve este correo con los datos de su póliza.',
+    },
+    fields,
+    ...(adjuntos.length
+      ? {
+          attachments: adjuntos.map((a) => ({
+            filename: nombrePdf(a.nombre, 'Documento.pdf'),
+            contentBase64: Buffer.from(a.pdf).toString('base64'),
+            contentType: 'application/pdf',
+          })),
+        }
+      : {}),
+  };
+}
+
+export interface CorreoPolizaPublico {
+  enviadoEn: string | null;
+  a: string | null;
+  error: string | null;
+}
+
+/** Estado del correo que sale por la API (sin el reclamo interno `enviandoEn`); null si aún no se intentó. */
+export function correoPolizaPublico(v: unknown): CorreoPolizaPublico | null {
+  if (!esObj(v) || (!v.enviadoEn && !v.error)) return null;
+  return {
+    enviadoEn: v.enviadoEn ? String(v.enviadoEn) : null,
+    a: v.a ? String(v.a) : null,
+    error: !v.enviadoEn && v.error ? String(v.error) : null,
+  };
+}
+
+export const correoPolizaEnviado = (v: unknown): boolean =>
+  esObj(v) && !!v.enviadoEn;
 
 /** Lo que sale por la API: sin los hashes de los tokens del callback de pago. */
 export function aRespuesta(f: FilaCotizacion, conDatos = true) {
@@ -409,6 +584,7 @@ export function aRespuesta(f: FilaCotizacion, conDatos = true) {
           }
         : null,
     poliza: f.poliza ?? null,
+    correoPoliza: correoPolizaPublico(f.correoPoliza),
     // El detalle del error de emisión es interno; al cliente le basta saber que el pago está y la póliza en proceso.
     error: f.error
       ? 'La póliza está en proceso: el pago quedó registrado y un asesor la completará.'

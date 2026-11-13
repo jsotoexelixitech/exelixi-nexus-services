@@ -26,6 +26,8 @@ vi.mock('./cotizaciones-rc.nest', async (orig) => ({
   tasaBcv: vi.fn(),
   emitir: vi.fn(),
   cobrarRecibo: vi.fn(),
+  descargarPdf: vi.fn(),
+  enviarCorreo: vi.fn(),
 }));
 vi.mock('../flow/flow.service', () => ({
   startCheckoutLink: vi.fn(),
@@ -42,8 +44,12 @@ import * as repo from './cotizaciones-rc.repo';
 import * as nest from './cotizaciones-rc.nest';
 import { startCheckoutLink } from '../flow/flow.service';
 import {
+  MAX_ADJUNTOS_BYTES,
+  adjuntosQueCaben,
   alternativaDe,
+  anexosDeCheckout,
   aRespuesta,
+  armarCorreoPoliza,
   emisionDeOpcion,
   evaluarRegistros,
   generarCodigo,
@@ -108,6 +114,7 @@ const fila = (x: Partial<FilaCotizacion> = {}): FilaCotizacion => ({
   pago: null,
   poliza: null,
   error: null,
+  correoPoliza: null,
   expiraEn: new Date(Date.now() + 86_400_000),
   createdAt: new Date(),
   updatedAt: null,
@@ -563,5 +570,320 @@ describe('cotizaciones-rc · rutas', () => {
       estado: 'emitida',
       vigencia: 'todas',
     });
+  });
+});
+
+describe('cotizaciones-rc · correo automático de la póliza', () => {
+  const PDF = Buffer.from('%PDF-1.7 anexos');
+  const POLIZA_PDF = new Uint8Array(Buffer.from('%PDF-1.7 poliza'));
+  const pagado = {
+    referencia: '219551279300',
+    monto: 18000,
+    fecha: '2026-11-13',
+    opcion: 'II',
+    detalle: {},
+  };
+  const emitida = (x: Partial<FilaCotizacion> = {}) =>
+    fila({
+      estado: 'emitida',
+      opcion: 'II',
+      pago: { intentos: [intento], pagado },
+      poliza: {
+        cnpoliza: '28-1-1100018992',
+        cnrecibo: '900',
+        urlpoliza: 'https://sis.test/p.pdf',
+        cobro: { ok: true },
+      },
+      ...x,
+    });
+
+  it('acepta solo un PDF dentro del tope como anexos del checkout', () => {
+    expect(
+      anexosDeCheckout({
+        nombre: 'Condicionado y anexos <RCG>',
+        base64: PDF.toString('base64'),
+      }),
+    ).toEqual({ nombre: 'Condicionado y anexos _RCG_.pdf', pdf: PDF });
+    expect(anexosDeCheckout(undefined)).toBeNull();
+    expect(
+      anexosDeCheckout({ base64: Buffer.from('<html>').toString('base64') }),
+    ).toBeNull();
+    expect(
+      anexosDeCheckout({ base64: 'A'.repeat(MAX_ADJUNTOS_BYTES * 2) }),
+    ).toBeNull();
+  });
+
+  it('si los adjuntos pasan del tope sale sin el PDF de la póliza (queda el enlace)', () => {
+    const poliza = { nombre: 'Poliza.pdf', pdf: new Uint8Array(6) };
+    const recibo = { nombre: 'Recibo.pdf', pdf: new Uint8Array(2) };
+    const anexos = { nombre: 'Anexos.pdf', pdf: new Uint8Array(6) };
+    expect(adjuntosQueCaben({ poliza, recibo, anexos }, 14)).toEqual({
+      adjuntos: [poliza, recibo, anexos],
+      sinPdfPoliza: false,
+      total: 14,
+    });
+    // Prioridad: anexos, póliza y recibo.
+    expect(adjuntosQueCaben({ poliza, recibo, anexos }, 12)).toMatchObject({
+      adjuntos: [poliza, anexos],
+      sinPdfPoliza: false,
+    });
+    expect(adjuntosQueCaben({ poliza, recibo, anexos }, 10)).toMatchObject({
+      adjuntos: [recibo, anexos],
+      sinPdfPoliza: true,
+    });
+    expect(adjuntosQueCaben({ poliza }, 10)).toMatchObject({
+      adjuntos: [poliza],
+      sinPdfPoliza: false,
+    });
+    expect(adjuntosQueCaben({}, 10)).toEqual({
+      adjuntos: [],
+      sinPdfPoliza: true,
+      total: 0,
+    });
+  });
+
+  it('arma el correo branded con el botón «Ver mi póliza» y los adjuntos, sin el enlace como dato suelto', () => {
+    const body = armarCorreoPoliza(
+      fila({ datos: { ...datos, nombreProducto: 'RC General' } }),
+      {
+        cnpoliza: '28-1-1',
+        cnrecibo: '900',
+        urlpoliza: 'https://sis.test/p.pdf',
+      },
+      180,
+      [{ nombre: 'Poliza_28-1-1.pdf', pdf: POLIZA_PDF }],
+      false,
+    ) as {
+      to: string;
+      template: string;
+      data: Record<string, string>;
+      fields: { label: string; value: string }[];
+      attachments: { filename: string; contentBase64: string }[];
+    };
+    expect(body.to).toBe('a@acme.com');
+    expect(body.template).toBe('branded');
+    expect(body.data).toMatchObject({
+      subject: 'La Mundial de Seguros | Póliza N.º 28-1-1',
+      ctaLabel: 'Ver mi póliza',
+      ctaUrl: 'https://sis.test/p.pdf',
+    });
+    expect(body.fields.map((f) => f.label)).toEqual([
+      'Póliza',
+      'Producto',
+      'Prima total',
+      'Recibo',
+    ]);
+    expect(body.fields[1].value).toBe('RC General');
+    expect(JSON.stringify(body.fields)).not.toContain('sis.test');
+    expect(body.attachments).toEqual([
+      {
+        filename: 'Poliza_28-1-1.pdf',
+        contentBase64: Buffer.from(POLIZA_PDF).toString('base64'),
+        contentType: 'application/pdf',
+      },
+    ]);
+  });
+
+  it('el checkout guarda el PDF de anexos de la opción; uno inválido no frena el pago', async () => {
+    vi.mocked(repo.porCodigo).mockResolvedValue(fila());
+    vi.mocked(nest.tasaBcv).mockResolvedValue(100);
+    vi.mocked(startCheckoutLink).mockResolvedValue({
+      sid: '9',
+      checkoutUrl: 'https://pagos.test/?sid=9',
+    } as never);
+    vi.mocked(repo.guardarCheckout).mockResolvedValue(true);
+    vi.mocked(repo.guardarAnexos).mockResolvedValue();
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/checkout`)
+      .set(KEY)
+      .send({
+        opcion: 'II',
+        anexos: { nombre: 'Anexos.pdf', base64: PDF.toString('base64') },
+      });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(repo.guardarAnexos).mock.calls[0]).toEqual([
+      CODIGO,
+      'II',
+      'Anexos.pdf',
+      PDF,
+    ]);
+
+    vi.mocked(repo.guardarAnexos).mockClear();
+    const sinPdf = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/checkout`)
+      .set(KEY)
+      .send({ opcion: 'II', anexos: { base64: 'bm8gZXMgcGRm' } });
+    expect(sinPdf.status).toBe(200);
+    expect(repo.guardarAnexos).not.toHaveBeenCalled();
+  });
+
+  it('el checkout acepta un cuerpo de varios MB (anexos en base64) solo con la API key', async () => {
+    vi.mocked(repo.porCodigo).mockResolvedValue(fila());
+    vi.mocked(nest.tasaBcv).mockResolvedValue(100);
+    vi.mocked(startCheckoutLink).mockResolvedValue({
+      sid: '9',
+      checkoutUrl: 'https://pagos.test/?sid=9',
+    } as never);
+    vi.mocked(repo.guardarCheckout).mockResolvedValue(true);
+    vi.mocked(repo.guardarAnexos).mockResolvedValue();
+    const grande = Buffer.concat([PDF, Buffer.alloc(3 * 1024 * 1024, 32)]);
+    const cuerpo = {
+      opcion: 'II',
+      anexos: { nombre: 'Anexos.pdf', base64: grande.toString('base64') },
+    };
+    // Sin la key no se llega a leer el cuerpo.
+    const sinKey = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/checkout`)
+      .send({ opcion: 'II' });
+    expect(sinKey.status).toBe(403);
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/checkout`)
+      .set(KEY)
+      .send(cuerpo);
+    expect(res.status).toBe(200);
+    expect(vi.mocked(repo.guardarAnexos).mock.calls[0][3]).toHaveLength(
+      grande.length,
+    );
+  });
+
+  it('al emitir la pagada envía una vez el correo con la póliza y los anexos y deja el envío registrado', async () => {
+    const pagada = fila({
+      estado: 'pagada',
+      pago: { intentos: [intento], pagado },
+    });
+    vi.mocked(repo.porCodigo)
+      .mockResolvedValueOnce(pagada) // reintentar → obtener
+      .mockResolvedValueOnce(pagada) // emitirPagada
+      .mockResolvedValue(
+        emitida({
+          poliza: {
+            cnpoliza: '28-1-1100018992',
+            cnrecibo: '900',
+            urlpoliza: 'https://sis.test/p.pdf',
+            cobro: {
+              ok: true,
+              ingresoCaja: 'https://sis.test/ingreso_caja/1/',
+            },
+          },
+        }),
+      );
+    vi.mocked(repo.reclamarEmision).mockResolvedValue(true);
+    vi.mocked(nest.emitir).mockResolvedValue({
+      cnpoliza: '28-1-1100018992',
+      cnrecibo: '900',
+      urlpoliza: 'https://sis.test/p.pdf',
+    });
+    vi.mocked(nest.cobrarRecibo).mockResolvedValue({
+      ingresoCaja: 'https://sis.test/ingreso_caja/1/',
+      transaccion: 1,
+    });
+    vi.mocked(repo.reclamarCorreoPoliza).mockResolvedValue(true);
+    vi.mocked(repo.anexosDe).mockResolvedValue({
+      nombre: 'Condicionado_y_anexos.pdf',
+      pdf: PDF,
+    });
+    vi.mocked(nest.descargarPdf).mockResolvedValue(POLIZA_PDF);
+    vi.mocked(nest.enviarCorreo).mockResolvedValue({ sent: true });
+
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/reintentar`)
+      .set(KEY);
+    expect(res.status).toBe(200);
+    expect(vi.mocked(repo.anexosDe).mock.calls[0]).toEqual([CODIGO, 'II']);
+    expect(nest.enviarCorreo).toHaveBeenCalledTimes(1);
+    const body = vi.mocked(nest.enviarCorreo).mock.calls[0][0] as {
+      to: string;
+      attachments: { filename: string }[];
+    };
+    expect(body.to).toBe('a@acme.com');
+    expect(vi.mocked(nest.descargarPdf).mock.calls.map((c) => c[0])).toEqual([
+      'https://sis.test/p.pdf',
+      'https://sis.test/ingreso_caja/1/',
+    ]);
+    expect(body.attachments.map((x) => x.filename)).toEqual([
+      'Poliza_28-1-1100018992.pdf',
+      'Recibo_900.pdf',
+      'Condicionado_y_anexos.pdf',
+    ]);
+    expect(vi.mocked(repo.guardarCorreoPoliza).mock.calls[0][1]).toMatchObject({
+      a: 'a@acme.com',
+      enviadoEn: expect.any(String),
+      adjuntos: [
+        'Poliza_28-1-1100018992.pdf',
+        'Recibo_900.pdf',
+        'Condicionado_y_anexos.pdf',
+      ],
+    });
+  });
+
+  it('si el correo falla la póliza sigue emitida y el error queda registrado; sin PDF de póliza va solo el enlace', async () => {
+    vi.mocked(repo.porCodigo).mockResolvedValue(emitida());
+    vi.mocked(repo.reclamarCorreoPoliza).mockResolvedValue(true);
+    vi.mocked(repo.anexosDe).mockResolvedValue(null);
+    vi.mocked(nest.descargarPdf).mockResolvedValue(null);
+    vi.mocked(nest.enviarCorreo).mockResolvedValue({
+      sent: false,
+      error: 'SMTP caído',
+    });
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/reintentar`)
+      .set(KEY);
+    expect(res.status).toBe(200);
+    expect(res.body.data.estado).toBe('emitida');
+    const body = vi.mocked(nest.enviarCorreo).mock.calls[0][0] as {
+      attachments?: unknown;
+      data: { ctaUrl: string };
+    };
+    expect(body.attachments).toBeUndefined();
+    expect(body.data.ctaUrl).toBe('https://sis.test/p.pdf');
+    expect(vi.mocked(repo.guardarCorreoPoliza).mock.calls[0][1]).toMatchObject({
+      error: 'SMTP caído',
+      a: 'a@acme.com',
+    });
+    expect(repo.guardarError).not.toHaveBeenCalled();
+    expect(repo.guardarPoliza).not.toHaveBeenCalled();
+  });
+
+  it('no reenvía un correo ya enviado ni uno que otro proceso está enviando, y lo expone sin el reclamo interno', async () => {
+    const enviada = emitida({
+      correoPoliza: {
+        enviadoEn: '2026-11-13T15:00:00.000Z',
+        a: 'a@acme.com',
+        enviandoEn: '2026-11-13T14:59:00.000Z',
+      },
+    });
+    vi.mocked(repo.porCodigo).mockResolvedValue(enviada);
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/reintentar`)
+      .set(KEY);
+    expect(res.status).toBe(409);
+    expect(repo.reclamarCorreoPoliza).not.toHaveBeenCalled();
+    expect(aRespuesta(enviada).correoPoliza).toEqual({
+      enviadoEn: '2026-11-13T15:00:00.000Z',
+      a: 'a@acme.com',
+      error: null,
+    });
+    expect(
+      aRespuesta(emitida({ correoPoliza: { enviandoEn: 'x' } })).correoPoliza,
+    ).toBeNull();
+
+    // Reclamo perdido (otro envío en curso): no se manda nada.
+    vi.mocked(repo.porCodigo).mockResolvedValue(emitida());
+    vi.mocked(repo.reclamarCorreoPoliza).mockResolvedValue(false);
+    await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/reintentar`)
+      .set(KEY);
+    expect(nest.enviarCorreo).not.toHaveBeenCalled();
+  });
+
+  it('una emisión del canal sin pago no manda correo automático', async () => {
+    vi.mocked(repo.porCodigo).mockResolvedValue(
+      emitida({ pago: null, correoPoliza: null }),
+    );
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/reintentar`)
+      .set(KEY);
+    expect(res.status).toBe(409);
+    expect(nest.enviarCorreo).not.toHaveBeenCalled();
   });
 });

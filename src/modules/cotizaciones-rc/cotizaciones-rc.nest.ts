@@ -4,6 +4,8 @@
  * La key de Nexus (NEST_API_KEY) necesita emissions:riesgos-generales, emissions:riesgos-generales-prima y
  * collection:write.
  */
+import { nestMailAccepted } from '../funeral-submission/nest-mail-result';
+
 type Obj = Record<string, unknown>;
 const esObj = (v: unknown): v is Obj =>
   !!v && typeof v === 'object' && !Array.isArray(v);
@@ -102,4 +104,63 @@ export async function cobrarRecibo(
     ingresoCaja: d.ingresoCaja ? String(d.ingresoCaja) : null,
     transaccion: cobro.transaccion ?? null,
   };
+}
+
+/**
+ * PDF de la póliza desde su enlace (Sis2000), del lado servidor. null si no responde a tiempo, no es un PDF o pesa
+ * más de `maxBytes`: el correo sale igual, con el enlace. El tiempo límite cubre también la lectura del cuerpo.
+ */
+export async function descargarPdf(
+  url: string,
+  maxBytes: number,
+  timeoutMs = 25_000,
+): Promise<Uint8Array | null> {
+  if (!/^https?:\/\//i.test(url)) return null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return null;
+    if (Number(res.headers.get('content-length') ?? 0) > maxBytes) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const b = new Uint8Array(await res.arrayBuffer());
+    const pdf =
+      b.length > 4 &&
+      b[0] === 0x25 &&
+      b[1] === 0x50 &&
+      b[2] === 0x44 &&
+      b[3] === 0x46;
+    return pdf && b.length <= maxBytes ? b : null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST /api/v1/mail/send de nest-api (la key de Nexus ya lo usa en el monitor de expedientes). Nunca lanza. */
+export async function enviarCorreo(
+  body: Obj,
+  timeoutMs = 90_000,
+): Promise<{ sent: boolean; error?: string }> {
+  if (!key()) return { sent: false, error: 'NEST_API_KEY no configurada' };
+  try {
+    const res = await fetch(`${base()}/api/v1/mail/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        apikey: key(),
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return nestMailAccepted(res, await res.json().catch(() => ({})));
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    return {
+      sent: false,
+      error: /abort|timeout/i.test(error)
+        ? `nest-api no respondió en ${Math.round(timeoutMs / 1000)} s`
+        : error,
+    };
+  }
 }
