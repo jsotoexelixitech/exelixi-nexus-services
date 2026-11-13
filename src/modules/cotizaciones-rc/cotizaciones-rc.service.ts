@@ -495,6 +495,19 @@ async function cobrar(
 ): Promise<Obj> {
   if (!poliza.cnrecibo)
     return { ok: false, error: 'La emisión no devolvió número de recibo.' };
+  // Una misma referencia de pago móvil no se cobra dos veces de forma automática: la cobranza lo rechaza como
+  // «pago ya validado» y ese control no se esquiva. El segundo recibo queda pendiente para caja.
+  if (x.adicional) {
+    logger.warn(
+      `[cotizaciones-rc] ${codigo}: recibo ${poliza.cnrecibo} pendiente para caja (referencia ${pago.referencia} ya aplicada al primer recibo)`,
+    );
+    return {
+      ok: false,
+      pendiente: true,
+      ...(x.mpago != null ? { mpago: x.mpago } : {}),
+      error: `Pendiente de cobro en caja: el pago (referencia ${pago.referencia}) cubre las dos pólizas y ya se aplicó al primer recibo.`,
+    };
+  }
   try {
     const c = await nest.cobrarRecibo(armarCobro(poliza.cnrecibo, pago, x));
     logger.info(
