@@ -503,3 +503,165 @@ describe('empresa de la config', () => {
     expect((await request(app).get(URL)).status).toBe(500);
   });
 });
+
+describe('OCR opcional por productor (ocrOpcional.productores)', () => {
+  const BASE = { producto: 'rcv', canales: ['1', '99'], base: ['1', '99'] };
+
+  it('config anterior sin la clave: ningún productor opcional', async () => {
+    const r = await request(app).get(`${URL}?producto=rcv`).set(ADMIN);
+    expect(r.status).toBe(200);
+    expect(r.body.data.productores).toEqual([]);
+    expect(r.body.data.productoresOpcionales).toEqual([]);
+  });
+
+  it('agrega productores por código + nombre sin tocar canales, gestores ni el resto', async () => {
+    const r = await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({
+        ...BASE,
+        productores: ['1234', 555],
+        productoresNombres: { '1234': ' Productor Uno ' },
+        baseProductores: [],
+        motivo: 'Productores piloto sin OCR',
+      });
+    expect(r.status).toBe(200);
+    expect(r.body.data.opcionales).toEqual(['1', '99']);
+    expect(r.body.data.productoresOpcionales).toEqual(['1234', '555']);
+    expect(r.body.data.productores).toEqual([
+      { codigo: '1234', nombre: 'Productor Uno', ocrOpcional: true },
+      { codigo: '555', nombre: null, ocrOpcional: true },
+    ]);
+
+    const esperado: any = configRcv();
+    esperado.ocrOpcional.canales = ['1', '99'];
+    esperado.ocrOpcional.productores = ['1234', '555'];
+    esperado.ocrOpcional.productoresNombres = { '1234': 'Productor Uno' };
+    expect(fila(7, 'rcv').configJson).toEqual(esperado);
+
+    // Lo que lee el OCR en tiempo de ejecución.
+    const runtime = (await getConfig(7, 'rcv', 'ocr')) as any;
+    expect(runtime.ocrOpcional.productores).toEqual(['1234', '555']);
+    expect(runtime.ocrOpcional.gestores).toEqual(['215-28', '80080-1159-3002']);
+
+    const [ev] = eventos();
+    expect(ev.detalle).toMatchObject({
+      agregados: [],
+      quitados: [],
+      productoresAnterior: [],
+      productoresNuevo: ['1234', '555'],
+      productoresAgregados: ['1234', '555'],
+      productoresQuitados: [],
+    });
+    expect(r.body.data.cambios[0]).toMatchObject({
+      productoresAgregados: ['1234', '555'],
+      productoresQuitados: [],
+    });
+
+    // Otras filas intactas.
+    expect(fila(7, 'funerario').configJson).toEqual({
+      ocrOpcional: { gestores: [], canales: ['2'] },
+    });
+  });
+
+  it('quita un productor (vuelve a obligatorio) y conserva el nombre de los que siguen', async () => {
+    await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({
+        ...BASE,
+        productores: ['1234', '555'],
+        productoresNombres: { '1234': 'Productor Uno', '555': 'Productor Dos' },
+        motivo: 'Alta de productores',
+      });
+    const r = await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({
+        ...BASE,
+        productores: ['555'],
+        baseProductores: ['555', '1234'],
+        motivo: 'El 1234 vuelve a OCR obligatorio',
+      });
+    expect(r.status).toBe(200);
+    expect(r.body.data.productores).toEqual([
+      { codigo: '555', nombre: 'Productor Dos', ocrOpcional: true },
+    ]);
+    const oc = fila(7, 'rcv').configJson.ocrOpcional;
+    expect(oc.productores).toEqual(['555']);
+    expect(oc.productoresNombres).toEqual({ '555': 'Productor Dos' });
+    expect(oc.gestores).toEqual(['215-28', '80080-1159-3002']);
+    expect(oc.nota).toBe('clave futura del panel');
+    expect(eventos()[1].detalle).toMatchObject({
+      productoresAgregados: [],
+      productoresQuitados: ['1234'],
+    });
+  });
+
+  it('un guardado que no manda productores (cliente anterior) no los toca', async () => {
+    await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({ ...BASE, productores: ['1234'], motivo: 'Alta de productor' });
+    const r = await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({
+        producto: 'rcv',
+        canales: ['1', '99', '2'],
+        base: ['1', '99'],
+        motivo: 'Canal 2 sin OCR',
+      });
+    expect(r.status).toBe(200);
+    expect(r.body.data.productoresOpcionales).toEqual(['1234']);
+    const oc = fila(7, 'rcv').configJson.ocrOpcional;
+    expect(oc.canales).toEqual(['1', '99', '2']);
+    expect(oc.productores).toEqual(['1234']);
+  });
+
+  it('409 si los productores cambiaron desde que se cargó la pantalla', async () => {
+    await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({ ...BASE, productores: ['1234'], motivo: 'Alta de productor' });
+    const r = await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({
+        ...BASE,
+        productores: ['777'],
+        baseProductores: [],
+        motivo: 'Pantalla vieja',
+      });
+    expect(r.status).toBe(409);
+    expect(fila(7, 'rcv').configJson.ocrOpcional.productores).toEqual(['1234']);
+  });
+
+  it('sin cambios no escribe ni registra evento; código inválido: 400', async () => {
+    const igual = await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({ ...BASE, productores: [], motivo: 'Nada que cambiar' });
+    expect(igual.status).toBe(200);
+    expect(igual.body.data.sinCambios).toBe(true);
+    expect(eventos()).toHaveLength(0);
+    expect(fila(7, 'rcv').configJson).toEqual(configRcv());
+
+    const malo = await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({ ...BASE, productores: ['12 34;'], motivo: 'Código raro' });
+    expect(malo.status).toBe(400);
+    expect(eventos()).toHaveLength(0);
+  });
+
+  it('solo lectura sin EXPEDIENTES_OCR_CANAL_ESCRITURA: 403 y no guarda', async () => {
+    delete process.env.EXPEDIENTES_OCR_CANAL_ESCRITURA;
+    const r = await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({ ...BASE, productores: ['1234'], motivo: 'Sin permiso' });
+    expect(r.status).toBe(403);
+    expect(fila(7, 'rcv').configJson).toEqual(configRcv());
+  });
+});
