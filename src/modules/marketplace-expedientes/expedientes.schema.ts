@@ -210,6 +210,16 @@ const codigoCanal = z
   .transform((v) => String(v).trim())
   .pipe(z.string().min(1).max(64));
 
+/** cproductor como llega en el SSO (centidad P + citem): texto corto sin espacios. */
+const codigoProductor = z
+  .union([z.string(), z.number()])
+  .transform((v) => String(v).trim())
+  .pipe(
+    z
+      .string()
+      .regex(/^[A-Za-z0-9._-]{1,32}$/, 'Código de productor no válido'),
+  );
+
 export const ocrPorCanalQuerySchema = z.object({
   producto: z.enum(PRODUCTOS_OCR).default('rcv'),
 });
@@ -230,6 +240,17 @@ export const ocrPorCanalUpdateSchema = z.object({
   canales: z.array(codigoCanal).max(2000),
   /** Canales opcionales que la pantalla cargó: si ya no coinciden, otro guardó antes (409). */
   base: z.array(codigoCanal).max(2000).optional(),
+  /**
+   * Lista completa de productores (cproductor) con OCR OPCIONAL. Ausente = no se tocan
+   * (clientes anteriores solo mandan canales).
+   */
+  productores: z.array(codigoProductor).max(2000).optional(),
+  /** cproductor → nombre para mostrar (no hay catálogo: se agregan por código + nombre). */
+  productoresNombres: z
+    .record(z.string().max(32), z.string().trim().max(120))
+    .optional(),
+  /** Productores opcionales que la pantalla cargó: si ya no coinciden, 409. */
+  baseProductores: z.array(codigoProductor).max(2000).optional(),
   motivo: str(500).min(3, 'El motivo es obligatorio'),
 });
 
