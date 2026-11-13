@@ -287,6 +287,24 @@ export function armarPolizaGuardada(
 export const polizaParcial = (poliza: unknown): boolean =>
   esObj(poliza) && poliza.parcial === true;
 
+/** Cobro de una póliza emitida por el canal sin pago: el recibo queda pendiente de cobro en Sis2000. */
+export const COBRO_CANAL = {
+  ok: false,
+  pendiente: true,
+  error: 'Emitida por el canal: recibo pendiente de cobro.',
+} as const;
+
+/**
+ * Emisión sin pago hecha por el canal desde la cotización guardada (crc_pago.canal): la opción que se emite. Mientras
+ * exista, la cotización no admite pago en línea.
+ */
+export function canalDe(pago: unknown): { opcion: Opcion } | null {
+  const c = esObj(pago) && esObj(pago.canal) ? pago.canal : null;
+  return c && OPCIONES.includes(c.opcion as Opcion)
+    ? { opcion: c.opcion as Opcion }
+    : null;
+}
+
 export const reciboCobrado = (p: Pick<PolizaCotizacion, 'cobro'>): boolean =>
   esObj(p.cobro) && p.cobro.ok === true;
 
@@ -788,6 +806,7 @@ export function aRespuesta(f: FilaCotizacion, conDatos = true) {
   const pago = esObj(f.pago) ? f.pago : null;
   const ultimo = intentosDe(pago).slice(-1)[0];
   const pagado = pago && esObj(pago.pagado) ? pago.pagado : null;
+  const canal = canalDe(pago);
   return {
     codigo: f.codigo,
     producto: f.producto,
@@ -827,11 +846,15 @@ export function aRespuesta(f: FilaCotizacion, conDatos = true) {
               : {}),
           }
         : null,
+    // Emisión sin pago por el canal (en curso, a medias o terminada): la cotización ya no se paga en línea.
+    canal,
     poliza: f.poliza ?? null,
     correoPoliza: correoPolizaPublico(f.correoPoliza),
     // El detalle del error de emisión es interno; al cliente le basta saber que el pago está y la póliza en proceso.
     error: f.error
-      ? 'La póliza está en proceso: el pago quedó registrado y un asesor la completará.'
+      ? canal && !pagado
+        ? 'La emisión de la póliza no se completó: tu asesor de seguros la terminará.'
+        : 'La póliza está en proceso: el pago quedó registrado y un asesor la completará.'
       : null,
   };
 }

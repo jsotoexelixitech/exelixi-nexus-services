@@ -110,7 +110,7 @@ export async function marcarPagada(
     SET crc_estado = 'pagada', crc_opcion = ${opcion},
         crc_pago = COALESCE(crc_pago, '{}'::jsonb) || jsonb_build_object('pagado', ${json(pagado)}::jsonb),
         crc_updated_at = CURRENT_TIMESTAMP
-    WHERE crc_codigo = ${codigo} AND crc_estado = 'pendiente_pago'`;
+    WHERE crc_codigo = ${codigo} AND crc_estado = 'pendiente_pago' AND (crc_pago -> 'canal') IS NULL`;
   return n > 0;
 }
 
@@ -183,6 +183,47 @@ export async function marcarEmitidaPendiente(
         crc_updated_at = CURRENT_TIMESTAMP
     WHERE crc_codigo = ${codigo} AND crc_estado IN ('cotizada', 'pendiente_pago')`;
   return n > 0;
+}
+
+/**
+ * Reclamo atómico de la emisión sin pago del canal («emitir como pendiente»): solo una cotización sin pago
+ * confirmado, vigente y sin póliza, o con la emisión del canal a medias de esa misma opción. Deja la marca
+ * crc_pago.canal (cierra el pago en línea) y se libera solo a los 5 minutos.
+ */
+export async function reclamarEmisionCanal(
+  codigo: string,
+  opcion: string,
+  ahoraIso: string,
+): Promise<boolean> {
+  const n = await prisma.$executeRaw`
+    UPDATE cotizacion_rc
+    SET crc_emitiendo_en = CURRENT_TIMESTAMP, crc_opcion = ${opcion}, crc_error = NULL,
+        crc_pago = (CASE WHEN jsonb_typeof(crc_pago) = 'object' THEN crc_pago ELSE '{}'::jsonb END)
+          || jsonb_build_object('canal', jsonb_build_object('opcion', ${opcion}::text, 'reclamadoEn', ${ahoraIso}::text)),
+        crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo} AND crc_estado IN ('cotizada', 'pendiente_pago')
+      AND (crc_pago -> 'pagado') IS NULL
+      AND ((crc_poliza IS NULL AND crc_expira_en > CURRENT_TIMESTAMP)
+           OR (crc_poliza ->> 'parcial' = 'true' AND crc_pago -> 'canal' ->> 'opcion' = ${opcion}::text))
+      AND (crc_emitiendo_en IS NULL OR crc_emitiendo_en < CURRENT_TIMESTAMP - interval '5 minutes')`;
+  return n > 0;
+}
+
+/** Pólizas ya emitidas por el canal de una cotización que aún no las tiene todas (RCP + RCE). */
+export async function guardarPolizaParcialCanal(
+  codigo: string,
+  poliza: unknown,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE cotizacion_rc SET crc_poliza = ${json(poliza)}::jsonb, crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo} AND crc_estado IN ('cotizada', 'pendiente_pago') AND (crc_pago -> 'canal') IS NOT NULL`;
+}
+
+/** La emisión del canal falló sin emitir ninguna póliza: se quita la marca y la cotización vuelve a admitir pago. */
+export async function liberarCanal(codigo: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE cotizacion_rc SET crc_pago = crc_pago - 'canal', crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo} AND crc_estado IN ('cotizada', 'pendiente_pago') AND crc_poliza IS NULL`;
 }
 
 /** Pagos verificados por pagos-api (misma BD exelixi_nexus, esquema pagos). */

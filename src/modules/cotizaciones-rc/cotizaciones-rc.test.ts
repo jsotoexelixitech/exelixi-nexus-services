@@ -1004,7 +1004,11 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
     });
     const segundo = armarCobro('R', pago, { mpago: 10000, adicional: true });
     // Sin atajo: el body conserva el teléfono del pagador (el segundo recibo no se cobra automáticamente).
-    expect(segundo).toMatchObject({ mpago: 10000, cbanco_ref: '0134', xtelefono: '58414' });
+    expect(segundo).toMatchObject({
+      mpago: 10000,
+      cbanco_ref: '0134',
+      xtelefono: '58414',
+    });
   });
 
   it('manda a pagar el total con una línea por póliza; en EUR no hay pago en línea', async () => {
@@ -1237,7 +1241,240 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
     expect(nest.cobrarRecibo).not.toHaveBeenCalled();
     expect(vi.mocked(repo.guardarPoliza).mock.calls[0][1]).toMatchObject({
       cnpoliza: '27-1-1',
-      polizas: [{ cobro: { ok: true } }, { cobro: { ok: false, pendiente: true, mpago: 10000 } }],
+      polizas: [
+        { cobro: { ok: true } },
+        { cobro: { ok: false, pendiente: true, mpago: 10000 } },
+      ],
+    });
+  });
+
+  describe('emitir como pendiente (canal, sin pago)', () => {
+    const ADMIN = { ...KEY, 'x-cotizador-origen': 'admin' };
+    const PENDIENTE = {
+      ok: false,
+      pendiente: true,
+      error: 'Emitida por el canal: recibo pendiente de cobro.',
+    };
+    const P28 = {
+      cnpoliza: '28-1-1100018992',
+      cnrecibo: '900',
+      urlpoliza: 'https://sis.test/p28.pdf',
+    };
+    const emitirPendiente = (
+      codigo: string,
+      opcion: string,
+      h: Record<string, string> = ADMIN,
+    ) =>
+      request(app)
+        .post(`/api/cotizaciones-rc/${codigo}/emitir-pendiente`)
+        .set(h)
+        .send({ opcion });
+    /** La cotización como la deja el reclamo del canal y, tras guardarPoliza, emitida. */
+    const conCanal = (base: FilaCotizacion, opcion: string) => {
+      vi.mocked(repo.reclamarEmisionCanal).mockResolvedValue(true);
+      vi.mocked(repo.porCodigo).mockImplementation(async () => {
+        const guardada = vi.mocked(repo.guardarPoliza).mock.calls[0]?.[1];
+        return {
+          ...base,
+          opcion,
+          pago: { ...(base.pago as object), canal: { opcion } },
+          ...(guardada ? { estado: 'emitida', poliza: guardada } : {}),
+        };
+      });
+    };
+
+    it('solo el canal: sin la marca de admin del proxy (o por el link del cliente) no emite', async () => {
+      vi.mocked(repo.porCodigo).mockResolvedValue(fila());
+      for (const h of [KEY, { ...KEY, 'x-cotizador-origen': 'cliente' }]) {
+        expect((await emitirPendiente(CODIGO, 'II', h)).status).toBe(403);
+      }
+      expect(
+        (
+          await request(app)
+            .post(`/api/cotizaciones-rc/${CODIGO}/emitir-pendiente`)
+            .set({ 'x-cotizador-origen': 'admin' })
+            .send({ opcion: 'II' })
+        ).status,
+      ).toBe(403);
+      expect(repo.reclamarEmisionCanal).not.toHaveBeenCalled();
+      expect(nest.emitir).not.toHaveBeenCalled();
+    });
+
+    it('RCG: emite la opción sin cobrar, queda emitida con el recibo pendiente y manda la póliza sin recibo', async () => {
+      conCanal(
+        fila({ estado: 'pendiente_pago', pago: { intentos: [intento] } }),
+        'II',
+      );
+      vi.mocked(nest.emitir).mockResolvedValue(P28);
+      vi.mocked(repo.reclamarCorreoPoliza).mockResolvedValue(true);
+      vi.mocked(repo.anexosDe).mockResolvedValue(null);
+      vi.mocked(nest.descargarPdf).mockResolvedValue(
+        new Uint8Array(Buffer.from('%PDF-1.7 poliza')),
+      );
+      vi.mocked(nest.enviarCorreo).mockResolvedValue({ sent: true });
+
+      const res = await emitirPendiente(CODIGO, 'II');
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        estado: 'emitida',
+        canal: { opcion: 'II' },
+        poliza: { cnpoliza: P28.cnpoliza, cobro: PENDIENTE },
+      });
+      expect(
+        vi.mocked(repo.reclamarEmisionCanal).mock.calls[0].slice(0, 2),
+      ).toEqual([CODIGO, 'II']);
+      // Mismo body de emisión que la pagada: el de la opción, con el código de la cotización.
+      expect(vi.mocked(nest.emitir).mock.calls[0][0]).toMatchObject({
+        modo: 'cotizador',
+        cramo: 28,
+        prima_total: 180,
+        ncotizacion: CODIGO,
+      });
+      expect(nest.cobrarRecibo).not.toHaveBeenCalled();
+      expect(repo.marcarPagada).not.toHaveBeenCalled();
+      expect(vi.mocked(repo.guardarPoliza).mock.calls[0]).toEqual([
+        CODIGO,
+        expect.objectContaining({ ...P28, cobro: PENDIENTE }),
+      ]);
+
+      await espera();
+      // Correo automático: solo la póliza (el recibo no está cobrado).
+      expect(nest.enviarCorreo).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(nest.descargarPdf).mock.calls.map((c) => c[0])).toEqual([
+        P28.urlpoliza,
+      ]);
+      const correo: any = vi.mocked(nest.enviarCorreo).mock.calls[0][0];
+      expect(correo.attachments.map((a: any) => a.filename)).toEqual([
+        `Poliza_${P28.cnpoliza}.pdf`,
+      ]);
+    });
+
+    it('RCP + RCE: emite las dos pólizas y ninguna se cobra', async () => {
+      conCanal(filaRc(), 'I');
+      emiteSegunRamo();
+      const res = await emitirPendiente(CODIGO_RC, 'I');
+      expect(res.status).toBe(200);
+      expect(vi.mocked(nest.emitir).mock.calls.map((c) => c[0].cramo)).toEqual([
+        27, 37,
+      ]);
+      expect(nest.cobrarRecibo).not.toHaveBeenCalled();
+      expect(vi.mocked(repo.guardarPoliza).mock.calls[0][1]).toEqual({
+        ...armarPolizaGuardada([
+          {
+            cramo: 27,
+            cotizador: 'rcp',
+            prima: 200,
+            ...P27,
+            emitidaEn: expect.any(String),
+            cobro: PENDIENTE,
+          },
+          {
+            cramo: 37,
+            cotizador: 'rce',
+            prima: 100,
+            ...P37,
+            emitidaEn: expect.any(String),
+            cobro: PENDIENTE,
+          },
+        ]),
+      });
+      expect(res.body.data.poliza.polizas).toHaveLength(2);
+      await espera();
+    });
+
+    it('si la segunda póliza falla queda a medias sin cobrar, y el reintento emite solo la que falta, también sin cobrar', async () => {
+      conCanal(filaRc(), 'I');
+      vi.mocked(nest.emitir)
+        .mockResolvedValueOnce(P27)
+        .mockRejectedValueOnce(new nest.NestError('Sis2000 caído', 500));
+      const parciales: any[] = [];
+      vi.mocked(repo.guardarPolizaParcialCanal).mockImplementation(
+        async (_c, p) => {
+          parciales.push(JSON.parse(JSON.stringify(p)));
+        },
+      );
+      const res = await emitirPendiente(CODIGO_RC, 'I');
+      expect(res.status).toBe(502);
+      expect(repo.guardarPoliza).not.toHaveBeenCalled();
+      expect(repo.guardarPolizaParcial).not.toHaveBeenCalled();
+      expect(vi.mocked(repo.guardarError).mock.calls[0]).toEqual([
+        CODIGO_RC,
+        'Sis2000 caído',
+      ]);
+      const parcial = parciales.slice(-1)[0];
+      expect(parcial).toMatchObject({
+        parcial: true,
+        polizas: [{ cramo: 27, cnpoliza: '27-1-1', cobro: PENDIENTE }],
+      });
+      await espera();
+      expect(nest.enviarCorreo).not.toHaveBeenCalled();
+
+      // Reintento del admin: no hubo pago, así que completa la del 37 y no llama a la cobranza.
+      vi.mocked(nest.emitir).mockReset().mockResolvedValue(P37);
+      conCanal(filaRc({ poliza: parcial, error: 'Sis2000 caído' }), 'I');
+      const re = await request(app)
+        .post(`/api/cotizaciones-rc/${CODIGO_RC}/reintentar`)
+        .set(KEY);
+      expect(re.status).toBe(200);
+      expect(vi.mocked(nest.emitir).mock.calls.map((c) => c[0].cramo)).toEqual([
+        37,
+      ]);
+      expect(nest.cobrarRecibo).not.toHaveBeenCalled();
+      expect(repo.reclamarEmision).not.toHaveBeenCalled();
+      expect(vi.mocked(repo.guardarPoliza).mock.calls[0][1]).toMatchObject({
+        polizas: [
+          { cnpoliza: '27-1-1', cobro: PENDIENTE },
+          { cnpoliza: '37-1-1', cobro: PENDIENTE },
+        ],
+      });
+    });
+
+    it('no emite dos veces: sin el reclamo atómico responde 409', async () => {
+      vi.mocked(repo.porCodigo).mockResolvedValue(fila());
+      vi.mocked(repo.reclamarEmisionCanal).mockResolvedValue(false);
+      expect((await emitirPendiente(CODIGO, 'II')).status).toBe(409);
+      expect(nest.emitir).not.toHaveBeenCalled();
+    });
+
+    it('no emite una pagada, una emitida, una vencida ni una opción sin datos de emisión', async () => {
+      const casos: [Partial<FilaCotizacion>, string, number][] = [
+        [{ estado: 'pagada', pago: { pagado: pagadoRc } }, 'I', 409],
+        [{ estado: 'emitida', poliza: P28 }, 'I', 409],
+        [{ expiraEn: new Date(Date.now() - 1000) }, 'I', 410],
+        [{ datos: { ...datos, emisiones: { I: emision(100) } } }, 'II', 409],
+        [{}, 'IV', 400],
+      ];
+      for (const [x, opcion, status] of casos) {
+        vi.mocked(repo.porCodigo).mockResolvedValue(fila(x));
+        expect((await emitirPendiente(CODIGO, opcion)).status).toBe(status);
+      }
+      expect(repo.reclamarEmisionCanal).not.toHaveBeenCalled();
+      expect(nest.emitir).not.toHaveBeenCalled();
+    });
+
+    it('con la emisión del canal en curso la cotización no se manda a pagar ni se emite por un aviso de pago', async () => {
+      vi.mocked(repo.porCodigo).mockResolvedValue(
+        fila({
+          estado: 'pendiente_pago',
+          opcion: 'II',
+          pago: { intentos: [intento], canal: { opcion: 'II' } },
+        }),
+      );
+      const checkout = await request(app)
+        .post(`/api/cotizaciones-rc/${CODIGO}/checkout`)
+        .set(KEY)
+        .send({ opcion: 'II' });
+      expect(checkout.status).toBe(409);
+      expect(startCheckoutLink).not.toHaveBeenCalled();
+      const pago = await request(app)
+        .post(`/api/cotizaciones-rc/pago-callback/${CODIGO}?t=${TOKEN}`)
+        .send(aviso());
+      expect(pago.body.data).toMatchObject({
+        procesado: false,
+        motivo: 'emision_canal',
+      });
+      expect(repo.marcarPagada).not.toHaveBeenCalled();
+      expect(nest.emitir).not.toHaveBeenCalled();
     });
   });
 });
