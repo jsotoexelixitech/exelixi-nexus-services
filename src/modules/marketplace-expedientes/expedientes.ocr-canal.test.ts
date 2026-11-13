@@ -27,7 +27,12 @@ vi.mock('../portal/portal-admin.middleware', () => ({
 
 import prisma from '../../config/prisma';
 import router from './expedientes.routes';
-import { _resetCatalogoCanales, catalogoCanales } from './expedientes.canales';
+import {
+  _resetCatalogoCanales,
+  _resetCatalogoProductores,
+  catalogoCanales,
+  catalogoProductores,
+} from './expedientes.canales';
 import { EVENTO_OCR_POR_CANAL } from './expedientes.ocr-canal';
 import { getConfig } from '../config/product-config.service';
 
@@ -80,6 +85,7 @@ beforeEach(async () => {
   delete process.env.PORTAL_SIS2000_EMPRESA_ID;
   process.env.EXPEDIENTES_OCR_CANAL_ESCRITURA = 'true';
   process.env.NODE_ENV = 'test';
+  _resetCatalogoProductores(null);
   _resetCatalogoCanales({
     nombres: new Map([
       ['1', 'Canal Uno'],
@@ -663,5 +669,104 @@ describe('OCR opcional por productor (ocrOpcional.productores)', () => {
       .send({ ...BASE, productores: ['1234'], motivo: 'Sin permiso' });
     expect(r.status).toBe(403);
     expect(fila(7, 'rcv').configJson).toEqual(configRcv());
+  });
+});
+
+describe('catálogo de productores (nest-api GET /valrep/brokers)', () => {
+  const respuesta = (body: unknown, ok = true) =>
+    vi.fn(async () => ({ ok, status: ok ? 200 : 500, json: async () => body }));
+
+  async function conFetch<T>(mock: any, fn: () => Promise<T>): Promise<T> {
+    _resetCatalogoProductores();
+    process.env.NEST_API_KEY = 'k';
+    vi.stubGlobal('fetch', mock);
+    try {
+      return await fn();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.NEST_API_KEY;
+    }
+  }
+
+  it('lee data.broker, normaliza el código y descarta vacíos, 0 y repetidos', async () => {
+    const mock = respuesta({
+      status: true,
+      data: {
+        broker: [
+          { cproductor: 1234, xproductor: ' Productor Uno ' },
+          { cproductor: '555 ', xproductor: 'Productor Dos' },
+          { cproductor: 1234, xproductor: 'Repetido' },
+          { cproductor: 0, xproductor: 'Sin productor' },
+          { cproductor: null, xproductor: 'Nulo' },
+        ],
+      },
+    });
+    const cat = await conFetch(mock, () => catalogoProductores());
+    expect(cat).toEqual([
+      { codigo: '1234', nombre: 'Productor Uno' },
+      { codigo: '555', nombre: 'Productor Dos' },
+    ]);
+    expect(String((mock.mock.calls[0] as any[])[0])).toMatch(
+      /\/api\/v1\/valrep\/brokers$/,
+    );
+  });
+
+  it('acepta data como arreglo y la doble envoltura { status, data: { data } }', async () => {
+    const filas = [{ cproductor: 7, xproductor: 'Siete' }];
+    const esperado = [{ codigo: '7', nombre: 'Siete' }];
+    expect(
+      await conFetch(respuesta({ status: true, data: filas }), () =>
+        catalogoProductores(),
+      ),
+    ).toEqual(esperado);
+    expect(
+      await conFetch(
+        respuesta({ status: true, data: { status: true, data: filas } }),
+        () => catalogoProductores(),
+      ),
+    ).toEqual(esperado);
+  });
+
+  it('si nest-api falla devuelve null y no reintenta en cada consulta', async () => {
+    const mock = respuesta({}, false);
+    await conFetch(mock, async () => {
+      expect(await catalogoProductores()).toBeNull();
+      expect(await catalogoProductores()).toBeNull();
+    });
+    expect(mock).toHaveBeenCalledTimes(1);
+    const lanza = vi.fn(async () => {
+      throw new Error('timeout');
+    });
+    expect(await conFetch(lanza, () => catalogoProductores())).toBeNull();
+  });
+
+  it('GET y PUT incluyen catalogoProductores; null si no cargó (la pantalla sigue)', async () => {
+    let r = await request(app).get(URL).set(ADMIN);
+    expect(r.status).toBe(200);
+    expect(r.body.data.catalogoProductores).toBeNull();
+
+    _resetCatalogoProductores([
+      { codigo: '1234', nombre: 'Productor Uno' },
+      { codigo: '555', nombre: 'Productor Dos' },
+    ]);
+    r = await request(app).get(URL).set(ADMIN);
+    expect(r.body.data.catalogoProductores).toEqual([
+      { codigo: '1234', nombre: 'Productor Uno' },
+      { codigo: '555', nombre: 'Productor Dos' },
+    ]);
+
+    r = await request(app)
+      .put(URL)
+      .set(ADMIN)
+      .send({
+        producto: 'rcv',
+        canales: ['1', '99'],
+        productores: ['555'],
+        productoresNombres: { '555': 'Productor Dos' },
+        motivo: 'Alta desde la lista del catálogo',
+      });
+    expect(r.status).toBe(200);
+    expect(r.body.data.productoresOpcionales).toEqual(['555']);
+    expect(r.body.data.catalogoProductores).toHaveLength(2);
   });
 });

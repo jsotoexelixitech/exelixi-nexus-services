@@ -162,6 +162,86 @@ export function _resetCatalogoCanales(valor?: CatalogoCanales | null): void {
   cache = valor === undefined ? null : { en: Date.now(), valor };
 }
 
+// ─── Catálogo de productores (para «OCR por canal» → Productores) ──────────
+
+/** Productor del catálogo con el código tal como lo guarda `ocrOpcional.productores`. */
+export interface ProductorCatalogo {
+  /** String(cproductor).trim(). */
+  codigo: string;
+  nombre: string;
+}
+
+let cacheProductores: { en: number; valor: ProductorCatalogo[] | null } | null =
+  null;
+
+/** nest-api responde { status, data: { broker: [...] } }; se toleran otras envolturas. */
+function filasProductores(body: unknown): unknown[] | null {
+  let v: unknown = body;
+  for (let i = 0; i < 4; i++) {
+    if (Array.isArray(v)) return v;
+    if (!v || typeof v !== 'object') return null;
+    const o = v as Record<string, unknown>;
+    v = o.broker ?? o.brokers ?? o.productores ?? o.data;
+  }
+  return Array.isArray(v) ? v : null;
+}
+
+/**
+ * Catálogo de productores (nest-api GET /api/v1/valrep/brokers, apikey de Nexus), en el orden
+ * de nest-api (por nombre). Caché de 10 minutos; nunca lanza: sin catálogo (o vacío) → null y
+ * la pantalla sigue con «agregar por código».
+ */
+export async function catalogoProductores(
+  ahora: number = Date.now(),
+): Promise<ProductorCatalogo[] | null> {
+  if (cacheProductores && ahora - cacheProductores.en < TTL_MS)
+    return cacheProductores.valor;
+  const { url, apiKey } = nestMailConfig();
+  if (!apiKey) return null;
+  let valor: ProductorCatalogo[] | null = null;
+  try {
+    const res = await fetch(`${url}/api/v1/valrep/brokers`, {
+      headers: { Accept: 'application/json', apikey: apiKey },
+      signal: AbortSignal.timeout(8_000),
+    });
+    const filas = res.ok
+      ? filasProductores(await res.json().catch(() => null))
+      : null;
+    if (filas) {
+      const vistos = new Set<string>();
+      const lista: ProductorCatalogo[] = [];
+      for (const raw of filas) {
+        const r = (raw ?? {}) as Record<string, unknown>;
+        const codigo = r.cproductor == null ? '' : String(r.cproductor).trim();
+        const nombre =
+          typeof r.xproductor === 'string' ? r.xproductor.trim() : '';
+        // Mismo formato que acepta el guardado (codigoProductor del esquema).
+        if (!/^[A-Za-z0-9._-]{1,32}$/.test(codigo) || codigo === '0') continue;
+        if (vistos.has(codigo)) continue;
+        vistos.add(codigo);
+        lista.push({ codigo, nombre: nombre.slice(0, 120) });
+      }
+      if (lista.length > 0) valor = lista;
+    } else {
+      logger.warn(`[expedientes] catálogo de productores: HTTP ${res.status}`);
+    }
+  } catch (err) {
+    logger.warn(
+      `[expedientes] catálogo de productores no disponible: ${err instanceof Error ? err.name : 'error'}`,
+    );
+  }
+  // Un fallo también se guarda (1 minuto) para no reintentar en cada consulta.
+  cacheProductores = { en: valor ? ahora : ahora - TTL_MS + 60_000, valor };
+  return valor;
+}
+
+/** Solo pruebas. */
+export function _resetCatalogoProductores(
+  valor?: ProductorCatalogo[] | null,
+): void {
+  cacheProductores = valor === undefined ? null : { en: Date.now(), valor };
+}
+
 // ─── Canal/productor registrado en la póliza (Sis2000, solo lectura) ───────
 
 /** Lo que Sis2000 tiene en adpoliza (o adrecibos) de una póliza: la fuente de verdad. */
