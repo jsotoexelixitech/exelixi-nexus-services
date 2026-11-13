@@ -82,6 +82,12 @@ app.use(
 );
 app.use(compression());
 app.use(cookieParser());
+// Checkout del cotizador RC: trae el PDF «Condicionado y anexos» en base64 (hasta 8 MB). Solo con API key.
+app.post(
+  /^\/api\/cotizaciones-rc\/[A-Za-z0-9-]+\/checkout\/?$/,
+  apiKeyGuard,
+  express.json({ limit: '12mb' }),
+);
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 

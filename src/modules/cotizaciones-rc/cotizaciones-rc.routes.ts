@@ -6,8 +6,9 @@
  *   GET   /api/cotizaciones-rc                         → búsqueda del admin: vigentes, vencidas o todo el historial (x-api-key)
  *   GET   /api/cotizaciones-rc/:codigo                 → trae una cotización; 404 no existe, 410 vencida; ?admin=1 también vencidas
  *   PATCH /api/cotizaciones-rc/:codigo/estado          → registra la emisión con recibo pendiente (x-api-key)
- *   POST  /api/cotizaciones-rc/:codigo/checkout        → manda a pagar: URL del módulo de Pagos (x-api-key)
- *   POST  /api/cotizaciones-rc/:codigo/reintentar      → reintenta emisión o cobro de una pagada (x-api-key)
+ *   POST  /api/cotizaciones-rc/:codigo/checkout        → manda a pagar: URL del módulo de Pagos; acepta `anexos`
+ *                                                        { nombre, base64 } (PDF de condicionado y anexos) (x-api-key)
+ *   POST  /api/cotizaciones-rc/:codigo/reintentar      → reintenta emisión, cobro o correo de la póliza (x-api-key)
  *   POST  /api/cotizaciones-rc/pago-callback/:codigo   → aviso de pagos-api (notifyUrl); token por intento, sin API key
  *
  * La API key la pone el servidor del cotizador (proxy /nexus); nunca llega al navegador.
