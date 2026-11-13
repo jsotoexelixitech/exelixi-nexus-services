@@ -30,7 +30,7 @@ export async function crear(
     RETURNING crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
       crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
       crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, crc_datos AS datos,
-      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_expira_en AS "expiraEn",
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_expira_en AS "expiraEn",
       crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"`;
   return rows[0];
 }
@@ -42,7 +42,7 @@ export async function porCodigo(
     SELECT crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
       crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
       crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, crc_datos AS datos,
-      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_expira_en AS "expiraEn",
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_expira_en AS "expiraEn",
       crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"
     FROM cotizacion_rc WHERE crc_codigo = ${codigo} LIMIT 1`;
   return rows[0] ?? null;
@@ -67,7 +67,7 @@ export async function listar(f: FiltroLista): Promise<FilaCotizacion[]> {
     SELECT crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
       crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
       crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, NULL::jsonb AS datos,
-      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_expira_en AS "expiraEn",
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_expira_en AS "expiraEn",
       crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"
     FROM cotizacion_rc
     WHERE (${f.vigencia}::text = 'todas'
@@ -175,4 +175,64 @@ export async function registrosDePago(
   return prisma.$queryRaw<RegistroPago[]>`
     SELECT proveedor, estado, monto FROM pagos.registros_pago
     WHERE ref_ibp = ${referencia} ORDER BY updated_at DESC LIMIT 5`;
+}
+
+/** PDF «Condicionado y anexos» de la opción que se mandó a pagar (lo genera el cotizador al pedir el checkout). */
+export async function guardarAnexos(
+  codigo: string,
+  opcion: string,
+  nombre: string,
+  pdf: Buffer,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE cotizacion_rc
+    SET crc_anexos_pdf = ${pdf}, crc_anexos_nombre = ${nombre}, crc_anexos_opcion = ${opcion}
+    WHERE crc_codigo = ${codigo}`;
+}
+
+/** Anexos guardados para la opción pagada; null si no hay o son de otra opción. */
+export async function anexosDe(
+  codigo: string,
+  opcion: string,
+): Promise<{ nombre: string; pdf: Buffer } | null> {
+  const rows = await prisma.$queryRaw<
+    { nombre: string | null; pdf: Uint8Array | null }[]
+  >`
+    SELECT crc_anexos_nombre AS nombre, crc_anexos_pdf AS pdf FROM cotizacion_rc
+    WHERE crc_codigo = ${codigo} AND crc_anexos_opcion = ${opcion} AND crc_anexos_pdf IS NOT NULL LIMIT 1`;
+  const r = rows[0];
+  return r?.pdf
+    ? {
+        nombre: r.nombre || 'Condicionado_y_anexos.pdf',
+        pdf: Buffer.from(r.pdf),
+      }
+    : null;
+}
+
+/**
+ * Reclamo atómico del correo de la póliza: solo una emitida, sin correo enviado y sin otro envío en curso (se
+ * libera solo a los 5 minutos). Así la póliza sale una sola vez aunque coincidan la emisión y un reintento.
+ */
+export async function reclamarCorreoPoliza(
+  codigo: string,
+  ahoraIso: string,
+): Promise<boolean> {
+  const n = await prisma.$executeRaw`
+    UPDATE cotizacion_rc
+    SET crc_correo_poliza = COALESCE(crc_correo_poliza, '{}'::jsonb) || jsonb_build_object('enviandoEn', ${ahoraIso}::text)
+    WHERE crc_codigo = ${codigo} AND crc_estado = 'emitida' AND crc_poliza IS NOT NULL
+      AND (crc_correo_poliza IS NULL
+           OR (crc_correo_poliza ->> 'enviadoEn' IS NULL
+               AND (crc_correo_poliza ->> 'enviandoEn' IS NULL
+                    OR (crc_correo_poliza ->> 'enviandoEn')::timestamptz < CURRENT_TIMESTAMP - interval '5 minutes')))`;
+  return n > 0;
+}
+
+/** Resultado del envío: { enviadoEn, a, adjuntos } o { error, intentadoEn, a }. */
+export async function guardarCorreoPoliza(
+  codigo: string,
+  correo: unknown,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE cotizacion_rc SET crc_correo_poliza = ${json(correo)}::jsonb WHERE crc_codigo = ${codigo}`;
 }

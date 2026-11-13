@@ -16,10 +16,16 @@ import { startCheckoutLink } from '../flow/flow.service';
 import * as repo from './cotizaciones-rc.repo';
 import * as nest from './cotizaciones-rc.nest';
 import {
+  MAX_ADJUNTOS_BYTES,
   MAX_INTENTOS,
   OPCIONES,
+  adjuntosQueCaben,
   alternativaDe,
+  anexosDeCheckout,
   armarCobro,
+  armarCorreoPoliza,
+  correoPolizaEnviado,
+  correoValido,
   emisionDeOpcion,
   esObj,
   evaluarRegistros,
@@ -282,8 +288,28 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
   const ok = await repo.guardarCheckout(fila.codigo, alt.opcion, { intentos });
   if (!ok)
     throw new AppError(`La cotización ${fila.codigo} ya no admite pago.`, 409);
+  // PDF «Condicionado y anexos» de la opción (lo arma el cotizador): se adjunta al correo de la póliza al emitir.
+  const anexos = anexosDeCheckout(b.anexos);
+  if (anexos) {
+    try {
+      await repo.guardarAnexos(
+        fila.codigo,
+        alt.opcion,
+        anexos.nombre,
+        anexos.pdf,
+      );
+    } catch (e) {
+      logger.warn(
+        `[cotizaciones-rc] ${fila.codigo}: no se guardaron los anexos: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  } else if (b.anexos !== undefined) {
+    logger.warn(
+      `[cotizaciones-rc] ${fila.codigo}: anexos del checkout descartados (no es un PDF o pasa de ${MAX_ADJUNTOS_BYTES} bytes)`,
+    );
+  }
   logger.info(
-    `[cotizaciones-rc] checkout ${fila.codigo} opcion=${alt.opcion} totalVes=${totalVes} sid=${link.sid}`,
+    `[cotizaciones-rc] checkout ${fila.codigo} opcion=${alt.opcion} totalVes=${totalVes} sid=${link.sid} anexos=${anexos ? anexos.pdf.length : 0} bytes`,
   );
   return {
     codigo: fila.codigo,
@@ -455,9 +481,119 @@ async function cobrar(
   }
 }
 
+const kb = (n: number): string => `${Math.max(1, Math.round(n / 1024))} KB`;
+
+/**
+ * Correo de la póliza al tomador (nest-api mail/send, plantilla `branded`): datos de la póliza, enlace «Ver mi póliza»,
+ * el PDF de la póliza, el recibo cobrado (ingreso de caja) y el de condicionado y anexos guardado en el checkout. Sale una sola vez (reclamo atómico) y
+ * solo para cotizaciones pagadas. Nunca lanza: un fallo de correo no toca la emisión; queda en crc_correo_poliza.
+ */
+export async function enviarCorreoPoliza(codigo: string): Promise<void> {
+  try {
+    if (!(await repo.reclamarCorreoPoliza(codigo, new Date().toISOString())))
+      return;
+  } catch (e) {
+    logger.error(
+      `[cotizaciones-rc] ${codigo}: correo de la póliza sin reclamar: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    return;
+  }
+  const intentadoEn = new Date().toISOString();
+  let a: string | null = null;
+  try {
+    const fila = await repo.porCodigo(codigo);
+    const pagado = fila && pagadoDe(fila);
+    const p = fila && esObj(fila.poliza) ? fila.poliza : null;
+    if (!fila || !pagado || !p || !p.cnpoliza)
+      throw new Error('La cotización no tiene póliza pagada.');
+    if (!correoValido(fila.tomadorCorreo))
+      throw new Error('La cotización no tiene un correo válido del tomador.');
+    a = String(fila.tomadorCorreo).trim().toLowerCase();
+    const poliza = {
+      cnpoliza: String(p.cnpoliza),
+      cnrecibo: String(p.cnrecibo ?? ''),
+      urlpoliza: String(p.urlpoliza ?? ''),
+    };
+
+    let anexos: { nombre: string; pdf: Buffer } | null = null;
+    try {
+      anexos = (await repo.anexosDe(codigo, pagado.opcion)) ?? null;
+    } catch (e) {
+      logger.warn(
+        `[cotizaciones-rc] ${codigo}: no se leyeron los anexos: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    // Recibo solo si quedó cobrado: collection/activate devuelve el enlace del ingreso de caja.
+    const cobro = esObj(p.cobro) ? p.cobro : {};
+    const urlRecibo =
+      cobro.ok === true && cobro.ingresoCaja ? String(cobro.ingresoCaja) : '';
+    const [pdfPoliza, pdfRecibo] = await Promise.all([
+      poliza.urlpoliza
+        ? nest.descargarPdf(poliza.urlpoliza, MAX_ADJUNTOS_BYTES)
+        : null,
+      urlRecibo ? nest.descargarPdf(urlRecibo, MAX_ADJUNTOS_BYTES) : null,
+    ]);
+    const { adjuntos, sinPdfPoliza, total } = adjuntosQueCaben({
+      poliza: pdfPoliza
+        ? { nombre: `Poliza_${poliza.cnpoliza}.pdf`, pdf: pdfPoliza }
+        : null,
+      recibo: pdfRecibo
+        ? {
+            nombre: `Recibo_${poliza.cnrecibo || poliza.cnpoliza}.pdf`,
+            pdf: pdfRecibo,
+          }
+        : null,
+      anexos,
+    });
+    let prima: number | null = null;
+    try {
+      prima = alternativaDe(fila.datos, pagado.opcion).prima;
+    } catch {
+      prima = null;
+    }
+    const peso = (b: Uint8Array | null | undefined, sin: string) =>
+      b ? kb(b.length) : sin;
+    logger.info(
+      `[cotizaciones-rc] ${codigo}: enviando correo de la póliza ${poliza.cnpoliza} ` +
+        `poliza=${peso(pdfPoliza, 'sin PDF')} recibo=${peso(pdfRecibo, urlRecibo ? 'sin PDF' : 'no')} ` +
+        `anexos=${peso(anexos?.pdf, 'no')} adjuntos=${adjuntos.length} (${adjuntos.map((x) => x.nombre).join(', ') || 'solo enlace'}) total=${kb(total)}`,
+    );
+    const r = await nest.enviarCorreo(
+      armarCorreoPoliza(
+        fila,
+        poliza,
+        prima,
+        adjuntos,
+        !!anexos && adjuntos.includes(anexos),
+      ),
+    );
+    if (!r.sent) throw new Error(r.error || 'nest-api no envió el correo.');
+    await repo.guardarCorreoPoliza(codigo, {
+      enviadoEn: new Date().toISOString(),
+      a,
+      adjuntos: adjuntos.map((x) => x.nombre),
+      ...(sinPdfPoliza ? { sinPdfPoliza: true } : {}),
+    });
+    logger.info(
+      `[cotizaciones-rc] ${codigo}: correo de la póliza ${poliza.cnpoliza} enviado`,
+    );
+  } catch (e) {
+    const error = (e instanceof Error ? e.message : String(e)).slice(0, 500);
+    logger.error(
+      `[cotizaciones-rc] ${codigo}: correo de la póliza falló: ${error}`,
+    );
+    try {
+      await repo.guardarCorreoPoliza(codigo, { error, intentadoEn, a });
+    } catch {
+      // Sin BD no queda registro; el log ya lo tiene.
+    }
+  }
+}
+
 /** Emite en nest-api la cotización pagada y cobra el recibo. Solo corre con la cotización reclamada. */
 export async function emitirPagada(codigo: string): Promise<void> {
   if (!(await repo.reclamarEmision(codigo))) return;
+  let emitida = false;
   try {
     const fila = await repo.porCodigo(codigo);
     const pagado = fila && pagadoDe(fila);
@@ -502,16 +638,22 @@ export async function emitirPagada(codigo: string): Promise<void> {
       cobro,
       emitidaEn: new Date().toISOString(),
     });
+    emitida = true;
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     logger.error(`[cotizaciones-rc] ${codigo}: emisión pagada falló: ${error}`);
     await repo.guardarError(codigo, error);
   }
+  // Fuera del try: el correo nunca convierte una póliza emitida en un error de emisión.
+  if (emitida) await enviarCorreoPoliza(codigo);
 }
 
 const cobrando = new Set<string>();
 
-/** Admin: reintenta la emisión de una pagada sin póliza, o el cobro de una emitida cuyo recibo quedó pendiente. */
+/**
+ * Admin: reintenta la emisión de una pagada sin póliza, el cobro de una emitida cuyo recibo quedó pendiente y el
+ * correo de la póliza si no se llegó a enviar (ya enviado no se repite).
+ */
 export async function reintentar(codigoRaw: unknown): Promise<FilaCotizacion> {
   const fila = await obtener(codigoRaw);
   const pagado = pagadoDe(fila);
@@ -522,6 +664,14 @@ export async function reintentar(codigoRaw: unknown): Promise<FilaCotizacion> {
     );
   if (fila.estado === 'pagada' && !fila.poliza) {
     await emitirPagada(fila.codigo);
+  } else if (
+    fila.estado === 'emitida' &&
+    esObj(fila.poliza) &&
+    esObj(fila.poliza.cobro) &&
+    fila.poliza.cobro.ok === true &&
+    !correoPolizaEnviado(fila.correoPoliza)
+  ) {
+    await enviarCorreoPoliza(fila.codigo);
   } else if (
     fila.estado === 'emitida' &&
     esObj(fila.poliza) &&
@@ -544,6 +694,7 @@ export async function reintentar(codigoRaw: unknown): Promise<FilaCotizacion> {
     } finally {
       cobrando.delete(fila.codigo);
     }
+    await enviarCorreoPoliza(fila.codigo);
   } else {
     throw new AppError(
       `La cotización ${fila.codigo} no tiene nada pendiente (${fila.estado}).`,
