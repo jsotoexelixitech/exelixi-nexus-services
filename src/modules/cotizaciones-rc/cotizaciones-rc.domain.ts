@@ -5,6 +5,9 @@
  * cierra el acceso y el pago del cliente. El cliente la trae por código, elige una
  * alternativa (I, II o III), paga en el módulo de Pagos y, con el pago confirmado, Nexus emite la póliza en
  * nest-api (riesgos-generales/emision, modo cotizador) y cobra el recibo (external/collection/activate).
+ *
+ * Una opción puede llevar más de una póliza (RCP + RCE = ramos 27 y 37): un solo pago por la suma de las primas,
+ * una emisión y un cobro por ramo, y un único correo con todas las pólizas y recibos.
  */
 import { createHash, randomInt, timingSafeEqual } from 'crypto';
 import { AppError } from '../../utils/app-error';
@@ -24,6 +27,8 @@ export type Opcion = (typeof OPCIONES)[number];
 
 /** Ramos que nest-api emite con prima informada (RIESGOS_GENERALES_COTIZADOR_RAMOS). */
 export const RAMOS_COTIZADOR = [27, 28, 37];
+/** Pólizas que puede llevar una opción: RCP + RCE («Ambas») son dos, una por ramo. */
+export const MAX_POLIZAS = 2;
 /** Intentos de checkout que se conservan por cotización (el cliente puede abrir Pagos más de una vez). */
 export const MAX_INTENTOS = 5;
 
@@ -142,43 +147,148 @@ export function alternativaDe(datos: unknown, opcion: unknown): Alternativa {
 }
 
 /**
- * Body de emisión (nest-api riesgos-generales/emision, modo cotizador) que el cotizador dejó armado para la opción.
- * Se emite solo si es de prima informada, de un ramo del cotizador y por la misma prima de la alternativa.
+ * Bodies de emisión (nest-api riesgos-generales/emision, modo cotizador) que el cotizador dejó armados para la opción:
+ * uno solo (RCG, RCP o RCE) o un arreglo con uno por ramo (RCP + RCE). Se emite solo si todos son de prima informada,
+ * de ramos distintos del cotizador y si la suma de sus primas es la prima de la alternativa (lo que se cobra).
  */
-export function emisionDeOpcion(datos: unknown, alt: Alternativa): Obj {
+export function emisionesDeOpcion(datos: unknown, alt: Alternativa): Obj[] {
   const emisiones =
     esObj(datos) && esObj(datos.emisiones) ? datos.emisiones : {};
-  const e = emisiones[alt.opcion];
-  if (!esObj(e)) {
+  const v: unknown = emisiones[alt.opcion];
+  const lista: unknown[] = Array.isArray(v) ? v : [v];
+  if (!lista.length || !lista.every(esObj)) {
     throw new AppError(
       'Esta cotización no está lista para pago en línea (faltan los datos de emisión de la opción). Contacta a tu asesor de seguros.',
       409,
     );
   }
-  if (e.modo !== 'cotizador' || !RAMOS_COTIZADOR.includes(Number(e.cramo))) {
+  const es = lista as Obj[];
+  const ramos = es.map((e) => Number(e.cramo));
+  if (
+    es.some(
+      (e) =>
+        e.modo !== 'cotizador' ||
+        !RAMOS_COTIZADOR.includes(Number(e.cramo)) ||
+        !(Number(e.prima_total) > 0),
+    )
+  ) {
     throw new AppError(
       'Los datos de emisión de la cotización no son de prima informada (RCG, RCP o RCE).',
       409,
     );
   }
-  if (Math.abs(Number(e.prima_total) - alt.prima) > 0.01) {
+  if (es.length > MAX_POLIZAS || new Set(ramos).size !== ramos.length) {
+    throw new AppError(
+      'Los datos de emisión de la cotización traen pólizas repetidas o de más (una por ramo).',
+      409,
+    );
+  }
+  const suma = redondear(es.reduce((t, e) => t + Number(e.prima_total), 0));
+  if (Math.abs(suma - alt.prima) > 0.01) {
     throw new AppError(
       'La prima de emisión no coincide con la prima de la opción cotizada.',
       409,
     );
   }
   if (
-    !Array.isArray(e.coberturas) ||
-    !e.coberturas.length ||
-    !texto(e.cplan, 20)
+    es.some(
+      (e) =>
+        !Array.isArray(e.coberturas) ||
+        !e.coberturas.length ||
+        !texto(e.cplan, 20),
+    )
   ) {
     throw new AppError(
       'Los datos de emisión de la cotización están incompletos (plan o coberturas).',
       409,
     );
   }
-  return e;
+  return es;
 }
+
+/** Opción de una sola póliza (RCG): su body de emisión. */
+export const emisionDeOpcion = (datos: unknown, alt: Alternativa): Obj =>
+  emisionesDeOpcion(datos, alt)[0];
+
+/** Nombre del producto de cada ramo del cotizador (líneas del pago y correo de la póliza). */
+export const NOMBRE_RAMO: Record<number, string> = {
+  27: 'Responsabilidad Civil Patronal',
+  28: 'Responsabilidad Civil General',
+  37: 'Responsabilidad Civil Empresarial',
+};
+
+/**
+ * Reparte el monto pagado entre las pólizas en proporción a su prima; la última lleva el resto, así la suma es
+ * exactamente lo pagado. Con una sola póliza, todo el monto.
+ */
+export function repartirPago(monto: number, primas: number[]): number[] {
+  if (primas.length <= 1) return [monto];
+  const total = primas.reduce((t, p) => t + p, 0);
+  const partes: number[] = [];
+  let asignado = 0;
+  primas.forEach((p, i) => {
+    const parte =
+      i === primas.length - 1
+        ? redondear(monto - asignado)
+        : redondear(total > 0 ? (monto * p) / total : monto / primas.length);
+    asignado = redondear(asignado + parte);
+    partes.push(parte);
+  });
+  return partes;
+}
+
+/** Una póliza de la cotización, con el estado del cobro de su recibo. */
+export interface PolizaCotizacion {
+  cramo?: number;
+  cotizador?: string;
+  /** Prima de esta póliza en la moneda de la cotización (para repartir el pago entre los recibos). */
+  prima?: number;
+  cnpoliza: string;
+  cnrecibo: string;
+  urlpoliza: string;
+  cobro?: Obj;
+  emitidaEn?: string;
+}
+
+/**
+ * Pólizas guardadas en crc_poliza: el arreglo `polizas[]` o, en las cotizaciones anteriores (una sola póliza, RCG),
+ * los campos de la raíz.
+ */
+export function polizasDe(poliza: unknown): PolizaCotizacion[] {
+  if (!esObj(poliza)) return [];
+  const lista = Array.isArray(poliza.polizas)
+    ? poliza.polizas.filter(esObj)
+    : [poliza];
+  return lista
+    .filter((p) => texto(p.cnpoliza, 40))
+    .map((p) => ({
+      ...(Number(p.cramo) > 0 ? { cramo: Number(p.cramo) } : {}),
+      ...(p.cotizador ? { cotizador: texto(p.cotizador, 8) } : {}),
+      ...(Number(p.prima) > 0 ? { prima: Number(p.prima) } : {}),
+      cnpoliza: texto(p.cnpoliza, 40),
+      cnrecibo: texto(p.cnrecibo, 40),
+      urlpoliza: texto(p.urlpoliza, 500),
+      ...(esObj(p.cobro) ? { cobro: p.cobro } : {}),
+      ...(p.emitidaEn ? { emitidaEn: String(p.emitidaEn) } : {}),
+    }));
+}
+
+/**
+ * crc_poliza: los campos de la primera póliza en la raíz (formato de siempre, RCG) más `polizas[]` con todas.
+ * `parcial`: faltan pólizas por emitir (la cotización sigue pagada y el reintento emite solo las que faltan).
+ */
+export function armarPolizaGuardada(
+  polizas: PolizaCotizacion[],
+  parcial = false,
+): Obj {
+  return { ...polizas[0], polizas, ...(parcial ? { parcial: true } : {}) };
+}
+
+export const polizaParcial = (poliza: unknown): boolean =>
+  esObj(poliza) && poliza.parcial === true;
+
+export const reciboCobrado = (p: Pick<PolizaCotizacion, 'cobro'>): boolean =>
+  esObj(p.cobro) && p.cobro.ok === true;
 
 /** Moneda de la cotización → cómo se cobra en bolívares. EUR no tiene tasa en nest-api (solo USD). */
 export function monedaDeCobro(moneda: unknown): 'USD' | 'BS' {
@@ -281,14 +391,26 @@ export function pagoDeNotificacion(
   };
 }
 
-/** Body de POST external/collection/activate: el mismo cobro que usan RCV, funerario y personas. */
-export function armarCobro(cnrecibo: string, pago: PagoConfirmado): Obj {
+/**
+ * Body de POST external/collection/activate: el mismo cobro que usan RCV, funerario y personas.
+ * Con varias pólizas pagadas en un solo pago, `mpago` es la parte del pago de ese recibo y `adicional` marca los
+ * recibos después del primero: van sin el teléfono del pagador, porque con referencia + teléfono + banco nest-api
+ * toma el segundo cobro como un pago móvil ya validado; la referencia sigue limitada al mismo asegurado y al monto
+ * del movimiento.
+ */
+export function armarCobro(
+  cnrecibo: string,
+  pago: PagoConfirmado,
+  x: { mpago?: number; adicional?: boolean } = {},
+): Obj {
+  const detalle = { ...pago.detalle };
+  if (x.adicional) delete detalle.xtelefono;
   return {
     cnrecibo,
-    mpago: pago.monto,
+    mpago: x.mpago ?? pago.monto,
     xreferencia: pago.referencia,
     fpago: pago.fecha,
-    ...pago.detalle,
+    ...detalle,
   };
 }
 
@@ -430,7 +552,12 @@ export function adjuntosQueCaben(
   c: {
     poliza?: AdjuntoPoliza | null;
     recibo?: AdjuntoPoliza | null;
+    /** Varias pólizas (RCP + RCE): los PDF de todas y los recibos cobrados. */
+    polizas?: (AdjuntoPoliza | null)[];
+    recibos?: (AdjuntoPoliza | null)[];
     anexos?: AdjuntoPoliza | null;
+    /** Pólizas de la cotización: si entra el PDF de menos, `sinPdfPoliza`. */
+    esperadas?: number;
   },
   max: number = MAX_ADJUNTOS_BYTES,
 ): { adjuntos: AdjuntoPoliza[]; sinPdfPoliza: boolean; total: number } {
@@ -440,18 +567,28 @@ export function adjuntosQueCaben(
     total += x.pdf.length;
     return x;
   };
+  const si = (x: AdjuntoPoliza | null): x is AdjuntoPoliza => !!x;
   const anexos = cabe(c.anexos);
-  const poliza = cabe(c.poliza);
-  const recibo = cabe(c.recibo);
+  const polizas = [c.poliza, ...(c.polizas ?? [])].map(cabe).filter(si);
+  const recibos = [c.recibo, ...(c.recibos ?? [])].map(cabe).filter(si);
   return {
-    adjuntos: [poliza, recibo, anexos].filter((x): x is AdjuntoPoliza => !!x),
-    sinPdfPoliza: !poliza,
+    adjuntos: [...polizas, ...recibos, ...(anexos ? [anexos] : [])],
+    sinPdfPoliza: polizas.length < Math.max(1, c.esperadas ?? 0),
     total,
   };
 }
 
+/** Póliza tal como va en el correo. */
+export interface PolizaCorreo {
+  cramo?: number;
+  cnpoliza: string;
+  cnrecibo?: string;
+  urlpoliza?: string;
+}
+
 /**
- * Body de POST /api/v1/mail/send (plantilla `branded`) con la póliza emitida: datos de la póliza, enlace
+ * Body de POST /api/v1/mail/send (plantilla `branded`) con la póliza emitida (o las pólizas: ver
+ * armarCorreoVariasPolizas): datos de la póliza, enlace
  * «Ver mi póliza» y los PDF adjuntos (póliza, recibo cobrado y condicionado con anexos). Mismos textos que el envío del cotizador.
  */
 export function armarCorreoPoliza(
@@ -459,11 +596,15 @@ export function armarCorreoPoliza(
     FilaCotizacion,
     'producto' | 'tomadorNombre' | 'tomadorCorreo' | 'moneda' | 'datos'
   >,
-  poliza: { cnpoliza: string; cnrecibo?: string; urlpoliza?: string },
+  una: PolizaCorreo | PolizaCorreo[],
   prima: number | null,
   adjuntos: AdjuntoPoliza[],
   conAnexos: boolean,
 ): Obj {
+  const polizas = Array.isArray(una) ? una : [una];
+  if (polizas.length > 1)
+    return armarCorreoVariasPolizas(f, polizas, prima, adjuntos, conAnexos);
+  const poliza = polizas[0];
   const to = String(f.tomadorCorreo ?? '')
     .trim()
     .toLowerCase();
@@ -517,6 +658,109 @@ export function armarCorreoPoliza(
           })),
         }
       : {}),
+  };
+}
+
+const adjuntosCorreo = (adjuntos: AdjuntoPoliza[]): Obj =>
+  adjuntos.length
+    ? {
+        attachments: adjuntos.map((a) => ({
+          filename: nombrePdf(a.nombre, 'Documento.pdf'),
+          contentBase64: Buffer.from(a.pdf).toString('base64'),
+          contentType: 'application/pdf',
+        })),
+      }
+    : {};
+
+/** Nombre del PDF de la póliza en el correo (también sirve para saber si entró como adjunto). */
+export const nombrePdfPoliza = (cnpoliza: string): string =>
+  `Poliza_${cnpoliza}.pdf`;
+
+/**
+ * Un solo correo con todas las pólizas de la cotización (RCP + RCE): cada número de póliza y de recibo con su
+ * producto, la prima total pagada y los PDF adjuntos. El botón abre la primera póliza; las demás van adjuntas o,
+ * si su PDF no entró, con su enlace.
+ */
+function armarCorreoVariasPolizas(
+  f: Pick<
+    FilaCotizacion,
+    'producto' | 'tomadorNombre' | 'tomadorCorreo' | 'moneda' | 'datos'
+  >,
+  polizas: PolizaCorreo[],
+  prima: number | null,
+  adjuntos: AdjuntoPoliza[],
+  conAnexos: boolean,
+): Obj {
+  const to = String(f.tomadorCorreo ?? '')
+    .trim()
+    .toLowerCase();
+  const nombre = texto(f.tomadorNombre, 120);
+  const producto =
+    texto(esObj(f.datos) ? f.datos.nombreProducto : '', 120) ||
+    NOMBRE_PRODUCTO[f.producto] ||
+    'Responsabilidad Civil';
+  const de = (p: PolizaCorreo): string =>
+    (p.cramo && NOMBRE_RAMO[p.cramo]) || 'Responsabilidad Civil';
+  const url = (p: PolizaCorreo): string =>
+    /^https?:\/\//i.test(p.urlpoliza ?? '') ? String(p.urlpoliza) : '';
+  const numeros = polizas.map((p) => p.cnpoliza);
+  const lista = `${numeros.slice(0, -1).join(', ')} y ${numeros.slice(-1)[0]}`;
+  const conBoton = polizas.find((p) => url(p));
+  const adjuntas = new Set(adjuntos.map((a) => a.nombre));
+  const fields = [
+    ...polizas.map((p) => ({
+      label: `Póliza · ${de(p)}`,
+      value: p.cnpoliza,
+    })),
+    { label: 'Producto', value: producto },
+    ...(prima && prima > 0
+      ? [
+          {
+            label: 'Prima total',
+            value: `${texto(f.moneda, 8)} ${importe(prima)}`.trim(),
+          },
+        ]
+      : []),
+    ...polizas
+      .filter((p) => p.cnrecibo)
+      .map((p) => ({ label: `Recibo · ${de(p)}`, value: p.cnrecibo ?? '' })),
+    // Sin botón propio y sin PDF adjunto: el enlace es la única forma de abrir esa póliza.
+    ...polizas
+      .filter(
+        (p) =>
+          p !== conBoton &&
+          url(p) &&
+          !adjuntas.has(nombrePdfPoliza(p.cnpoliza)),
+      )
+      .map((p) => ({ label: `Ver póliza ${p.cnpoliza}`, value: url(p) })),
+  ].map((x) => ({ label: x.label, value: texto(x.value, 250) }));
+  return {
+    to,
+    ...(nombre ? { toName: nombre } : {}),
+    template: 'branded',
+    data: {
+      subject: `La Mundial de Seguros | Pólizas N.º ${lista}`,
+      eyebrow: 'Pólizas',
+      title: 'Sus pólizas de La Mundial de Seguros',
+      intro:
+        `${nombre ? `Estimado(a) ${nombre}:` : 'Estimado(a) cliente:'} Le enviamos sus pólizas ` +
+        polizas.map((p) => `N.º ${p.cnpoliza} de ${de(p)}`).join(' y ') +
+        (conAnexos
+          ? ', con el condicionado general y particular y los anexos de las coberturas contratadas.'
+          : '.') +
+        ' Ante cualquier duda, puede comunicarse con su asesor de seguros.',
+      ...(conBoton
+        ? {
+            ctaLabel: `Ver póliza ${conBoton.cnpoliza}`,
+            ctaUrl: url(conBoton),
+          }
+        : {}),
+      extraNote: conAnexos
+        ? 'Conserve este correo: el condicionado y los anexos forman parte integrante de su contrato de seguro.'
+        : 'Conserve este correo con los datos de sus pólizas.',
+    },
+    fields,
+    ...adjuntosCorreo(adjuntos),
   };
 }
 

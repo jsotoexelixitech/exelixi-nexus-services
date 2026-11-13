@@ -49,8 +49,13 @@ import {
   alternativaDe,
   anexosDeCheckout,
   aRespuesta,
+  armarCobro,
   armarCorreoPoliza,
+  armarPolizaGuardada,
   emisionDeOpcion,
+  emisionesDeOpcion,
+  polizasDe,
+  repartirPago,
   evaluarRegistros,
   generarCodigo,
   normalizarCodigo,
@@ -885,5 +890,364 @@ describe('cotizaciones-rc · correo automático de la póliza', () => {
       .set(KEY);
     expect(res.status).toBe(409);
     expect(nest.enviarCorreo).not.toHaveBeenCalled();
+  });
+});
+
+describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () => {
+  const CODIGO_RC = 'RC-2026-000124-8KQ5';
+  const emisionRc = (cramo: 27 | 37, prima: number) => ({
+    modo: 'cotizador',
+    cotizador: cramo === 27 ? 'rcp' : 'rce',
+    cramo,
+    cplan: `P${cramo}`,
+    prima_total: prima,
+    coberturas: [{ ccober: '1', suma: 1000, prima }],
+  });
+  const datosRc = {
+    ...datos,
+    nombreProducto:
+      'Responsabilidad Civil Patronal + Responsabilidad Civil Empresarial',
+    alternativas: [
+      { opcion: 'I', limite: 1000, prima: 300 },
+      { opcion: 'II', limite: 2000, prima: 120 },
+    ],
+    emisiones: {
+      I: [emisionRc(27, 200), emisionRc(37, 100)],
+      // RCP solo: un único body, igual que RCG.
+      II: emisionRc(27, 120),
+    },
+  };
+  const intentoRc = { ...intento, opcion: 'I', prima: 300, totalVes: 30000 };
+  const pagadoRc = {
+    referencia: '219551279300',
+    monto: 30000,
+    fecha: '2026-11-13',
+    opcion: 'I',
+    detalle: { cbanco_ref: '0134', xtelefono: '584141234567' },
+  };
+  const filaRc = (x: Partial<FilaCotizacion> = {}) =>
+    fila({ codigo: CODIGO_RC, producto: 'rc', datos: datosRc, ...x });
+  const pagadaRc = (x: Partial<FilaCotizacion> = {}) =>
+    filaRc({
+      estado: 'pagada',
+      opcion: 'I',
+      pago: { intentos: [intentoRc], pagado: pagadoRc },
+      ...x,
+    });
+  const P27 = {
+    cnpoliza: '27-1-1',
+    cnrecibo: '27-100',
+    urlpoliza: 'https://sis.test/p27.pdf',
+  };
+  const P37 = {
+    cnpoliza: '37-1-1',
+    cnrecibo: '37-100',
+    urlpoliza: 'https://sis.test/p37.pdf',
+  };
+  const emiteSegunRamo = () =>
+    vi
+      .mocked(nest.emitir)
+      .mockImplementation(async (b) => (Number(b.cramo) === 27 ? P27 : P37));
+
+  it('la opción lleva un body por ramo y la suma de las primas es lo que se cobra', () => {
+    const alt = alternativaDe(datosRc, 'I');
+    expect(emisionesDeOpcion(datosRc, alt).map((e) => e.cramo)).toEqual([
+      27, 37,
+    ]);
+    expect(
+      emisionesDeOpcion(datosRc, alternativaDe(datosRc, 'II')),
+    ).toHaveLength(1);
+    const con = (I: unknown) => ({ ...datosRc, emisiones: { I } });
+    expect(() =>
+      emisionesDeOpcion(con([emisionRc(27, 200), emisionRc(37, 50)]), alt),
+    ).toThrow(/no coincide/);
+    expect(() =>
+      emisionesDeOpcion(con([emisionRc(27, 200), emisionRc(27, 100)]), alt),
+    ).toThrow(/repetidas/);
+    expect(() =>
+      emisionesDeOpcion(
+        con([emisionRc(27, 200), { ...emisionRc(37, 100), cramo: 18 }]),
+        alt,
+      ),
+    ).toThrow(/prima informada/);
+    expect(() => emisionesDeOpcion(con([]), alt)).toThrow(/pago en línea/);
+  });
+
+  it('reparte el pago entre los recibos sin perder céntimos y guarda la primera póliza en la raíz', () => {
+    expect(repartirPago(30000, [200, 100])).toEqual([20000, 10000]);
+    expect(repartirPago(100.01, [1, 1, 1])).toEqual([33.34, 33.34, 33.33]);
+    expect(repartirPago(18000, [180])).toEqual([18000]);
+    const guardada = armarPolizaGuardada([
+      { cramo: 27, prima: 200, ...P27, cobro: { ok: true } },
+      { cramo: 37, prima: 100, ...P37 },
+    ]);
+    expect(guardada).toMatchObject({ cnpoliza: '27-1-1', cobro: { ok: true } });
+    expect(polizasDe(guardada).map((p) => p.cnpoliza)).toEqual([
+      '27-1-1',
+      '37-1-1',
+    ]);
+    // Formato anterior (RCG): una sola póliza en la raíz.
+    expect(polizasDe({ cnpoliza: '28-1-1', cnrecibo: '9' })).toEqual([
+      { cnpoliza: '28-1-1', cnrecibo: '9', urlpoliza: '' },
+    ]);
+    expect(polizasDe(null)).toEqual([]);
+    const pago = {
+      referencia: '1',
+      monto: 30000,
+      metodo: null,
+      fecha: '2026-11-13',
+      detalle: { cbanco_ref: '0134', xtelefono: '58414' },
+    };
+    expect(armarCobro('R', pago)).toMatchObject({
+      mpago: 30000,
+      xtelefono: '58414',
+    });
+    const segundo = armarCobro('R', pago, { mpago: 10000, adicional: true });
+    expect(segundo).toMatchObject({ mpago: 10000, cbanco_ref: '0134' });
+    expect(segundo).not.toHaveProperty('xtelefono');
+  });
+
+  it('manda a pagar el total con una línea por póliza; en EUR no hay pago en línea', async () => {
+    vi.mocked(repo.porCodigo).mockResolvedValue(filaRc());
+    vi.mocked(nest.tasaBcv).mockResolvedValue(100);
+    vi.mocked(startCheckoutLink).mockResolvedValue({
+      sid: '9',
+      checkoutUrl: 'https://pagos.test/?sid=9',
+      pagosModule: { order: 4, nombre: 'Pagos' },
+    });
+    vi.mocked(repo.guardarCheckout).mockResolvedValue(true);
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO_RC}/checkout`)
+      .set(KEY)
+      .send({ opcion: 'I' });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      prima: 300,
+      totalVes: 30000,
+      polizas: [
+        { cramo: 27, prima: 200 },
+        { cramo: 37, prima: 100 },
+      ],
+    });
+    const patch = vi.mocked(startCheckoutLink).mock.calls[0][2] as any;
+    expect(patch.checkout.totalVes).toBe(30000);
+    expect(patch.checkout.totalUsd).toBe(300);
+    expect(
+      patch.checkout.lines.map((l: any) => [l.amountVes, l.amountUsd]),
+    ).toEqual([
+      [20000, 200],
+      [10000, 100],
+    ]);
+    expect(patch.checkout.lines[0].label).toContain('Patronal');
+    // En EUR no hay tasa en nest-api (solo USD): no se paga en línea.
+    vi.mocked(repo.porCodigo).mockResolvedValue(filaRc({ moneda: 'EUR' }));
+    const eur = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO_RC}/checkout`)
+      .set(KEY)
+      .send({ opcion: 'I' });
+    expect(eur.status).toBe(409);
+    expect(eur.body.message).toContain('EUR');
+    expect(startCheckoutLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('con el pago confirmado emite las dos pólizas, cobra cada recibo por su parte y manda un solo correo', async () => {
+    const emitidaRc = pagadaRc({
+      estado: 'emitida',
+      poliza: armarPolizaGuardada([
+        {
+          cramo: 27,
+          prima: 200,
+          ...P27,
+          cobro: { ok: true, ingresoCaja: 'https://sis.test/caja27/' },
+        },
+        {
+          cramo: 37,
+          prima: 100,
+          ...P37,
+          cobro: { ok: true, ingresoCaja: 'https://sis.test/caja37/' },
+        },
+      ]),
+    });
+    vi.mocked(repo.porCodigo)
+      .mockResolvedValueOnce(pagadaRc()) // reintentar → obtener
+      .mockResolvedValueOnce(pagadaRc()) // emitirPagada
+      .mockResolvedValue(emitidaRc);
+    vi.mocked(repo.reclamarEmision).mockResolvedValue(true);
+    emiteSegunRamo();
+    vi.mocked(nest.cobrarRecibo).mockImplementation(async (b) => ({
+      ingresoCaja: `https://sis.test/caja/${String(b.cnrecibo)}/`,
+      transaccion: 1,
+    }));
+    vi.mocked(repo.reclamarCorreoPoliza).mockResolvedValue(true);
+    vi.mocked(repo.anexosDe).mockResolvedValue(null);
+    vi.mocked(nest.descargarPdf).mockResolvedValue(
+      new Uint8Array(Buffer.from('%PDF-1.7 x')),
+    );
+    vi.mocked(nest.enviarCorreo).mockResolvedValue({ sent: true });
+    // Copia de lo guardado en cada paso: el arreglo de pólizas se va completando.
+    const parciales: any[] = [];
+    vi.mocked(repo.guardarPolizaParcial).mockImplementation(async (_c, p) => {
+      parciales.push(JSON.parse(JSON.stringify(p)));
+    });
+
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO_RC}/reintentar`)
+      .set(KEY);
+    expect(res.status).toBe(200);
+    expect(
+      vi
+        .mocked(nest.emitir)
+        .mock.calls.map((c) => [
+          c[0].cramo,
+          c[0].prima_total,
+          c[0].ncotizacion,
+        ]),
+    ).toEqual([
+      [27, 200, CODIGO_RC],
+      [37, 100, CODIGO_RC],
+    ]);
+    const cobros = vi.mocked(nest.cobrarRecibo).mock.calls.map((c) => c[0]);
+    expect(cobros.map((c) => [c.cnrecibo, c.mpago, c.xreferencia])).toEqual([
+      ['27-100', 20000, '219551279300'],
+      ['37-100', 10000, '219551279300'],
+    ]);
+    // El segundo cobro con la misma referencia va sin el teléfono del pagador.
+    expect(cobros[0].xtelefono).toBe('584141234567');
+    expect(cobros[1]).not.toHaveProperty('xtelefono');
+    // Cada póliza queda guardada al salir, y la cotización pasa a emitida solo con las dos.
+    expect(parciales[0]).toMatchObject({
+      parcial: true,
+      polizas: [{ cnpoliza: '27-1-1' }],
+    });
+    expect(parciales[0].polizas).toHaveLength(1);
+    expect(repo.guardarPoliza).toHaveBeenCalledTimes(1);
+    const final = vi.mocked(repo.guardarPoliza).mock.calls[0][1] as any;
+    expect(final).not.toHaveProperty('parcial');
+    expect(final).toMatchObject({
+      cnpoliza: '27-1-1',
+      cnrecibo: '27-100',
+      cobro: { ok: true, mpago: 20000 },
+      polizas: [
+        { cramo: 27, prima: 200, cnpoliza: '27-1-1', cobro: { ok: true } },
+        {
+          cramo: 37,
+          prima: 100,
+          cnpoliza: '37-1-1',
+          cobro: { ok: true, mpago: 10000 },
+        },
+      ],
+    });
+
+    expect(nest.enviarCorreo).toHaveBeenCalledTimes(1);
+    const correo = vi.mocked(nest.enviarCorreo).mock.calls[0][0] as any;
+    expect(correo.data.subject).toBe(
+      'La Mundial de Seguros | Pólizas N.º 27-1-1 y 37-1-1',
+    );
+    expect(correo.data.ctaUrl).toBe('https://sis.test/p27.pdf');
+    expect(correo.attachments.map((x: any) => x.filename)).toEqual([
+      'Poliza_27-1-1.pdf',
+      'Poliza_37-1-1.pdf',
+      'Recibo_27-100.pdf',
+      'Recibo_37-100.pdf',
+    ]);
+    expect(correo.fields.map((x: any) => x.label)).toEqual([
+      'Póliza · Responsabilidad Civil Patronal',
+      'Póliza · Responsabilidad Civil Empresarial',
+      'Producto',
+      'Prima total',
+      'Recibo · Responsabilidad Civil Patronal',
+      'Recibo · Responsabilidad Civil Empresarial',
+    ]);
+    expect(correo.fields[3].value).toBe('USD 300,00');
+    expect(JSON.stringify(correo.fields)).not.toContain('sis.test');
+  });
+
+  it('si la segunda póliza falla queda pagada con la primera guardada, y el reintento emite solo la que falta', async () => {
+    vi.mocked(repo.porCodigo).mockResolvedValue(pagadaRc());
+    vi.mocked(repo.reclamarEmision).mockResolvedValue(true);
+    vi.mocked(nest.emitir)
+      .mockResolvedValueOnce(P27)
+      .mockRejectedValueOnce(new nest.NestError('Sis2000 caído', 500));
+    vi.mocked(nest.cobrarRecibo).mockResolvedValue({
+      ingresoCaja: 'https://sis.test/caja27/',
+      transaccion: 1,
+    });
+    const parciales: any[] = [];
+    vi.mocked(repo.guardarPolizaParcial).mockImplementation(async (_c, p) => {
+      parciales.push(JSON.parse(JSON.stringify(p)));
+    });
+    await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO_RC}/reintentar`)
+      .set(KEY);
+    expect(repo.guardarPoliza).not.toHaveBeenCalled();
+    expect(nest.enviarCorreo).not.toHaveBeenCalled();
+    expect(vi.mocked(repo.guardarError).mock.calls[0]).toEqual([
+      CODIGO_RC,
+      'Sis2000 caído',
+    ]);
+    const parcial = parciales.slice(-1)[0];
+    expect(parcial).toMatchObject({
+      parcial: true,
+      cnpoliza: '27-1-1',
+      polizas: [{ cramo: 27, cnpoliza: '27-1-1', cobro: { ok: true } }],
+    });
+
+    // Reintento: la del ramo 27 ya salió y está cobrada; solo se emite y se cobra la del 37.
+    vi.mocked(nest.emitir).mockReset().mockResolvedValue(P37);
+    vi.mocked(nest.cobrarRecibo).mockClear();
+    vi.mocked(repo.porCodigo).mockResolvedValue(
+      pagadaRc({ poliza: parcial, error: 'Sis2000 caído' }),
+    );
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO_RC}/reintentar`)
+      .set(KEY);
+    expect(res.status).toBe(200);
+    expect(vi.mocked(nest.emitir).mock.calls.map((c) => c[0].cramo)).toEqual([
+      37,
+    ]);
+    const cobros = vi.mocked(nest.cobrarRecibo).mock.calls.map((c) => c[0]);
+    expect(cobros.map((c) => [c.cnrecibo, c.mpago])).toEqual([
+      ['37-100', 10000],
+    ]);
+    expect(cobros[0]).not.toHaveProperty('xtelefono');
+    expect(vi.mocked(repo.guardarPoliza).mock.calls[0][1]).toMatchObject({
+      cnpoliza: '27-1-1',
+      polizas: [{ cnpoliza: '27-1-1' }, { cnpoliza: '37-1-1' }],
+    });
+  });
+
+  it('emitida con un recibo sin cobrar: el reintento cobra solo ese, por su parte del pago', async () => {
+    vi.mocked(repo.porCodigo).mockResolvedValue(
+      pagadaRc({
+        estado: 'emitida',
+        poliza: armarPolizaGuardada([
+          { cramo: 27, prima: 200, ...P27, cobro: { ok: true } },
+          {
+            cramo: 37,
+            prima: 100,
+            ...P37,
+            cobro: { ok: false, error: 'x' },
+          },
+        ]),
+      }),
+    );
+    vi.mocked(nest.cobrarRecibo).mockResolvedValue({
+      ingresoCaja: null,
+      transaccion: 2,
+    });
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO_RC}/reintentar`)
+      .set(KEY);
+    expect(res.status).toBe(200);
+    expect(nest.emitir).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(nest.cobrarRecibo)
+        .mock.calls.map((c) => [c[0].cnrecibo, c[0].mpago]),
+    ).toEqual([['37-100', 10000]]);
+    expect(vi.mocked(repo.guardarPoliza).mock.calls[0][1]).toMatchObject({
+      cnpoliza: '27-1-1',
+      polizas: [{ cobro: { ok: true } }, { cobro: { ok: true, mpago: 10000 } }],
+    });
   });
 });
