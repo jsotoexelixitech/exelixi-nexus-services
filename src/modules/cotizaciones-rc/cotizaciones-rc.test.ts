@@ -1003,8 +1003,8 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
       xtelefono: '58414',
     });
     const segundo = armarCobro('R', pago, { mpago: 10000, adicional: true });
-    expect(segundo).toMatchObject({ mpago: 10000, cbanco_ref: '0134' });
-    expect(segundo).not.toHaveProperty('xtelefono');
+    // Sin atajo: el body conserva el teléfono del pagador (el segundo recibo no se cobra automáticamente).
+    expect(segundo).toMatchObject({ mpago: 10000, cbanco_ref: '0134', xtelefono: '58414' });
   });
 
   it('manda a pagar el total con una línea por póliza; en EUR no hay pago en línea', async () => {
@@ -1050,7 +1050,7 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
     expect(startCheckoutLink).toHaveBeenCalledTimes(1);
   });
 
-  it('con el pago confirmado emite las dos pólizas, cobra cada recibo por su parte y manda un solo correo', async () => {
+  it('con el pago confirmado emite las dos pólizas, cobra el primer recibo y deja el segundo pendiente para caja', async () => {
     const emitidaRc = pagadaRc({
       estado: 'emitida',
       poliza: armarPolizaGuardada([
@@ -1107,13 +1107,11 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
       [37, 100, CODIGO_RC],
     ]);
     const cobros = vi.mocked(nest.cobrarRecibo).mock.calls.map((c) => c[0]);
+    // Solo el primer recibo se cobra con la referencia; el segundo no se intenta (control «pago ya validado»).
     expect(cobros.map((c) => [c.cnrecibo, c.mpago, c.xreferencia])).toEqual([
       ['27-100', 20000, '219551279300'],
-      ['37-100', 10000, '219551279300'],
     ]);
-    // El segundo cobro con la misma referencia va sin el teléfono del pagador.
     expect(cobros[0].xtelefono).toBe('584141234567');
-    expect(cobros[1]).not.toHaveProperty('xtelefono');
     // Cada póliza queda guardada al salir, y la cotización pasa a emitida solo con las dos.
     expect(parciales[0]).toMatchObject({
       parcial: true,
@@ -1133,7 +1131,7 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
           cramo: 37,
           prima: 100,
           cnpoliza: '37-1-1',
-          cobro: { ok: true, mpago: 10000 },
+          cobro: { ok: false, pendiente: true, mpago: 10000 },
         },
       ],
     });
@@ -1192,7 +1190,7 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
       polizas: [{ cramo: 27, cnpoliza: '27-1-1', cobro: { ok: true } }],
     });
 
-    // Reintento: la del ramo 27 ya salió y está cobrada; solo se emite y se cobra la del 37.
+    // Reintento: la del ramo 27 ya salió y está cobrada; solo se emite la del 37 (su recibo queda para caja).
     vi.mocked(nest.emitir).mockReset().mockResolvedValue(P37);
     vi.mocked(nest.cobrarRecibo).mockClear();
     vi.mocked(repo.porCodigo).mockResolvedValue(
@@ -1205,18 +1203,14 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
     expect(vi.mocked(nest.emitir).mock.calls.map((c) => c[0].cramo)).toEqual([
       37,
     ]);
-    const cobros = vi.mocked(nest.cobrarRecibo).mock.calls.map((c) => c[0]);
-    expect(cobros.map((c) => [c.cnrecibo, c.mpago])).toEqual([
-      ['37-100', 10000],
-    ]);
-    expect(cobros[0]).not.toHaveProperty('xtelefono');
+    expect(nest.cobrarRecibo).not.toHaveBeenCalled();
     expect(vi.mocked(repo.guardarPoliza).mock.calls[0][1]).toMatchObject({
       cnpoliza: '27-1-1',
       polizas: [{ cnpoliza: '27-1-1' }, { cnpoliza: '37-1-1' }],
     });
   });
 
-  it('emitida con un recibo sin cobrar: el reintento cobra solo ese, por su parte del pago', async () => {
+  it('emitida con el segundo recibo sin cobrar: el reintento no lo cobra con la misma referencia (queda para caja)', async () => {
     vi.mocked(repo.porCodigo).mockResolvedValue(
       pagadaRc({
         estado: 'emitida',
@@ -1240,14 +1234,10 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
       .set(KEY);
     expect(res.status).toBe(200);
     expect(nest.emitir).not.toHaveBeenCalled();
-    expect(
-      vi
-        .mocked(nest.cobrarRecibo)
-        .mock.calls.map((c) => [c[0].cnrecibo, c[0].mpago]),
-    ).toEqual([['37-100', 10000]]);
+    expect(nest.cobrarRecibo).not.toHaveBeenCalled();
     expect(vi.mocked(repo.guardarPoliza).mock.calls[0][1]).toMatchObject({
       cnpoliza: '27-1-1',
-      polizas: [{ cobro: { ok: true } }, { cobro: { ok: true, mpago: 10000 } }],
+      polizas: [{ cobro: { ok: true } }, { cobro: { ok: false, pendiente: true, mpago: 10000 } }],
     });
   });
 });
