@@ -31,6 +31,7 @@ import emisionRoutes from './modules/emision/emision.routes';
 import funeralSubmissionRoutes from './modules/funeral-submission/funeral-submission.routes';
 import portalRoutes from './modules/portal/portal.routes';
 import expedientesRoutes from './modules/marketplace-expedientes/expedientes.routes';
+import cotizacionesRcRoutes from './modules/cotizaciones-rc/cotizaciones-rc.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -120,6 +121,10 @@ app.use('/api/portal', portalRoutes);
 // Monitor de expedientes Marketplace — sesión del portal + enlace firmado público.
 // Apagado por defecto (EXPEDIENTES_ENABLED); sin la variable responde 404.
 app.use('/api/expedientes', expedientesRoutes);
+
+// Cotizaciones del cotizador RC (vigencia de 15 días para el cliente), pago en línea y emisión pagada — x-api-key en el router;
+// el aviso de pago de pagos-api entra con token propio.
+app.use('/api/cotizaciones-rc', cotizacionesRcRoutes);
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);

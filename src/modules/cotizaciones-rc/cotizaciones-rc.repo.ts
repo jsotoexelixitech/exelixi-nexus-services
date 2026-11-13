@@ -1,0 +1,178 @@
+/**
+ * Acceso a cotizacion_rc con SQL directo: los cambios de estado son reclamos atómicos (UPDATE … WHERE estado = …
+ * RETURNING) para que un pago notificado dos veces no emita dos pólizas.
+ */
+import prisma from '../../config/prisma';
+import {
+  DIAS_VIGENCIA,
+  generarCodigo,
+  type CotizacionNueva,
+  type FilaCotizacion,
+  type RegistroPago,
+} from './cotizaciones-rc.domain';
+
+const json = (v: unknown): string => JSON.stringify(v ?? null);
+
+export async function crear(
+  c: CotizacionNueva,
+  ahora: Date = new Date(),
+): Promise<FilaCotizacion> {
+  const [{ id }] = await prisma.$queryRaw<{ id: number }[]>`
+    SELECT nextval(pg_get_serial_sequence('cotizacion_rc', 'crc_id'))::int AS id`;
+  const codigo = generarCodigo(c.producto, ahora.getFullYear(), id);
+  const rows = await prisma.$queryRaw<FilaCotizacion[]>`
+    INSERT INTO cotizacion_rc
+      (crc_id, crc_codigo, crc_producto, crc_origen, crc_tomador_nombre, crc_tomador_documento, crc_tomador_correo,
+       crc_moneda, crc_datos, crc_expira_en)
+    VALUES
+      (${id}, ${codigo}, ${c.producto}, ${c.origen}, ${c.tomadorNombre}, ${c.tomadorDocumento}, ${c.tomadorCorreo},
+       ${c.moneda}, ${json(c.datos)}::jsonb, CURRENT_TIMESTAMP + make_interval(days => ${DIAS_VIGENCIA}))
+    RETURNING crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
+      crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
+      crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, crc_datos AS datos,
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_expira_en AS "expiraEn",
+      crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"`;
+  return rows[0];
+}
+
+export async function porCodigo(
+  codigo: string,
+): Promise<FilaCotizacion | null> {
+  const rows = await prisma.$queryRaw<FilaCotizacion[]>`
+    SELECT crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
+      crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
+      crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, crc_datos AS datos,
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_expira_en AS "expiraEn",
+      crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"
+    FROM cotizacion_rc WHERE crc_codigo = ${codigo} LIMIT 1`;
+  return rows[0] ?? null;
+}
+
+export interface FiltroLista {
+  codigo: string | null;
+  texto: string | null;
+  estado: string | null;
+  /** vigentes (por defecto) | vencidas (pasaron los 15 días sin pagarse) | todas (historial completo). */
+  vigencia: 'vigentes' | 'vencidas' | 'todas';
+  desde: string | null;
+  hasta: string | null;
+}
+
+/**
+ * Búsqueda del admin sobre todo el historial (el registro no se borra). Una pagada o emitida nunca cuenta como
+ * vencida: los 15 días solo cierran el acceso y el pago del cliente. Sin el JSON completo.
+ */
+export async function listar(f: FiltroLista): Promise<FilaCotizacion[]> {
+  return prisma.$queryRaw<FilaCotizacion[]>`
+    SELECT crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
+      crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
+      crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, NULL::jsonb AS datos,
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_expira_en AS "expiraEn",
+      crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"
+    FROM cotizacion_rc
+    WHERE (${f.vigencia}::text = 'todas'
+           OR (${f.vigencia}::text = 'vencidas'
+               AND crc_expira_en <= CURRENT_TIMESTAMP AND crc_estado IN ('cotizada', 'pendiente_pago'))
+           OR (${f.vigencia}::text = 'vigentes'
+               AND (crc_expira_en > CURRENT_TIMESTAMP OR crc_estado IN ('pagada', 'emitida'))))
+      AND (${f.codigo}::text IS NULL OR crc_codigo ILIKE '%' || ${f.codigo}::text || '%')
+      AND (${f.texto}::text IS NULL OR crc_tomador_nombre ILIKE '%' || ${f.texto}::text || '%'
+           OR crc_tomador_documento ILIKE '%' || ${f.texto}::text || '%')
+      AND (${f.estado}::text IS NULL OR crc_estado = ${f.estado}::text)
+      AND (${f.desde}::text IS NULL OR crc_created_at >= (${f.desde}::text)::date)
+      AND (${f.hasta}::text IS NULL OR crc_created_at < (${f.hasta}::text)::date + 1)
+    ORDER BY crc_created_at DESC
+    LIMIT 200`;
+}
+
+/** Deja la cotización esperando el pago, con los intentos de checkout vigentes. */
+export async function guardarCheckout(
+  codigo: string,
+  opcion: string,
+  pago: unknown,
+): Promise<boolean> {
+  const n = await prisma.$executeRaw`
+    UPDATE cotizacion_rc
+    SET crc_estado = 'pendiente_pago', crc_opcion = ${opcion}, crc_pago = ${json(pago)}::jsonb,
+        crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo} AND crc_estado IN ('cotizada', 'pendiente_pago')`;
+  return n > 0;
+}
+
+/** Reclamo atómico del pago: solo una notificación pasa de pendiente_pago a pagada. */
+export async function marcarPagada(
+  codigo: string,
+  opcion: string,
+  pagado: unknown,
+): Promise<boolean> {
+  const n = await prisma.$executeRaw`
+    UPDATE cotizacion_rc
+    SET crc_estado = 'pagada', crc_opcion = ${opcion},
+        crc_pago = COALESCE(crc_pago, '{}'::jsonb) || jsonb_build_object('pagado', ${json(pagado)}::jsonb),
+        crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo} AND crc_estado = 'pendiente_pago'`;
+  return n > 0;
+}
+
+/** ¿La referencia ya pagó otra cotización? */
+export async function referenciaUsada(
+  referencia: string,
+  codigo: string,
+): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM cotizacion_rc
+    WHERE crc_codigo <> ${codigo} AND crc_pago -> 'pagado' ->> 'referencia' = ${referencia}`;
+  return (rows[0]?.n ?? 0) > 0;
+}
+
+/** Reclamo atómico de la emisión de una cotización pagada sin póliza (se libera solo a los 5 minutos). */
+export async function reclamarEmision(codigo: string): Promise<boolean> {
+  const n = await prisma.$executeRaw`
+    UPDATE cotizacion_rc SET crc_emitiendo_en = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo} AND crc_estado = 'pagada' AND crc_poliza IS NULL
+      AND (crc_emitiendo_en IS NULL OR crc_emitiendo_en < CURRENT_TIMESTAMP - interval '5 minutes')`;
+  return n > 0;
+}
+
+export async function guardarPoliza(
+  codigo: string,
+  poliza: unknown,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE cotizacion_rc
+    SET crc_estado = 'emitida', crc_poliza = ${json(poliza)}::jsonb, crc_error = NULL, crc_emitiendo_en = NULL,
+        crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo}`;
+}
+
+export async function guardarError(
+  codigo: string,
+  error: string,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE cotizacion_rc SET crc_error = ${error.slice(0, 2000)}, crc_emitiendo_en = NULL, crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo}`;
+}
+
+/** Emisión hecha desde el cotizador (admin, recibo pendiente): solo si la cotización no está pagada ni emitida. */
+export async function marcarEmitidaPendiente(
+  codigo: string,
+  opcion: string | null,
+  poliza: unknown,
+): Promise<boolean> {
+  const n = await prisma.$executeRaw`
+    UPDATE cotizacion_rc
+    SET crc_estado = 'emitida', crc_opcion = COALESCE(${opcion}, crc_opcion), crc_poliza = ${json(poliza)}::jsonb,
+        crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo} AND crc_estado IN ('cotizada', 'pendiente_pago')`;
+  return n > 0;
+}
+
+/** Pagos verificados por pagos-api (misma BD exelixi_nexus, esquema pagos). */
+export async function registrosDePago(
+  referencia: string,
+): Promise<RegistroPago[]> {
+  return prisma.$queryRaw<RegistroPago[]>`
+    SELECT proveedor, estado, monto FROM pagos.registros_pago
+    WHERE ref_ibp = ${referencia} ORDER BY updated_at DESC LIMIT 5`;
+}
