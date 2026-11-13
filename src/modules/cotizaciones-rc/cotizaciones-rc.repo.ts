@@ -26,7 +26,7 @@ export async function crear(
        crc_moneda, crc_datos, crc_expira_en)
     VALUES
       (${id}, ${codigo}, ${c.producto}, ${c.origen}, ${c.tomadorNombre}, ${c.tomadorDocumento}, ${c.tomadorCorreo},
-       ${c.moneda}, ${json(c.datos)}::jsonb, CURRENT_TIMESTAMP + make_interval(days => ${DIAS_VIGENCIA}))
+       ${c.moneda}, ${json(c.datos)}::jsonb, CURRENT_TIMESTAMP + make_interval(days => ${DIAS_VIGENCIA}::int))
     RETURNING crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
       crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
       crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, crc_datos AS datos,
