@@ -32,6 +32,7 @@ import funeralSubmissionRoutes from './modules/funeral-submission/funeral-submis
 import portalRoutes from './modules/portal/portal.routes';
 import publicLinksRoutes from './modules/public-links/public-links.routes';
 import expedientesRoutes from './modules/marketplace-expedientes/expedientes.routes';
+import cotizacionesRcRoutes from './modules/cotizaciones-rc/cotizaciones-rc.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -124,6 +125,10 @@ app.use('/api/expedientes', expedientesRoutes);
 
 // Links directos de emisión (web La Mundial) — sin API key; lista blanca NEXUS_LINKS_DIRECTOS + rate limit propio
 app.use('/api/public', publicLinksRoutes);
+
+// Cotizaciones del cotizador RC (vigencia de 15 días para el cliente), pago en línea y emisión pagada — x-api-key en el router;
+// el aviso de pago de pagos-api entra con token propio.
+app.use('/api/cotizaciones-rc', cotizacionesRcRoutes);
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);

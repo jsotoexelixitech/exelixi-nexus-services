@@ -599,3 +599,32 @@ model MktExpedienteJobRun {
   @@unique([job, fecha], map: "uq_mkt_job_run_job_fecha")
   @@map("mkt_expediente_job_run")
 }
+
+/// Cotizaciones del cotizador RC (RCG/RCP/RCE): registro permanente; expiraEn (15 días) solo cierra el acceso
+/// y el pago del cliente. Pago en línea (Pagos) y póliza emitida.
+/// El módulo cotizaciones-rc la usa con SQL directo (reclamos atómicos de estado).
+model CotizacionRc {
+  id               Int       @id @default(autoincrement()) @map("crc_id")
+  codigo           String    @unique(map: "uq_cotizacion_rc_codigo") @map("crc_codigo") @db.VarChar(40)
+  producto         String    @map("crc_producto") @db.VarChar(8)
+  estado           String    @default("cotizada") @map("crc_estado") @db.VarChar(16)
+  origen           String    @default("admin") @map("crc_origen") @db.VarChar(16)
+  tomadorNombre    String    @map("crc_tomador_nombre") @db.VarChar(200)
+  tomadorDocumento String?   @map("crc_tomador_documento") @db.VarChar(32)
+  tomadorCorreo    String?   @map("crc_tomador_correo") @db.VarChar(200)
+  moneda           String?   @map("crc_moneda") @db.VarChar(8)
+  opcion           String?   @map("crc_opcion") @db.VarChar(4)
+  datos            Json      @map("crc_datos") @db.JsonB
+  pago             Json?     @map("crc_pago") @db.JsonB
+  poliza           Json?     @map("crc_poliza") @db.JsonB
+  error            String?   @map("crc_error") @db.Text
+  emitiendoEn      DateTime? @map("crc_emitiendo_en") @db.Timestamp(6)
+  expiraEn         DateTime  @map("crc_expira_en") @db.Timestamp(6)
+  createdAt        DateTime  @default(now()) @map("crc_created_at") @db.Timestamp(6)
+  updatedAt        DateTime? @map("crc_updated_at") @db.Timestamp(6)
+
+  @@index([createdAt], map: "idx_cotizacion_rc_created")
+  @@index([expiraEn], map: "idx_cotizacion_rc_expira")
+  @@index([tomadorDocumento], map: "idx_cotizacion_rc_documento")
+  @@map("cotizacion_rc")
+}
