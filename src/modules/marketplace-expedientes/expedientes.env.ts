@@ -53,7 +53,12 @@ export function expedientesJobsManualPermitido(): boolean {
  * la misma regla del endpoint de tareas: si falta la variable de entorno, no abre nada.
  */
 export function expedientesAccesoLibre(): boolean {
-  return flag('EXPEDIENTES_ACCESO_LIBRE') && expedientesJobsManualPermitido();
+  if (!flag('EXPEDIENTES_ACCESO_LIBRE')) return false;
+  // Producción: solo con la decisión explícita EXPEDIENTES_ACCESO_LIBRE_PRODUCCION=true (pedido del usuario 13-nov-2026).
+  // Abre TODO el monitor sin login (expedientes con datos personales incluidos): quitar la variable lo cierra.
+  if (expedientesEsProduccion())
+    return flag('EXPEDIENTES_ACCESO_LIBRE_PRODUCCION');
+  return expedientesJobsManualPermitido();
 }
 
 export function mailWhitelist(): string[] {
@@ -97,7 +102,9 @@ export function linkDias(): number {
  * del OCR). Sin variable = 60. 0 = solo la tarea diaria. Rango 15 a 720.
  */
 export function conciliacionCadaMin(): number {
-  const raw = String(process.env.EXPEDIENTES_CONCILIACION_CADA_MIN ?? '').trim();
+  const raw = String(
+    process.env.EXPEDIENTES_CONCILIACION_CADA_MIN ?? '',
+  ).trim();
   if (raw === '') return 60;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return 0;
