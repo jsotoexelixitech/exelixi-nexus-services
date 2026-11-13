@@ -394,17 +394,17 @@ export function pagoDeNotificacion(
 /**
  * Body de POST external/collection/activate: el mismo cobro que usan RCV, funerario y personas.
  * Con varias pólizas pagadas en un solo pago, `mpago` es la parte del pago de ese recibo y `adicional` marca los
- * recibos después del primero: van sin el teléfono del pagador, porque con referencia + teléfono + banco nest-api
- * toma el segundo cobro como un pago móvil ya validado; la referencia sigue limitada al mismo asegurado y al monto
- * del movimiento.
+ * recibos después del primero, que no se cobran automáticamente con la misma referencia (quedan pendientes para
+ * caja; ver `cobrar` en el servicio).
  */
 export function armarCobro(
   cnrecibo: string,
   pago: PagoConfirmado,
   x: { mpago?: number; adicional?: boolean } = {},
 ): Obj {
+  // Sin atajos: el body lleva los datos reales del pagador. Los recibos después del primero no se cobran
+  // automáticamente con la misma referencia (ver `cobrar` en el servicio): quedan pendientes para caja.
   const detalle = { ...pago.detalle };
-  if (x.adicional) delete detalle.xtelefono;
   return {
     cnrecibo,
     mpago: x.mpago ?? pago.monto,
