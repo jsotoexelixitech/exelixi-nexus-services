@@ -8,7 +8,9 @@
  *   PATCH /api/cotizaciones-rc/:codigo/estado          → registra la emisión con recibo pendiente (x-api-key)
  *   POST  /api/cotizaciones-rc/:codigo/checkout        → manda a pagar: URL del módulo de Pagos; acepta `anexos`
  *                                                        { nombre, base64 } (PDF de condicionado y anexos) (x-api-key)
- *   POST  /api/cotizaciones-rc/:codigo/reintentar      → reintenta emisión, cobro o correo de la póliza (x-api-key)
+ *   POST  /api/cotizaciones-rc/:codigo/emitir-pendiente → canal (solo x-cotizador-origen: admin): emite sin pago la opción
+ *                                                        { opcion }; el recibo queda pendiente de cobro (x-api-key)
+ *   POST  /api/cotizaciones-rc/:codigo/reintentar     → reintenta emisión, cobro o correo de la póliza (x-api-key)
  *   POST  /api/cotizaciones-rc/pago-callback/:codigo   → aviso de pagos-api (notifyUrl); token por intento, sin API key
  *
  * La API key la pone el servidor del cotizador (proxy /nexus); nunca llega al navegador.
@@ -16,6 +18,7 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
+import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
 import { aRespuesta } from './cotizaciones-rc.domain';
 import * as svc from './cotizaciones-rc.service';
@@ -104,6 +107,24 @@ router.post('/:codigo/checkout', async (req: Request, res: Response) => {
     data: await svc.crearCheckout(req.params.codigo, req.body),
   });
 });
+
+// Emitir sin pago es solo del canal: el proxy del cotizador marca el origen y por el link del cliente ni siquiera
+// deja pasar la ruta. Sin la marca de admin no se emite.
+router.post(
+  '/:codigo/emitir-pendiente',
+  async (req: Request, res: Response) => {
+    if (req.headers['x-cotizador-origen'] !== 'admin') {
+      throw new AppError(
+        'Emitir como pendiente es solo del canal: el cliente siempre paga su póliza.',
+        403,
+      );
+    }
+    res.json({
+      success: true,
+      data: aRespuesta(await svc.emitirPendiente(req.params.codigo, req.body)),
+    });
+  },
+);
 
 router.post('/:codigo/reintentar', async (req: Request, res: Response) => {
   res.json({

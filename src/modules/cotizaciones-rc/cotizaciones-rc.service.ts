@@ -9,6 +9,9 @@
  *   4. emitirPagada: nest-api emite (modo cotizador) y cobra el recibo (collection/activate) → emitida.
  *      RCP + RCE son dos pólizas con un solo pago: se emite y se cobra una por ramo; la que ya salió no se reemite.
  * El navegador del cliente nunca emite: solo consulta el estado.
+ *
+ * Emitir como pendiente (solo el canal, vista admin): emitirPendiente emite la opción sin pago con el mismo código
+ * de emisión y no cobra; el recibo queda pendiente de cobro en Sis2000. La marca crc_pago.canal cierra el pago en línea.
  */
 import { randomBytes } from 'crypto';
 import logger from '../../utils/logger';
@@ -17,6 +20,7 @@ import { startCheckoutLink } from '../flow/flow.service';
 import * as repo from './cotizaciones-rc.repo';
 import * as nest from './cotizaciones-rc.nest';
 import {
+  COBRO_CANAL,
   MAX_ADJUNTOS_BYTES,
   MAX_INTENTOS,
   NOMBRE_RAMO,
@@ -27,6 +31,7 @@ import {
   armarCobro,
   armarCorreoPoliza,
   armarPolizaGuardada,
+  canalDe,
   correoPolizaEnviado,
   correoValido,
   emisionesDeOpcion,
@@ -194,6 +199,29 @@ export async function registrarEmisionPendiente(
   return obtener(fila.codigo);
 }
 
+/** PDF «Condicionado y anexos» de la opción (lo arma el cotizador): se adjunta al correo de la póliza al emitir. */
+async function guardarAnexosDeOpcion(
+  codigo: string,
+  opcion: Opcion,
+  raw: unknown,
+): Promise<ReturnType<typeof anexosDeCheckout>> {
+  const anexos = anexosDeCheckout(raw);
+  if (anexos) {
+    try {
+      await repo.guardarAnexos(codigo, opcion, anexos.nombre, anexos.pdf);
+    } catch (e) {
+      logger.warn(
+        `[cotizaciones-rc] ${codigo}: no se guardaron los anexos: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  } else if (raw !== undefined) {
+    logger.warn(
+      `[cotizaciones-rc] ${codigo}: anexos del checkout descartados (no es un PDF o pasa de ${MAX_ADJUNTOS_BYTES} bytes)`,
+    );
+  }
+  return anexos;
+}
+
 function urlRetorno(returnUrl: unknown, codigo: string): string | null {
   try {
     const u = new URL(String(returnUrl ?? ''));
@@ -217,6 +245,12 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
   if (fila.estado === 'pagada' || fila.estado === 'emitida') {
     throw new AppError(
       `La cotización ${fila.codigo} ya está ${fila.estado}.`,
+      409,
+    );
+  }
+  if (canalDe(fila.pago)) {
+    throw new AppError(
+      `La cotización ${fila.codigo} la está emitiendo el canal sin pago: ya no admite pago en línea.`,
       409,
     );
   }
@@ -314,26 +348,7 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
   const ok = await repo.guardarCheckout(fila.codigo, alt.opcion, { intentos });
   if (!ok)
     throw new AppError(`La cotización ${fila.codigo} ya no admite pago.`, 409);
-  // PDF «Condicionado y anexos» de la opción (lo arma el cotizador): se adjunta al correo de la póliza al emitir.
-  const anexos = anexosDeCheckout(b.anexos);
-  if (anexos) {
-    try {
-      await repo.guardarAnexos(
-        fila.codigo,
-        alt.opcion,
-        anexos.nombre,
-        anexos.pdf,
-      );
-    } catch (e) {
-      logger.warn(
-        `[cotizaciones-rc] ${fila.codigo}: no se guardaron los anexos: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-  } else if (b.anexos !== undefined) {
-    logger.warn(
-      `[cotizaciones-rc] ${fila.codigo}: anexos del checkout descartados (no es un PDF o pasa de ${MAX_ADJUNTOS_BYTES} bytes)`,
-    );
-  }
+  const anexos = await guardarAnexosDeOpcion(fila.codigo, alt.opcion, b.anexos);
   logger.info(
     `[cotizaciones-rc] checkout ${fila.codigo} opcion=${alt.opcion} polizas=${polizas.map((p) => `${p.cramo}:${p.prima}`).join('+')} totalVes=${totalVes} sid=${link.sid} anexos=${anexos ? anexos.pdf.length : 0} bytes`,
   );
@@ -398,6 +413,19 @@ export async function confirmarPago(
       estado: fila.estado,
       procesado: false,
       motivo: 'ya_procesado',
+    };
+  }
+
+  if (canalDe(fila.pago)) {
+    // El canal la está emitiendo sin pago: no se emite otra vez. El pago queda en Pagos para aplicarlo al recibo en caja.
+    logger.error(
+      `[cotizaciones-rc] ${codigo}: llegó un pago con la emisión del canal en curso; no se procesa (aplicarlo al recibo en caja)`,
+    );
+    return {
+      codigo,
+      estado: fila.estado,
+      procesado: false,
+      motivo: 'emision_canal',
     };
   }
 
@@ -534,7 +562,8 @@ const kb = (n: number): string => `${Math.max(1, Math.round(n / 1024))} KB`;
 /**
  * Correo de la póliza al tomador (nest-api mail/send, plantilla `branded`): datos de la póliza, enlace «Ver mi póliza»,
  * el PDF de la póliza, el recibo cobrado (ingreso de caja) y el de condicionado y anexos guardado en el checkout. Sale una sola vez (reclamo atómico) y
- * solo para cotizaciones pagadas. Con varias pólizas (RCP + RCE) es un único correo con todas las pólizas y sus
+ * solo para cotizaciones pagadas o emitidas por el canal desde la cotización guardada (esas van sin recibo: no está
+ * cobrado). Con varias pólizas (RCP + RCE) es un único correo con todas las pólizas y sus
  * recibos cobrados. Nunca lanza: un fallo de correo no toca la emisión; queda en crc_correo_poliza.
  */
 export async function enviarCorreoPoliza(codigo: string): Promise<void> {
@@ -551,9 +580,11 @@ export async function enviarCorreoPoliza(codigo: string): Promise<void> {
   let a: string | null = null;
   try {
     const fila = await repo.porCodigo(codigo);
-    const pagado = fila && pagadoDe(fila);
+    const opcion = fila
+      ? (pagadoDe(fila)?.opcion ?? canalDe(fila.pago)?.opcion)
+      : undefined;
     const polizas = fila ? polizasDe(fila.poliza) : [];
-    if (!fila || !pagado || !polizas.length)
+    if (!fila || !opcion || !polizas.length)
       throw new Error('La cotización no tiene póliza pagada.');
     if (!correoValido(fila.tomadorCorreo))
       throw new Error('La cotización no tiene un correo válido del tomador.');
@@ -561,7 +592,7 @@ export async function enviarCorreoPoliza(codigo: string): Promise<void> {
 
     let anexos: { nombre: string; pdf: Buffer } | null = null;
     try {
-      anexos = (await repo.anexosDe(codigo, pagado.opcion)) ?? null;
+      anexos = (await repo.anexosDe(codigo, opcion)) ?? null;
     } catch (e) {
       logger.warn(
         `[cotizaciones-rc] ${codigo}: no se leyeron los anexos: ${e instanceof Error ? e.message : String(e)}`,
@@ -595,7 +626,7 @@ export async function enviarCorreoPoliza(codigo: string): Promise<void> {
     const numeros = polizas.map((p) => p.cnpoliza).join(' y ');
     let prima: number | null = null;
     try {
-      prima = alternativaDe(fila.datos, pagado.opcion).prima;
+      prima = alternativaDe(fila.datos, opcion).prima;
     } catch {
       prima = null;
     }
@@ -670,6 +701,71 @@ async function emitirUna(
   return poliza;
 }
 
+/** Cobro del recibo de una póliza recién emitida (o que quedó sin cobrar): con el pago, o pendiente si no hubo pago. */
+type CobroDePoliza = (
+  p: PolizaCotizacion,
+  x: {
+    i: number;
+    varias: boolean;
+    primas: number[];
+    polizas: PolizaCotizacion[];
+  },
+) => Promise<Obj>;
+
+/**
+ * Emite en nest-api las pólizas de la opción (una por body de emisión) y deja la cotización emitida. Es la emisión
+ * de la pagada y la del canal sin pago: cambia solo cómo queda el cobro de cada recibo (`cobro`) y dónde se guarda
+ * el avance (`guardarParcial`). Las pólizas que ya salieron en un intento anterior no se vuelven a emitir.
+ */
+async function emitirPolizas(
+  codigo: string,
+  fila: FilaCotizacion,
+  opcion: Opcion,
+  guardarParcial: (codigo: string, poliza: unknown) => Promise<void>,
+  cobro: CobroDePoliza,
+): Promise<void> {
+  const alt = alternativaDe(fila.datos, opcion);
+  const emisiones = emisionesDeOpcion(fila.datos, alt);
+  const varias = emisiones.length > 1;
+  const primas = emisiones.map((e) => redondear(Number(e.prima_total)));
+  // Pólizas que salieron en un intento anterior: no se vuelven a emitir.
+  const previas = polizaParcial(fila.poliza) ? polizasDe(fila.poliza) : [];
+  const polizas: PolizaCotizacion[] = [];
+  const guardarAvance = async () => {
+    if (varias)
+      await guardarParcial(codigo, armarPolizaGuardada(polizas, true));
+  };
+
+  for (const [i, e] of emisiones.entries()) {
+    const cramo = Number(e.cramo);
+    let p = previas.find((x) => x.cramo === cramo);
+    if (p) {
+      logger.info(
+        `[cotizaciones-rc] ${codigo}: la póliza del ramo ${cramo} ya estaba emitida (${p.cnpoliza}); no se reemite`,
+      );
+    } else {
+      const nueva = await emitirUna(codigo, { ...e, ncotizacion: codigo });
+      p = {
+        ...(varias
+          ? { cramo, cotizador: String(e.cotizador ?? ''), prima: primas[i] }
+          : {}),
+        ...nueva,
+        emitidaEn: new Date().toISOString(),
+      };
+    }
+    polizas.push(p);
+    await guardarAvance();
+    if (!reciboCobrado(p)) {
+      p.cobro = await cobro(p, { i, varias, primas, polizas });
+      await guardarAvance();
+    }
+  }
+  await repo.guardarPoliza(
+    codigo,
+    varias ? armarPolizaGuardada(polizas) : polizas[0],
+  );
+}
+
 /**
  * Emite en nest-api la cotización pagada y cobra los recibos. Solo corre con la cotización reclamada.
  * Una póliza por body de emisión de la opción (RCP + RCE: dos). Con varias, cada póliza se guarda al salir
@@ -684,59 +780,24 @@ export async function emitirPagada(codigo: string): Promise<void> {
     const pagado = fila && pagadoDe(fila);
     if (!fila || !pagado)
       throw new Error('La cotización no tiene un pago confirmado.');
-    const alt = alternativaDe(fila.datos, pagado.opcion);
-    const emisiones = emisionesDeOpcion(fila.datos, alt);
-    const varias = emisiones.length > 1;
-    const primas = emisiones.map((e) => redondear(Number(e.prima_total)));
-    const partes = repartirPago(pagado.pago.monto, primas);
-    // Pólizas que salieron en un intento anterior: no se vuelven a emitir.
-    const previas = polizaParcial(fila.poliza) ? polizasDe(fila.poliza) : [];
-    const polizas: PolizaCotizacion[] = [];
-    const guardarAvance = async () => {
-      if (varias)
-        await repo.guardarPolizaParcial(
-          codigo,
-          armarPolizaGuardada(polizas, true),
-        );
-    };
-
-    for (const [i, e] of emisiones.entries()) {
-      const cramo = Number(e.cramo);
-      let p = previas.find((x) => x.cramo === cramo);
-      if (p) {
-        logger.info(
-          `[cotizaciones-rc] ${codigo}: la póliza del ramo ${cramo} ya estaba emitida (${p.cnpoliza}); no se reemite`,
-        );
-      } else {
-        const nueva = await emitirUna(codigo, { ...e, ncotizacion: codigo });
-        p = {
-          ...(varias
-            ? { cramo, cotizador: String(e.cotizador ?? ''), prima: primas[i] }
-            : {}),
-          ...nueva,
-          emitidaEn: new Date().toISOString(),
-        };
-      }
-      polizas.push(p);
-      await guardarAvance();
-      if (!reciboCobrado(p)) {
-        p.cobro = await cobrar(
+    const pago = pagado.pago;
+    await emitirPolizas(
+      codigo,
+      fila,
+      pagado.opcion,
+      repo.guardarPolizaParcial,
+      (p, { i, varias, primas, polizas }) =>
+        cobrar(
           codigo,
           p,
-          pagado.pago,
+          pago,
           varias
             ? {
-                mpago: partes[i],
+                mpago: repartirPago(pago.monto, primas)[i],
                 adicional: polizas.some((o) => o !== p && reciboCobrado(o)),
               }
             : {},
-        );
-        await guardarAvance();
-      }
-    }
-    await repo.guardarPoliza(
-      codigo,
-      varias ? armarPolizaGuardada(polizas) : polizas[0],
+        ),
     );
     emitida = true;
   } catch (e) {
@@ -748,15 +809,133 @@ export async function emitirPagada(codigo: string): Promise<void> {
   if (emitida) await enviarCorreoPoliza(codigo);
 }
 
+/**
+ * Emite sin pago las pólizas de la opción (canal). Solo corre con la cotización reclamada (reclamarEmisionCanal).
+ * No cobra: cada recibo queda pendiente de cobro. Si falla sin haber emitido ninguna póliza se quita la marca del
+ * canal (la cotización vuelve a admitir pago); con alguna emitida queda a medias y el reintento emite la que falta.
+ * Devuelve si quedó emitida.
+ */
+async function emitirCanal(codigo: string, opcion: Opcion): Promise<boolean> {
+  try {
+    const fila = await repo.porCodigo(codigo);
+    if (!fila || pagadoDe(fila))
+      throw new Error('La cotización ya tiene un pago confirmado.');
+    await emitirPolizas(
+      codigo,
+      fila,
+      opcion,
+      repo.guardarPolizaParcialCanal,
+      async () => ({ ...COBRO_CANAL }),
+    );
+    logger.info(
+      `[cotizaciones-rc] ${codigo}: emitida por el canal sin pago (opción ${opcion}); recibo pendiente de cobro`,
+    );
+    return true;
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    logger.error(
+      `[cotizaciones-rc] ${codigo}: emisión del canal falló: ${error}`,
+    );
+    await repo.guardarError(codigo, error);
+    try {
+      await repo.liberarCanal(codigo);
+    } catch {
+      // Queda la marca del canal: «Emitir como pendiente» se puede volver a pedir.
+    }
+    return false;
+  }
+}
+
+/** Reclama y emite por el canal; si no queda emitida lanza con el motivo real (solo lo ve el admin). */
+async function reclamarYEmitirCanal(
+  codigo: string,
+  opcion: Opcion,
+): Promise<void> {
+  if (
+    !(await repo.reclamarEmisionCanal(codigo, opcion, new Date().toISOString()))
+  ) {
+    throw new AppError(
+      `La cotización ${codigo} ya se está emitiendo, ya no está vigente o cambió de estado.`,
+      409,
+    );
+  }
+  if (await emitirCanal(codigo, opcion)) return;
+  const fila = await repo.porCodigo(codigo);
+  throw new AppError(
+    `No se completó la emisión: ${fila?.error ?? 'sin detalle'}`,
+    502,
+  );
+}
+
+/**
+ * Canal (vista admin): emite sin pago la opción elegida de una cotización vigente sin pago confirmado. Mismo código
+ * de emisión que la pagada, sin cobro: los recibos quedan pendientes de cobro en Sis2000. El correo de la póliza sale
+ * en segundo plano, sin recibo.
+ */
+export async function emitirPendiente(
+  codigoRaw: unknown,
+  body: unknown,
+): Promise<FilaCotizacion> {
+  const fila = await obtener(codigoRaw, true);
+  if (pagadoDe(fila) || fila.estado === 'pagada' || fila.estado === 'emitida') {
+    throw new AppError(
+      `La cotización ${fila.codigo} ya está ${fila.estado === 'emitida' ? 'emitida' : 'pagada'}.`,
+      409,
+    );
+  }
+  const aMedias = polizaParcial(fila.poliza);
+  if (vencida(fila) && !aMedias)
+    throw new AppError(`La cotización ${fila.codigo} venció (15 días).`, 410);
+  const b = esObj(body) ? body : {};
+  const alt = alternativaDe(fila.datos, b.opcion);
+  emisionesDeOpcion(fila.datos, alt);
+  const previa = canalDe(fila.pago);
+  if (aMedias && previa && previa.opcion !== alt.opcion) {
+    throw new AppError(
+      `La cotización ${fila.codigo} ya tiene una póliza emitida de la opción ${previa.opcion}: completa esa opción.`,
+      409,
+    );
+  }
+  await guardarAnexosDeOpcion(fila.codigo, alt.opcion, b.anexos);
+  await reclamarYEmitirCanal(fila.codigo, alt.opcion);
+  void enviarCorreoPoliza(fila.codigo);
+  return obtener(fila.codigo, true);
+}
+
+/** Reintento de una emisión del canal sin pago: completa la póliza que falta o reenvía el correo. Nunca cobra. */
+async function reintentarCanal(
+  fila: FilaCotizacion,
+  opcion: Opcion,
+): Promise<FilaCotizacion> {
+  if (fila.estado === 'emitida') {
+    if (
+      !polizasDe(fila.poliza).length ||
+      correoPolizaEnviado(fila.correoPoliza)
+    ) {
+      throw new AppError(
+        `La cotización ${fila.codigo} no tiene nada pendiente: el recibo se cobra en caja.`,
+        409,
+      );
+    }
+  } else {
+    await reclamarYEmitirCanal(fila.codigo, opcion);
+  }
+  await enviarCorreoPoliza(fila.codigo);
+  return obtener(fila.codigo, true);
+}
+
 const cobrando = new Set<string>();
 
 /**
  * Admin: reintenta la emisión de una pagada sin póliza (o con una de sus dos pólizas sin emitir), el cobro de una
  * emitida con algún recibo pendiente y el correo de la póliza si no se llegó a enviar (ya enviado no se repite).
+ * Una emisión del canal sin pago se completa sin cobrar: no hubo pago que aplicar.
  */
 export async function reintentar(codigoRaw: unknown): Promise<FilaCotizacion> {
-  const fila = await obtener(codigoRaw);
+  const fila = await obtener(codigoRaw, true);
   const pagado = pagadoDe(fila);
+  const canal = canalDe(fila.pago);
+  if (!pagado && canal) return reintentarCanal(fila, canal.opcion);
   if (!pagado)
     throw new AppError(
       `La cotización ${fila.codigo} no tiene un pago confirmado.`,
