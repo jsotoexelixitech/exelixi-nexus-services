@@ -112,10 +112,14 @@ export async function catalogoCanales(
         if (!cod.includes('-')) continue;
         const num = cod.split('-').pop() as string;
         const previo = porNumero.get(num);
-        porNumero.set(num, previo === undefined || previo === canal ? canal : null);
+        porNumero.set(
+          num,
+          previo === undefined || previo === canal ? canal : null,
+        );
       }
       for (const [num, canal] of porNumero)
-        if (canal && !valor.gestorCanal.has(num)) valor.gestorCanal.set(num, canal);
+        if (canal && !valor.gestorCanal.has(num))
+          valor.gestorCanal.set(num, canal);
       for (const lista of puntos.values()) {
         lista.sort(
           (a, b) =>
@@ -153,7 +157,11 @@ export function nombresCanalEnCache(): Map<string, string> | null {
 export function nombresActoresEnCache(): NombresActores | null {
   const v = cache?.valor;
   return v
-    ? { canal: v.nombres, gestor: v.gestorNombre ?? null, gestorCanal: v.gestorCanal }
+    ? {
+        canal: v.nombres,
+        gestor: v.gestorNombre ?? null,
+        gestorCanal: v.gestorCanal,
+      }
     : null;
 }
 
@@ -284,7 +292,9 @@ export async function emisoresDePolizas(
         },
       );
       if (!res.ok) {
-        logger.warn(`[expedientes] canal de pólizas en Sis2000: HTTP ${res.status}`);
+        logger.warn(
+          `[expedientes] canal de pólizas en Sis2000: HTTP ${res.status}`,
+        );
         // 404: nest-api sin la ruta todavía; no tiene sentido seguir con los demás lotes.
         if (res.status === 404 || res.status === 403) break;
         continue;
