@@ -125,13 +125,30 @@ export async function referenciaUsada(
   return (rows[0]?.n ?? 0) > 0;
 }
 
-/** Reclamo atómico de la emisión de una cotización pagada sin póliza (se libera solo a los 5 minutos). */
+/**
+ * Reclamo atómico de la emisión de una cotización pagada sin póliza o con la emisión a medias (varias pólizas y
+ * alguna sin emitir: crc_poliza.parcial). Se libera solo a los 5 minutos.
+ */
 export async function reclamarEmision(codigo: string): Promise<boolean> {
   const n = await prisma.$executeRaw`
     UPDATE cotizacion_rc SET crc_emitiendo_en = CURRENT_TIMESTAMP
-    WHERE crc_codigo = ${codigo} AND crc_estado = 'pagada' AND crc_poliza IS NULL
+    WHERE crc_codigo = ${codigo} AND crc_estado = 'pagada'
+      AND (crc_poliza IS NULL OR crc_poliza ->> 'parcial' = 'true')
       AND (crc_emitiendo_en IS NULL OR crc_emitiendo_en < CURRENT_TIMESTAMP - interval '5 minutes')`;
   return n > 0;
+}
+
+/**
+ * Pólizas ya emitidas de una cotización pagada que aún no las tiene todas (RCP + RCE): se guardan al salir cada
+ * una para que un reintento no la vuelva a emitir. La cotización sigue pagada hasta guardarPoliza.
+ */
+export async function guardarPolizaParcial(
+  codigo: string,
+  poliza: unknown,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE cotizacion_rc SET crc_poliza = ${json(poliza)}::jsonb, crc_updated_at = CURRENT_TIMESTAMP
+    WHERE crc_codigo = ${codigo} AND crc_estado = 'pagada'`;
 }
 
 export async function guardarPoliza(
