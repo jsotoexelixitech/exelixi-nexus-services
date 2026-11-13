@@ -11,6 +11,10 @@
  * Todo canal no listado queda obligatorio. Desde aquí solo cambia `ocrOpcional.canales`:
  * `ocrOpcional.gestores` y el resto de la configuración del OCR quedan tal cual. Los
  * gestores no se muestran (cuentan dentro de su canal), pero tampoco se borran.
+ *
+ * Productores: `ocrOpcional.productores: string[]` (cproductor con OCR OPCIONAL; ausente =
+ * ninguno) y `ocrOpcional.productoresNombres` (código → nombre, solo para mostrar). No hay
+ * catálogo: se agregan por código. Solo cambian si el guardado manda `productores`.
  */
 import type { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
@@ -58,6 +62,21 @@ export interface CambioOcrPorCanal {
   motivo: string | null;
   agregados: string[];
   quitados: string[];
+  /** Productores que pasaron a OCR opcional / volvieron a obligatorio en ese cambio. */
+  productoresAgregados: string[];
+  productoresQuitados: string[];
+}
+
+/** Productor (cproductor) con OCR opcional. Los no listados quedan obligatorios. */
+export interface ProductorOcr {
+  codigo: string;
+  nombre: string | null;
+  ocrOpcional: true;
+}
+
+interface ProductoresConfig {
+  lista: string[];
+  nombres: Record<string, string>;
 }
 
 export interface OcrPorCanalVista {
@@ -69,6 +88,10 @@ export interface OcrPorCanalVista {
   opcionales: string[];
   /** Gestores con OCR opcional puestos desde el panel del OCR: se conservan, no se muestran. */
   gestoresConfigurados: number;
+  /** Productores con OCR opcional (ocrOpcional.productores), con su nombre si se guardó. */
+  productores: ProductorOcr[];
+  /** ocrOpcional.productores tal como queda en la config. */
+  productoresOpcionales: string[];
   cambios: CambioOcrPorCanal[];
   sinCambios?: boolean;
 }
@@ -83,6 +106,25 @@ function codigos(v: unknown): string[] {
   return Array.isArray(v)
     ? Array.from(new Set(v.map(codigo).filter(Boolean)))
     : [];
+}
+
+/** ocrOpcional.productoresNombres: solo pares código → texto no vacío. */
+function nombresDe(v: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, n] of Object.entries(rec(v) ?? {})) {
+    const cod = codigo(k);
+    const nombre = typeof n === 'string' ? n.trim().slice(0, 120) : '';
+    if (cod && nombre) out[cod] = nombre;
+  }
+  return out;
+}
+
+function mismosNombres(
+  a: Record<string, string>,
+  b: Record<string, string>,
+): boolean {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
 }
 
 function empresaDelPortal(): number | null {
@@ -207,6 +249,9 @@ async function leerConfigOcr(db: Db, empresaId: number, producto: ProductoOcr) {
     ocrOpcional: oc,
     canales: codigos(oc?.canales),
     gestores: codigos(oc?.gestores).length,
+    // Configs anteriores no traen la clave: ausente = ningún productor opcional.
+    productores: codigos(oc?.productores),
+    productoresNombres: nombresDe(oc?.productoresNombres),
   };
 }
 
@@ -230,6 +275,8 @@ async function cambiosRecientes(
       motivo: typeof d.motivo === 'string' ? d.motivo : null,
       agregados: codigos(d.agregados),
       quitados: codigos(d.quitados),
+      productoresAgregados: codigos(d.productoresAgregados),
+      productoresQuitados: codigos(d.productoresQuitados),
     }));
 }
 
@@ -241,6 +288,7 @@ function armarVista(
   opcionales: string[],
   gestores: number,
   cambios: CambioOcrPorCanal[],
+  productores: ProductoresConfig = { lista: [], nombres: {} },
 ): OcrPorCanalVista {
   const marcados = new Set(opcionales);
   const enCatalogo = new Set(catalogo.map((c) => c.codigo));
@@ -269,6 +317,12 @@ function armarVista(
     ],
     opcionales,
     gestoresConfigurados: gestores,
+    productores: productores.lista.map((c) => ({
+      codigo: c,
+      nombre: productores.nombres[c] ?? null,
+      ocrOpcional: true as const,
+    })),
+    productoresOpcionales: productores.lista,
     cambios,
   };
 }
@@ -288,11 +342,13 @@ export async function obtenerOcrPorCanal(
     actual.canales,
     actual.gestores,
     await cambiosRecientes(empresaId, producto),
+    { lista: actual.productores, nombres: actual.productoresNombres },
   );
 }
 
 /**
- * Reemplaza `ocrOpcional.canales` por la lista recibida. Lo demás de la fila (gestores,
+ * Reemplaza `ocrOpcional.canales` por la lista recibida y, solo si el guardado manda
+ * `productores`, también `ocrOpcional.productores` (+ nombres). Lo demás de la fila (gestores,
  * documentos, mapeador, visual…) se escribe tal como estaba. Config y evento de auditoría
  * van en la misma transacción: no hay cambio sin registro.
  */
@@ -308,6 +364,10 @@ export async function guardarOcrPorCanal(
   );
   const activos = new Set(catalogo.canales.map((c) => c.codigo));
   const pedidos = codigos(body.canales);
+  // Sin `productores` en el cuerpo (cliente anterior) no se toca esa lista.
+  const pideProductores = body.productores !== undefined;
+  const pedidosProd = codigos(body.productores);
+  const nombresPedidos = nombresDe(body.productoresNombres);
 
   const r = await prisma.$transaction(async (tx) => {
     const actual = await leerConfigOcr(tx, empresaId, producto);
@@ -337,11 +397,59 @@ export async function guardarOcrPorCanal(
       );
     }
 
+    if (body.baseProductores) {
+      const baseProd = new Set(codigos(body.baseProductores));
+      const igual =
+        baseProd.size === actual.productores.length &&
+        actual.productores.every((c) => baseProd.has(c));
+      if (!igual) {
+        throw new AppError(
+          'La lista de productores con OCR opcional cambió mientras editaba (otra persona o el panel del OCR). Recargue la sección y vuelva a intentar.',
+          409,
+        );
+      }
+    }
+
     const pedidosSet = new Set(pedidos);
     const agregados = pedidos.filter((c) => !previos.has(c));
     const quitados = actual.canales.filter((c) => !pedidosSet.has(c));
-    if (agregados.length === 0 && quitados.length === 0) {
-      return { actual, nuevo: actual.canales, sinCambios: true };
+
+    // Productores: mismo criterio que canales (los que siguen, luego los nuevos).
+    const previosProd = new Set(actual.productores);
+    const pedidosProdSet = new Set(pedidosProd);
+    const prodAgregados = pideProductores
+      ? pedidosProd.filter((c) => !previosProd.has(c))
+      : [];
+    const prodQuitados = pideProductores
+      ? actual.productores.filter((c) => !pedidosProdSet.has(c))
+      : [];
+    const nuevoProd = pideProductores
+      ? [
+          ...actual.productores.filter((c) => pedidosProdSet.has(c)),
+          ...prodAgregados,
+        ]
+      : actual.productores;
+    const nombresProd: Record<string, string> = {};
+    for (const c of nuevoProd) {
+      const n = nombresPedidos[c] ?? actual.productoresNombres[c];
+      if (n) nombresProd[c] = n;
+    }
+    const cambiaProd =
+      pideProductores &&
+      (prodAgregados.length > 0 ||
+        prodQuitados.length > 0 ||
+        !mismosNombres(nombresProd, actual.productoresNombres));
+
+    if (agregados.length === 0 && quitados.length === 0 && !cambiaProd) {
+      return {
+        actual,
+        nuevo: actual.canales,
+        productores: {
+          lista: actual.productores,
+          nombres: actual.productoresNombres,
+        },
+        sinCambios: true,
+      };
     }
 
     // Mismo orden que deja el panel del OCR: los que siguen, luego los nuevos al final.
@@ -351,7 +459,13 @@ export async function guardarOcrPorCanal(
     ];
     const configJson = {
       ...actual.configJson,
-      ocrOpcional: { ...(actual.ocrOpcional ?? {}), canales: nuevo },
+      ocrOpcional: {
+        ...(actual.ocrOpcional ?? {}),
+        canales: nuevo,
+        ...(cambiaProd
+          ? { productores: nuevoProd, productoresNombres: nombresProd }
+          : {}),
+      },
     } as Prisma.InputJsonValue;
     const where = {
       empresaId_producto_modulo: { empresaId, producto, modulo: MODULO },
@@ -377,16 +491,31 @@ export async function guardarOcrPorCanal(
           agregados,
           quitados,
           gestoresConservados: actual.gestores,
+          ...(cambiaProd
+            ? {
+                productoresAnterior: actual.productores,
+                productoresNuevo: nuevoProd,
+                productoresAgregados: prodAgregados,
+                productoresQuitados: prodQuitados,
+              }
+            : {}),
           motivo,
         },
       },
     });
-    return { actual, nuevo, sinCambios: false };
+    return {
+      actual,
+      nuevo,
+      productores: cambiaProd
+        ? { lista: nuevoProd, nombres: nombresProd }
+        : { lista: actual.productores, nombres: actual.productoresNombres },
+      sinCambios: false,
+    };
   });
 
   if (!r.sinCambios) {
     logger.info(
-      `[expedientes] OCR por canal: empresa=${empresaId} producto=${producto} opcionales=${r.nuevo.length} (gestores conservados: ${r.actual.gestores})`,
+      `[expedientes] OCR por canal: empresa=${empresaId} producto=${producto} opcionales=${r.nuevo.length} productores=${r.productores.lista.length} (gestores conservados: ${r.actual.gestores})`,
     );
   }
   const vista = armarVista(
@@ -397,6 +526,7 @@ export async function guardarOcrPorCanal(
     r.nuevo,
     r.actual.gestores,
     await cambiosRecientes(empresaId, producto),
+    r.productores,
   );
   return r.sinCambios ? { ...vista, sinCambios: true } : vista;
 }
