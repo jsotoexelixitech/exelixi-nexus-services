@@ -7,6 +7,7 @@
  *   3. confirmarPago: valida token, monto y que la referencia sea un pago verificado en pagos.registros_pago;
  *      reclama la cotización (pendiente_pago → pagada) y dispara la emisión.
  *   4. emitirPagada: nest-api emite (modo cotizador) y cobra el recibo (collection/activate) → emitida.
+ *      RCP + RCE son dos pólizas con un solo pago: se emite y se cobra una por ramo; la que ya salió no se reemite.
  * El navegador del cliente nunca emite: solo consulta el estado.
  */
 import { randomBytes } from 'crypto';
@@ -18,24 +19,31 @@ import * as nest from './cotizaciones-rc.nest';
 import {
   MAX_ADJUNTOS_BYTES,
   MAX_INTENTOS,
+  NOMBRE_RAMO,
   OPCIONES,
   adjuntosQueCaben,
   alternativaDe,
   anexosDeCheckout,
   armarCobro,
   armarCorreoPoliza,
+  armarPolizaGuardada,
   correoPolizaEnviado,
   correoValido,
-  emisionDeOpcion,
+  emisionesDeOpcion,
   esObj,
   evaluarRegistros,
   intentoPorToken,
   intentosDe,
   monedaDeCobro,
   montoTolerancia,
+  nombrePdfPoliza,
   normalizarCodigo,
   pagoDeNotificacion,
+  polizaParcial,
+  polizasDe,
+  reciboCobrado,
   redondear,
+  repartirPago,
   sha256,
   validarCotizacionNueva,
   vencida,
@@ -45,6 +53,7 @@ import {
   type MotivoVerificacion,
   type Opcion,
   type PagoConfirmado,
+  type PolizaCotizacion,
 } from './cotizaciones-rc.domain';
 
 type Obj = Record<string, unknown>;
@@ -196,7 +205,10 @@ function urlRetorno(returnUrl: unknown, codigo: string): string | null {
   }
 }
 
-/** Manda la cotización a pagar: crea el checkout en Pagos por la prima de la opción elegida. */
+/**
+ * Manda la cotización a pagar: crea el checkout en Pagos por la prima de la opción elegida. Con dos pólizas
+ * (RCP + RCE) es un solo pago por la suma de las primas, con una línea por póliza.
+ */
 export async function crearCheckout(codigoRaw: unknown, body: unknown) {
   const cfg = configCheckout();
   const fila = await obtener(codigoRaw);
@@ -210,7 +222,7 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
   }
   const b = esObj(body) ? body : {};
   const alt = alternativaDe(fila.datos, b.opcion);
-  emisionDeOpcion(fila.datos, alt);
+  const emisiones = emisionesDeOpcion(fila.datos, alt);
   const moneda = monedaDeCobro(fila.moneda);
   const hoy = new Date().toISOString().slice(0, 10);
   const tasa =
@@ -223,6 +235,13 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
           );
         });
   const totalVes = redondear(alt.prima * tasa);
+  const primas = emisiones.map((e) => redondear(Number(e.prima_total)));
+  const partesVes = repartirPago(totalVes, primas);
+  const polizas = emisiones.map((e, i) => ({
+    cramo: Number(e.cramo),
+    producto: NOMBRE_RAMO[Number(e.cramo)] ?? 'Responsabilidad Civil',
+    prima: primas[i],
+  }));
 
   const token = randomBytes(24).toString('hex');
   const notifyUrl = `${cfg.notifyBase}/api/cotizaciones-rc/pago-callback/${fila.codigo}?t=${token}`;
@@ -237,13 +256,20 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
       subtitle: `Cotización ${fila.codigo} · La Mundial de Seguros`,
       totalVes,
       ...(moneda === 'USD' ? { totalUsd: alt.prima, exchangeRate: tasa } : {}),
-      lines: [
-        {
-          label: `Prima anual · opción ${alt.opcion}`,
-          amountVes: totalVes,
-          ...(moneda === 'USD' ? { amountUsd: alt.prima } : {}),
-        },
-      ],
+      lines:
+        polizas.length > 1
+          ? polizas.map((p, i) => ({
+              label: `${p.producto} · opción ${alt.opcion}`,
+              amountVes: partesVes[i],
+              ...(moneda === 'USD' ? { amountUsd: p.prima } : {}),
+            }))
+          : [
+              {
+                label: `Prima anual · opción ${alt.opcion}`,
+                amountVes: totalVes,
+                ...(moneda === 'USD' ? { amountUsd: alt.prima } : {}),
+              },
+            ],
     },
     rules: {
       requirePayment: true,
@@ -309,7 +335,7 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
     );
   }
   logger.info(
-    `[cotizaciones-rc] checkout ${fila.codigo} opcion=${alt.opcion} totalVes=${totalVes} sid=${link.sid} anexos=${anexos ? anexos.pdf.length : 0} bytes`,
+    `[cotizaciones-rc] checkout ${fila.codigo} opcion=${alt.opcion} polizas=${polizas.map((p) => `${p.cramo}:${p.prima}`).join('+')} totalVes=${totalVes} sid=${link.sid} anexos=${anexos ? anexos.pdf.length : 0} bytes`,
   );
   return {
     codigo: fila.codigo,
@@ -318,6 +344,7 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
     moneda,
     tasa,
     totalVes,
+    polizas,
     checkoutUrl: link.checkoutUrl,
   };
 }
@@ -456,18 +483,26 @@ function pagadoDe(
 /** Sis2000 no permite dos pólizas vigentes con el mismo asegurado, plan y unidad: se prueba la unidad siguiente. */
 const MAX_UNIDADES = 5;
 
+/**
+ * Cobra el recibo de una póliza con el pago confirmado. `x.mpago`: la parte del pago de ese recibo cuando el pago
+ * cubre varias pólizas; `x.adicional`: no es el primer recibo que se cobra con esa referencia.
+ */
 async function cobrar(
   codigo: string,
   poliza: nest.PolizaEmitida,
   pago: PagoConfirmado,
+  x: { mpago?: number; adicional?: boolean } = {},
 ): Promise<Obj> {
+  if (!poliza.cnrecibo)
+    return { ok: false, error: 'La emisión no devolvió número de recibo.' };
   try {
-    const c = await nest.cobrarRecibo(armarCobro(poliza.cnrecibo, pago));
+    const c = await nest.cobrarRecibo(armarCobro(poliza.cnrecibo, pago, x));
     logger.info(
-      `[cotizaciones-rc] ${codigo}: recibo ${poliza.cnrecibo} cobrado`,
+      `[cotizaciones-rc] ${codigo}: recibo ${poliza.cnrecibo} cobrado${x.mpago != null ? ` (Bs ${x.mpago} de ${pago.monto})` : ''}`,
     );
     return {
       ok: true,
+      ...(x.mpago != null ? { mpago: x.mpago } : {}),
       ingresoCaja: c.ingresoCaja,
       transaccion: c.transaccion,
       cobradoEn: new Date().toISOString(),
@@ -486,7 +521,8 @@ const kb = (n: number): string => `${Math.max(1, Math.round(n / 1024))} KB`;
 /**
  * Correo de la póliza al tomador (nest-api mail/send, plantilla `branded`): datos de la póliza, enlace «Ver mi póliza»,
  * el PDF de la póliza, el recibo cobrado (ingreso de caja) y el de condicionado y anexos guardado en el checkout. Sale una sola vez (reclamo atómico) y
- * solo para cotizaciones pagadas. Nunca lanza: un fallo de correo no toca la emisión; queda en crc_correo_poliza.
+ * solo para cotizaciones pagadas. Con varias pólizas (RCP + RCE) es un único correo con todas las pólizas y sus
+ * recibos cobrados. Nunca lanza: un fallo de correo no toca la emisión; queda en crc_correo_poliza.
  */
 export async function enviarCorreoPoliza(codigo: string): Promise<void> {
   try {
@@ -503,17 +539,12 @@ export async function enviarCorreoPoliza(codigo: string): Promise<void> {
   try {
     const fila = await repo.porCodigo(codigo);
     const pagado = fila && pagadoDe(fila);
-    const p = fila && esObj(fila.poliza) ? fila.poliza : null;
-    if (!fila || !pagado || !p || !p.cnpoliza)
+    const polizas = fila ? polizasDe(fila.poliza) : [];
+    if (!fila || !pagado || !polizas.length)
       throw new Error('La cotización no tiene póliza pagada.');
     if (!correoValido(fila.tomadorCorreo))
       throw new Error('La cotización no tiene un correo válido del tomador.');
     a = String(fila.tomadorCorreo).trim().toLowerCase();
-    const poliza = {
-      cnpoliza: String(p.cnpoliza),
-      cnrecibo: String(p.cnrecibo ?? ''),
-      urlpoliza: String(p.urlpoliza ?? ''),
-    };
 
     let anexos: { nombre: string; pdf: Buffer } | null = null;
     try {
@@ -524,27 +555,31 @@ export async function enviarCorreoPoliza(codigo: string): Promise<void> {
       );
     }
     // Recibo solo si quedó cobrado: collection/activate devuelve el enlace del ingreso de caja.
-    const cobro = esObj(p.cobro) ? p.cobro : {};
-    const urlRecibo =
-      cobro.ok === true && cobro.ingresoCaja ? String(cobro.ingresoCaja) : '';
-    const [pdfPoliza, pdfRecibo] = await Promise.all([
-      poliza.urlpoliza
-        ? nest.descargarPdf(poliza.urlpoliza, MAX_ADJUNTOS_BYTES)
-        : null,
-      urlRecibo ? nest.descargarPdf(urlRecibo, MAX_ADJUNTOS_BYTES) : null,
+    const urlRecibo = (p: PolizaCotizacion): string =>
+      reciboCobrado(p) && p.cobro?.ingresoCaja
+        ? String(p.cobro.ingresoCaja)
+        : '';
+    const bajar = (url: string) =>
+      url ? nest.descargarPdf(url, MAX_ADJUNTOS_BYTES) : null;
+    const [pdfPolizas, pdfRecibos] = await Promise.all([
+      Promise.all(polizas.map((p) => bajar(p.urlpoliza))),
+      Promise.all(polizas.map((p) => bajar(urlRecibo(p)))),
     ]);
     const { adjuntos, sinPdfPoliza, total } = adjuntosQueCaben({
-      poliza: pdfPoliza
-        ? { nombre: `Poliza_${poliza.cnpoliza}.pdf`, pdf: pdfPoliza }
-        : null,
-      recibo: pdfRecibo
-        ? {
-            nombre: `Recibo_${poliza.cnrecibo || poliza.cnpoliza}.pdf`,
-            pdf: pdfRecibo,
-          }
-        : null,
+      polizas: polizas.map((p, i) => {
+        const pdf = pdfPolizas[i];
+        return pdf ? { nombre: nombrePdfPoliza(p.cnpoliza), pdf } : null;
+      }),
+      recibos: polizas.map((p, i) => {
+        const pdf = pdfRecibos[i];
+        return pdf
+          ? { nombre: `Recibo_${p.cnrecibo || p.cnpoliza}.pdf`, pdf }
+          : null;
+      }),
       anexos,
+      esperadas: polizas.length,
     });
+    const numeros = polizas.map((p) => p.cnpoliza).join(' y ');
     let prima: number | null = null;
     try {
       prima = alternativaDe(fila.datos, pagado.opcion).prima;
@@ -554,14 +589,14 @@ export async function enviarCorreoPoliza(codigo: string): Promise<void> {
     const peso = (b: Uint8Array | null | undefined, sin: string) =>
       b ? kb(b.length) : sin;
     logger.info(
-      `[cotizaciones-rc] ${codigo}: enviando correo de la póliza ${poliza.cnpoliza} ` +
-        `poliza=${peso(pdfPoliza, 'sin PDF')} recibo=${peso(pdfRecibo, urlRecibo ? 'sin PDF' : 'no')} ` +
+      `[cotizaciones-rc] ${codigo}: enviando correo de la póliza ${numeros} ` +
+        `poliza=${pdfPolizas.map((b) => peso(b, 'sin PDF')).join('+')} recibo=${polizas.map((p, i) => peso(pdfRecibos[i], urlRecibo(p) ? 'sin PDF' : 'no')).join('+')} ` +
         `anexos=${peso(anexos?.pdf, 'no')} adjuntos=${adjuntos.length} (${adjuntos.map((x) => x.nombre).join(', ') || 'solo enlace'}) total=${kb(total)}`,
     );
     const r = await nest.enviarCorreo(
       armarCorreoPoliza(
         fila,
-        poliza,
+        polizas,
         prima,
         adjuntos,
         !!anexos && adjuntos.includes(anexos),
@@ -575,7 +610,7 @@ export async function enviarCorreoPoliza(codigo: string): Promise<void> {
       ...(sinPdfPoliza ? { sinPdfPoliza: true } : {}),
     });
     logger.info(
-      `[cotizaciones-rc] ${codigo}: correo de la póliza ${poliza.cnpoliza} enviado`,
+      `[cotizaciones-rc] ${codigo}: correo de la póliza ${numeros} enviado`,
     );
   } catch (e) {
     const error = (e instanceof Error ? e.message : String(e)).slice(0, 500);
@@ -590,7 +625,44 @@ export async function enviarCorreoPoliza(codigo: string): Promise<void> {
   }
 }
 
-/** Emite en nest-api la cotización pagada y cobra el recibo. Solo corre con la cotización reclamada. */
+/** Emite una póliza en nest-api; con unidad (ramo 28), si ya hay una vigente prueba la siguiente. */
+async function emitirUna(
+  codigo: string,
+  emision: Obj,
+): Promise<nest.PolizaEmitida> {
+  let poliza: nest.PolizaEmitida | null = null;
+  const unidad =
+    Number(emision.apartamento) > 0 ? Number(emision.apartamento) : 0;
+  for (let i = 0; i < MAX_UNIDADES && !poliza; i++) {
+    try {
+      poliza = await nest.emitir(
+        unidad ? { ...emision, apartamento: unidad + i } : emision,
+      );
+    } catch (e) {
+      const duplicada =
+        e instanceof nest.NestError &&
+        e.status === 409 &&
+        unidad > 0 &&
+        i < MAX_UNIDADES - 1;
+      if (!duplicada) throw e;
+      logger.warn(
+        `[cotizaciones-rc] ${codigo}: póliza vigente con la unidad ${unidad + i}; se prueba la siguiente`,
+      );
+    }
+  }
+  if (!poliza) throw new Error('No se pudo emitir la póliza.');
+  logger.info(
+    `[cotizaciones-rc] ${codigo}: emitida ${poliza.cnpoliza} recibo ${poliza.cnrecibo} (ramo ${String(emision.cramo)})`,
+  );
+  return poliza;
+}
+
+/**
+ * Emite en nest-api la cotización pagada y cobra los recibos. Solo corre con la cotización reclamada.
+ * Una póliza por body de emisión de la opción (RCP + RCE: dos). Con varias, cada póliza se guarda al salir
+ * (crc_poliza.parcial): si la siguiente falla, la cotización queda pagada con el error y el reintento emite solo la
+ * que falta. El pago se reparte entre los recibos en proporción a la prima de cada póliza.
+ */
 export async function emitirPagada(codigo: string): Promise<void> {
   if (!(await repo.reclamarEmision(codigo))) return;
   let emitida = false;
@@ -600,44 +672,59 @@ export async function emitirPagada(codigo: string): Promise<void> {
     if (!fila || !pagado)
       throw new Error('La cotización no tiene un pago confirmado.');
     const alt = alternativaDe(fila.datos, pagado.opcion);
-    const emision: Obj = {
-      ...emisionDeOpcion(fila.datos, alt),
-      ncotizacion: codigo,
+    const emisiones = emisionesDeOpcion(fila.datos, alt);
+    const varias = emisiones.length > 1;
+    const primas = emisiones.map((e) => redondear(Number(e.prima_total)));
+    const partes = repartirPago(pagado.pago.monto, primas);
+    // Pólizas que salieron en un intento anterior: no se vuelven a emitir.
+    const previas = polizaParcial(fila.poliza) ? polizasDe(fila.poliza) : [];
+    const polizas: PolizaCotizacion[] = [];
+    const guardarAvance = async () => {
+      if (varias)
+        await repo.guardarPolizaParcial(
+          codigo,
+          armarPolizaGuardada(polizas, true),
+        );
     };
 
-    let poliza: nest.PolizaEmitida | null = null;
-    const unidad =
-      Number(emision.apartamento) > 0 ? Number(emision.apartamento) : 0;
-    for (let i = 0; i < MAX_UNIDADES && !poliza; i++) {
-      try {
-        poliza = await nest.emitir(
-          unidad ? { ...emision, apartamento: unidad + i } : emision,
+    for (const [i, e] of emisiones.entries()) {
+      const cramo = Number(e.cramo);
+      let p = previas.find((x) => x.cramo === cramo);
+      if (p) {
+        logger.info(
+          `[cotizaciones-rc] ${codigo}: la póliza del ramo ${cramo} ya estaba emitida (${p.cnpoliza}); no se reemite`,
         );
-      } catch (e) {
-        const duplicada =
-          e instanceof nest.NestError &&
-          e.status === 409 &&
-          unidad > 0 &&
-          i < MAX_UNIDADES - 1;
-        if (!duplicada) throw e;
-        logger.warn(
-          `[cotizaciones-rc] ${codigo}: póliza vigente con la unidad ${unidad + i}; se prueba la siguiente`,
+      } else {
+        const nueva = await emitirUna(codigo, { ...e, ncotizacion: codigo });
+        p = {
+          ...(varias
+            ? { cramo, cotizador: String(e.cotizador ?? ''), prima: primas[i] }
+            : {}),
+          ...nueva,
+          emitidaEn: new Date().toISOString(),
+        };
+      }
+      polizas.push(p);
+      await guardarAvance();
+      if (!reciboCobrado(p)) {
+        p.cobro = await cobrar(
+          codigo,
+          p,
+          pagado.pago,
+          varias
+            ? {
+                mpago: partes[i],
+                adicional: polizas.some((o) => o !== p && reciboCobrado(o)),
+              }
+            : {},
         );
+        await guardarAvance();
       }
     }
-    if (!poliza) throw new Error('No se pudo emitir la póliza.');
-    logger.info(
-      `[cotizaciones-rc] ${codigo}: emitida ${poliza.cnpoliza} recibo ${poliza.cnrecibo}`,
+    await repo.guardarPoliza(
+      codigo,
+      varias ? armarPolizaGuardada(polizas) : polizas[0],
     );
-
-    const cobro = poliza.cnrecibo
-      ? await cobrar(codigo, poliza, pagado.pago)
-      : { ok: false, error: 'La emisión no devolvió número de recibo.' };
-    await repo.guardarPoliza(codigo, {
-      ...poliza,
-      cobro,
-      emitidaEn: new Date().toISOString(),
-    });
     emitida = true;
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
@@ -651,8 +738,8 @@ export async function emitirPagada(codigo: string): Promise<void> {
 const cobrando = new Set<string>();
 
 /**
- * Admin: reintenta la emisión de una pagada sin póliza, el cobro de una emitida cuyo recibo quedó pendiente y el
- * correo de la póliza si no se llegó a enviar (ya enviado no se repite).
+ * Admin: reintenta la emisión de una pagada sin póliza (o con una de sus dos pólizas sin emitir), el cobro de una
+ * emitida con algún recibo pendiente y el correo de la póliza si no se llegó a enviar (ya enviado no se repite).
  */
 export async function reintentar(codigoRaw: unknown): Promise<FilaCotizacion> {
   const fila = await obtener(codigoRaw);
@@ -662,35 +749,51 @@ export async function reintentar(codigoRaw: unknown): Promise<FilaCotizacion> {
       `La cotización ${fila.codigo} no tiene un pago confirmado.`,
       409,
     );
-  if (fila.estado === 'pagada' && !fila.poliza) {
+  const polizas = polizasDe(fila.poliza);
+  const emitidas = fila.estado === 'emitida' && polizas.length > 0;
+  if (
+    fila.estado === 'pagada' &&
+    (!fila.poliza || polizaParcial(fila.poliza))
+  ) {
+    // Sin póliza o con la emisión a medias (RCP + RCE): emite solo lo que falta.
     await emitirPagada(fila.codigo);
   } else if (
-    fila.estado === 'emitida' &&
-    esObj(fila.poliza) &&
-    esObj(fila.poliza.cobro) &&
-    fila.poliza.cobro.ok === true &&
+    emitidas &&
+    polizas.every(reciboCobrado) &&
     !correoPolizaEnviado(fila.correoPoliza)
   ) {
     await enviarCorreoPoliza(fila.codigo);
-  } else if (
-    fila.estado === 'emitida' &&
-    esObj(fila.poliza) &&
-    !(esObj(fila.poliza.cobro) && fila.poliza.cobro.ok === true)
-  ) {
+  } else if (emitidas && !polizas.every(reciboCobrado)) {
     if (cobrando.has(fila.codigo))
       throw new AppError('El cobro de esta cotización ya está en curso.', 409);
     cobrando.add(fila.codigo);
     try {
-      const p = fila.poliza;
-      const poliza = {
-        cnpoliza: String(p.cnpoliza),
-        cnrecibo: String(p.cnrecibo ?? ''),
-        urlpoliza: String(p.urlpoliza ?? ''),
-      };
-      await repo.guardarPoliza(fila.codigo, {
-        ...p,
-        cobro: await cobrar(fila.codigo, poliza, pagado.pago),
-      });
+      const varias = polizas.length > 1;
+      const partes = repartirPago(
+        pagado.pago.monto,
+        polizas.map((p) => p.prima ?? 1),
+      );
+      // Solo los recibos que quedaron sin cobrar; cada uno por su parte del pago.
+      for (const [i, p] of polizas.entries()) {
+        if (reciboCobrado(p)) continue;
+        p.cobro = await cobrar(
+          fila.codigo,
+          p,
+          pagado.pago,
+          varias
+            ? {
+                mpago: partes[i],
+                adicional: polizas.some((o) => o !== p && reciboCobrado(o)),
+              }
+            : {},
+        );
+      }
+      await repo.guardarPoliza(
+        fila.codigo,
+        varias
+          ? { ...(fila.poliza as Obj), ...armarPolizaGuardada(polizas) }
+          : { ...(fila.poliza as Obj), cobro: polizas[0].cobro },
+      );
     } finally {
       cobrando.delete(fila.codigo);
     }
