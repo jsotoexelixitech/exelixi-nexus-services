@@ -13,8 +13,9 @@
  * gestores no se muestran (cuentan dentro de su canal), pero tampoco se borran.
  *
  * Productores: `ocrOpcional.productores: string[]` (cproductor con OCR OPCIONAL; ausente =
- * ninguno) y `ocrOpcional.productoresNombres` (código → nombre, solo para mostrar). No hay
- * catálogo: se agregan por código. Solo cambian si el guardado manda `productores`.
+ * ninguno) y `ocrOpcional.productoresNombres` (código → nombre, solo para mostrar). La vista
+ * trae el catálogo de productores (nest-api) para listarlos; si no carga, se agregan por
+ * código. Solo cambian si el guardado manda `productores`.
  */
 import type { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
@@ -22,7 +23,9 @@ import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
 import {
   catalogoCanales,
+  catalogoProductores,
   type CanalCatalogo,
+  type ProductorCatalogo,
   type PuntoCatalogo,
 } from './expedientes.canales';
 import type {
@@ -92,6 +95,8 @@ export interface OcrPorCanalVista {
   productores: ProductorOcr[];
   /** ocrOpcional.productores tal como queda en la config. */
   productoresOpcionales: string[];
+  /** Catálogo de productores para la lista con buscador; null si nest-api no lo entregó. */
+  catalogoProductores: ProductorCatalogo[] | null;
   cambios: CambioOcrPorCanal[];
   sinCambios?: boolean;
 }
@@ -289,6 +294,7 @@ function armarVista(
   gestores: number,
   cambios: CambioOcrPorCanal[],
   productores: ProductoresConfig = { lista: [], nombres: {} },
+  catProductores: ProductorCatalogo[] | null = null,
 ): OcrPorCanalVista {
   const marcados = new Set(opcionales);
   const enCatalogo = new Set(catalogo.map((c) => c.codigo));
@@ -323,6 +329,7 @@ function armarVista(
       ocrOpcional: true as const,
     })),
     productoresOpcionales: productores.lista,
+    catalogoProductores: catProductores,
     cambios,
   };
 }
@@ -332,7 +339,11 @@ export async function obtenerOcrPorCanal(
   producto: ProductoOcr,
 ): Promise<OcrPorCanalVista> {
   const nombre = await empresaNombre(empresaId);
-  const catalogo = await canalesActivos(MENSAJE_SIN_CATALOGO);
+  // El de productores nunca lanza: sin él la sección sigue con «agregar por código».
+  const [catalogo, catProductores] = await Promise.all([
+    canalesActivos(MENSAJE_SIN_CATALOGO),
+    catalogoProductores(),
+  ]);
   const actual = await leerConfigOcr(prisma, empresaId, producto);
   return armarVista(
     empresaId,
@@ -343,6 +354,7 @@ export async function obtenerOcrPorCanal(
     actual.gestores,
     await cambiosRecientes(empresaId, producto),
     { lista: actual.productores, nombres: actual.productoresNombres },
+    catProductores,
   );
 }
 
@@ -527,6 +539,7 @@ export async function guardarOcrPorCanal(
     r.actual.gestores,
     await cambiosRecientes(empresaId, producto),
     r.productores,
+    await catalogoProductores(),
   );
   return r.sinCambios ? { ...vista, sinCambios: true } : vista;
 }
