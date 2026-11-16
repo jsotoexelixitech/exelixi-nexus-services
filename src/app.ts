@@ -31,6 +31,7 @@ import emisionRoutes from './modules/emision/emision.routes';
 import funeralSubmissionRoutes from './modules/funeral-submission/funeral-submission.routes';
 import portalRoutes from './modules/portal/portal.routes';
 import expedientesRoutes from './modules/marketplace-expedientes/expedientes.routes';
+import cotizacionesRcRoutes from './modules/cotizaciones-rc/cotizaciones-rc.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -80,6 +81,25 @@ app.use(
 );
 app.use(compression());
 app.use(cookieParser());
+// Checkout y «emitir como pendiente» del cotizador RC: traen el PDF «Condicionado y anexos» en base64 (hasta 8 MB). Solo con API key.
+app.post(
+  /^\/api\/cotizaciones-rc\/[A-Za-z0-9-]+\/(checkout|emitir-pendiente)\/?$/,
+  apiKeyGuard,
+  express.json({ limit: '12mb' }),
+);
+// Guardar una cotización del cotizador RC: se conserva el cuerpo crudo para verificar la firma HMAC del proxy
+// (x-cotizador-firma). Solo con API key.
+app.post(
+  /^\/api\/cotizaciones-rc\/?$/,
+  apiKeyGuard,
+  express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody =
+        Buffer.from(buf);
+    },
+  }),
+);
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
@@ -120,6 +140,10 @@ app.use('/api/portal', portalRoutes);
 // Monitor de expedientes Marketplace — sesión del portal + enlace firmado público.
 // Apagado por defecto (EXPEDIENTES_ENABLED); sin la variable responde 404.
 app.use('/api/expedientes', expedientesRoutes);
+
+// Cotizaciones del cotizador RC (vigencia de 15 días para el cliente), pago en línea y emisión pagada — x-api-key en el router;
+// el aviso de pago de pagos-api entra con token propio.
+app.use('/api/cotizaciones-rc', cotizacionesRcRoutes);
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);
