@@ -9,6 +9,7 @@
  *
  * Lista vacía: cerrado para todos, salvo fuera de producción (desarrollo, o servidor QA con
  * EXPEDIENTES_ENTORNO=qa explícito), donde se conserva el acceso con cualquier sesión.
+ * `EXPEDIENTES_USUARIOS=*`: abierto a cualquier usuario que llegue con sesión (todos los de SysIP).
  */
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../../middlewares/auth.middleware';
@@ -50,6 +51,8 @@ export function identidadPermitida(
 ): boolean {
   const lista = usuariosMonitor();
   if (!lista.length) return monitorSinListaAbierto();
+  // «*»: cualquier usuario con sesión (SSO de Sis2000/SysIP o login del portal). Sin identidad, no.
+  if (lista.includes('*')) return identidades.some((v) => norm(v) !== '');
   const set = new Set(lista);
   return identidades.some((v) => {
     const n = norm(v);
