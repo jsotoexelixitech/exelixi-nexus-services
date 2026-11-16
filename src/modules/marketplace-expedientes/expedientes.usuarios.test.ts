@@ -201,7 +201,7 @@ describe('lista de acceso EXPEDIENTES_USUARIOS', () => {
     const v = await request(app)
       .post('/api/expedientes/publico/verificar')
       .send({ tipoDoc: 'V', documento: '12345678' });
-    expect(v.status).toBe(200);
+    expect([401, 403]).not.toContain(v.status);
   });
 
   it('EXPEDIENTES_USUARIOS=* deja entrar a cualquier sesión SSO o del portal, pero no sin sesión', async () => {

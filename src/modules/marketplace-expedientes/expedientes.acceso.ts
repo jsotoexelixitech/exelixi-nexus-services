@@ -1,7 +1,9 @@
 /**
  * Acceso del asegurado por cédula + código al correo registrado (segundo factor).
- * La cédula sola no revela nada: /publico/verificar responde siempre lo mismo y el envío
- * corre fuera de la petición. El código se guarda solo como HMAC en mkt_expediente_enlace
+ * /publico/verificar dice si el documento no es asegurado, si no tiene documentos pendientes
+ * o si su póliza no tiene correo (pedido de La Mundial, 16-nov-2026: no prometer un código que
+ * no va a llegar); el correo destino va enmascarado. Los límites por IP y por documento frenan
+ * el barrido de cédulas. El código se guarda solo como HMAC en mkt_expediente_enlace
  * (proposito `codigo_cedula`, que resolverEnlace nunca acepta como enlace), vence a los
  * 10 minutos, admite 5 intentos y un solo uso. Al validarlo se crea un enlace
  * `carga_documental` de 60 minutos limitado a los expedientes incompletos de ese asegurado.
@@ -34,8 +36,16 @@ export const CODIGO_MAX_INTENTOS = 5;
 export const CODIGO_REENVIO_SEGUNDOS = 60;
 export const ENLACE_CEDULA_MINUTOS = 60;
 
-export const MENSAJE_VERIFICAR =
-  'Si los datos coinciden con una póliza con documentos pendientes, enviamos un código al correo registrado.';
+export const MENSAJE_NO_ASEGURADO =
+  'Este documento no corresponde a un asegurado con póliza registrada. Verifique el tipo y el número de documento.';
+export const MENSAJE_SIN_PENDIENTES =
+  'Su póliza no tiene documentos pendientes. No necesita realizar ninguna otra gestión.';
+export const MENSAJE_SIN_CORREO =
+  'Su póliza no tiene un correo registrado. Comuníquese con su asesor de seguros para actualizarlo.';
+export const MENSAJE_NO_DISPONIBLE =
+  'Por ahora no podemos enviarle el código. Comuníquese con su asesor de seguros.';
+export const MENSAJE_ENVIO_FALLIDO =
+  'No pudimos enviar el código en este momento. Intente de nuevo en unos minutos.';
 export const MENSAJE_CODIGO_INVALIDO =
   'El código no es válido o ya venció. Revise el correo más reciente o solicite un código nuevo.';
 
@@ -153,30 +163,47 @@ function idsDe(raw: unknown): { id: number }[] {
 
 export type ResultadoSolicitud =
   | 'enviado'
-  | 'sin_coincidencia'
+  | 'no_asegurado'
+  | 'sin_pendientes'
   | 'espera'
   | 'error'
   | 'bloqueado_whitelist'
   | 'sin_correo'
   | 'excluido';
 
+export interface SolicitudCodigo {
+  resultado: ResultadoSolicitud;
+  /** Correo al que salió el código, enmascarado (j***@gmail.com). */
+  destinatarioMasked?: string | null;
+}
+
 /**
  * Genera y envía el código si hay expedientes incompletos con correo válido. Nunca lanza
- * por «no existe»: el resultado es solo para pruebas y auditoría, no para la respuesta HTTP.
+ * por «no existe»: devuelve el motivo y la ruta lo traduce con `respuestaSolicitud`.
  */
 export async function solicitarCodigo(
   tipoDoc: string,
   documento: string,
   ahora: Date = new Date(),
-): Promise<{ resultado: ResultadoSolicitud }> {
+): Promise<SolicitudCodigo> {
   const key = claveAsegurado(tipoDoc, documento);
-  const exps = key ? await expedientesAccesibles(key) : [];
-  const email = exps.map((e) => e.aseguradoEmail).find((v) => emailValido(v));
-  if (!key || !exps.length || !email) {
+  if (!key) return { resultado: 'no_asegurado' };
+  const exps = await expedientesAccesibles(key);
+  if (!exps.length) {
+    // Con pólizas pero ya completas, excluidas o fuera de alcance: no hay nada que cargar.
+    const alguna = await prisma.mktExpediente.findFirst({
+      where: { aseguradoKey: key },
+      select: { id: true },
+    });
     logger.info(
-      '[expedientes] acceso por cédula: sin expedientes pendientes con correo',
+      `[expedientes] acceso por cédula: ${alguna ? 'sin documentos pendientes' : 'no es asegurado'}`,
     );
-    return { resultado: 'sin_coincidencia' };
+    return { resultado: alguna ? 'sin_pendientes' : 'no_asegurado' };
+  }
+  const email = exps.map((e) => e.aseguradoEmail).find((v) => emailValido(v));
+  if (!email) {
+    logger.info('[expedientes] acceso por cédula: póliza sin correo');
+    return { resultado: 'sin_correo' };
   }
 
   const ultimo = await prisma.mktExpedienteEnlace.findFirst({
@@ -244,7 +271,38 @@ export async function solicitarCodigo(
     destinatario: r.destinatarioMasked,
   });
   logger.info(`[expedientes] acceso por cédula: código ${r.resultado}`);
-  return { resultado: r.resultado };
+  return { resultado: r.resultado, destinatarioMasked: r.destinatarioMasked };
+}
+
+/**
+ * Respuesta de /publico/verificar: mensaje para pasar al paso del código, o AppError con el
+ * motivo (422/409 los muestra el portal tal cual) cuando no hay a quién enviarlo.
+ */
+export function respuestaSolicitud(s: SolicitudCodigo): { mensaje: string } {
+  switch (s.resultado) {
+    case 'enviado':
+      return {
+        mensaje: s.destinatarioMasked
+          ? `Enviamos un código de verificación a ${s.destinatarioMasked}, el correo registrado en su póliza.`
+          : 'Enviamos un código de verificación al correo registrado en su póliza.',
+      };
+    case 'espera':
+      return {
+        mensaje:
+          'Ya le enviamos un código hace menos de un minuto al correo registrado en su póliza. Revise su correo.',
+      };
+    case 'no_asegurado':
+      throw new AppError(MENSAJE_NO_ASEGURADO, 422);
+    case 'sin_pendientes':
+      throw new AppError(MENSAJE_SIN_PENDIENTES, 409);
+    case 'sin_correo':
+      throw new AppError(MENSAJE_SIN_CORREO, 422);
+    case 'excluido':
+    case 'bloqueado_whitelist':
+      throw new AppError(MENSAJE_NO_DISPONIBLE, 422);
+    default:
+      throw new AppError(MENSAJE_ENVIO_FALLIDO, 502);
+  }
 }
 
 /**
