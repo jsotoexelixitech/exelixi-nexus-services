@@ -204,6 +204,19 @@ describe('lista de acceso EXPEDIENTES_USUARIOS', () => {
     expect(v.status).toBe(200);
   });
 
+  it('EXPEDIENTES_USUARIOS=* deja entrar a cualquier sesión SSO o del portal, pero no sin sesión', async () => {
+    produccion();
+    process.env.EXPEDIENTES_USUARIOS = '*';
+    expect(
+      (await request(app).get('/api/expedientes').set(auth({ sisXlogin: 'aleon' }))).status,
+    ).toBe(200);
+    expect(
+      (await request(app).get('/api/expedientes').set(auth({ email: 'op@exelixi.test' }))).status,
+    ).toBe(200);
+    expect((await request(app).get('/api/expedientes')).status).toBe(401);
+    expect(identidadPermitida([null, '', '  '])).toBe(false);
+  });
+
   it('identidadPermitida ignora vacíos', () => {
     process.env.EXPEDIENTES_USUARIOS = 'a';
     expect(identidadPermitida([null, undefined, '', '  '])).toBe(false);
