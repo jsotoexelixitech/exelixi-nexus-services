@@ -87,6 +87,19 @@ app.post(
   apiKeyGuard,
   express.json({ limit: '12mb' }),
 );
+// Guardar una cotización del cotizador RC: se conserva el cuerpo crudo para verificar la firma HMAC del proxy
+// (x-cotizador-firma). Solo con API key.
+app.post(
+  /^\/api\/cotizaciones-rc\/?$/,
+  apiKeyGuard,
+  express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody =
+        Buffer.from(buf);
+    },
+  }),
+);
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 

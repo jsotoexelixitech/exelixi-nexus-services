@@ -13,6 +13,8 @@ vi.hoisted(() => {
   process.env.COTIZACIONES_RC_EMPRESA_ID = '5';
   process.env.COTIZACIONES_RC_MODULO_GROUP_ID = '1';
   process.env.COTIZACIONES_RC_NOTIFY_BASE_URL = 'https://nexus.test/nexus-api';
+  process.env.COTIZACIONES_RC_SECRET =
+    'secreto-compartido-del-cotizador-de-pruebas-32+';
 });
 
 vi.mock('bcrypt', () => {
@@ -57,6 +59,9 @@ import {
   polizasDe,
   repartirPago,
   evaluarRegistros,
+  avisoReciboCaja,
+  firmarCuerpo,
+  firmaValida,
   generarCodigo,
   normalizarCodigo,
   pagoDeNotificacion,
@@ -138,6 +143,21 @@ const aviso = (payment: Record<string, unknown> = {}) => ({
   },
 });
 const espera = () => new Promise((r) => setTimeout(r, 20));
+const SECRETO = process.env.COTIZACIONES_RC_SECRET as string;
+/** POST de creación como lo manda el proxy del cotizador: cuerpo crudo firmado con el secreto compartido. */
+const crearFirmada = (
+  body: unknown,
+  origen: string | null = 'admin',
+  firma?: string,
+) => {
+  const crudo = JSON.stringify(body);
+  const r = request(app)
+    .post('/api/cotizaciones-rc')
+    .set(KEY)
+    .set('content-type', 'application/json')
+    .set('x-cotizador-firma', firma ?? firmarCuerpo(SECRETO, crudo));
+  return (origen ? r.set('x-cotizador-origen', origen) : r).send(crudo);
+};
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -264,11 +284,10 @@ describe('cotizaciones-rc · rutas', () => {
 
   it('guarda la cotización; el origen lo marca el proxy, no el cuerpo', async () => {
     vi.mocked(repo.crear).mockResolvedValue(fila());
-    const res = await request(app)
-      .post('/api/cotizaciones-rc')
-      .set(KEY)
-      .set('x-cotizador-origen', 'cliente')
-      .send({ producto: 'rcg', origen: 'admin', datos });
+    const res = await crearFirmada(
+      { producto: 'rcg', origen: 'admin', datos },
+      'cliente',
+    );
     expect(res.status).toBe(201);
     expect(res.body.data.codigo).toBe(CODIGO);
     expect(vi.mocked(repo.crear).mock.calls[0][0]).toMatchObject({
@@ -523,7 +542,7 @@ describe('cotizaciones-rc · rutas', () => {
     vi.mocked(repo.marcarEmitidaPendiente).mockResolvedValue(true);
     const ok = await request(app)
       .patch(`/api/cotizaciones-rc/${CODIGO}/estado`)
-      .set(KEY)
+      .set({ ...KEY, 'x-cotizador-origen': 'admin' })
       .send({
         estado: 'emitida',
         opcion: 'I',
@@ -540,7 +559,7 @@ describe('cotizaciones-rc · rutas', () => {
       (
         await request(app)
           .patch(`/api/cotizaciones-rc/${CODIGO}/estado`)
-          .set(KEY)
+          .set({ ...KEY, 'x-cotizador-origen': 'admin' })
           .send({ estado: 'pagada' })
       ).status,
     ).toBe(400);
@@ -1135,7 +1154,7 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
           cramo: 37,
           prima: 100,
           cnpoliza: '37-1-1',
-          cobro: { ok: false, pendiente: true, mpago: 10000 },
+          cobro: { ok: false, pendiente: true, caja: true, mpago: 10000 },
         },
       ],
     });
@@ -1475,6 +1494,292 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
       });
       expect(repo.marcarPagada).not.toHaveBeenCalled();
       expect(nest.emitir).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('cotizaciones-rc · blindaje del cobro (producción)', () => {
+  const urlAviso = `/api/cotizaciones-rc/pago-callback/${CODIGO}?t=${TOKEN}`;
+  const pendiente = () =>
+    fila({ estado: 'pendiente_pago', pago: { intentos: [intento] } });
+
+  describe('firma del proxy del cotizador', () => {
+    it('HMAC-SHA256 hex del cuerpo crudo con el secreto compartido', () => {
+      const cuerpo = '{"producto":"rcg"}';
+      const s = 's'.repeat(32);
+      const firma = firmarCuerpo(s, cuerpo);
+      expect(firma).toMatch(/^[0-9a-f]{64}$/);
+      expect(firmaValida(s, Buffer.from(cuerpo), firma)).toBe(true);
+      expect(firmaValida(s, Buffer.from(cuerpo), firma.toUpperCase())).toBe(
+        true,
+      );
+      expect(firmaValida(s, cuerpo + ' ', firma)).toBe(false);
+      expect(firmaValida('t'.repeat(32), cuerpo, firma)).toBe(false);
+      expect(firmaValida(s, cuerpo, undefined)).toBe(false);
+      expect(firmaValida(s, undefined, firma)).toBe(false);
+      expect(firmaValida(s, cuerpo, firma.slice(0, 60))).toBe(false);
+    });
+
+    it('guarda solo con firma válida y origen del proxy; desde el navegador directo, no', async () => {
+      vi.mocked(repo.crear).mockResolvedValue(fila());
+      const body = { producto: 'rcg', datos };
+      // Sin firma.
+      const sinFirma = await request(app)
+        .post('/api/cotizaciones-rc')
+        .set(KEY)
+        .set('x-cotizador-origen', 'admin')
+        .send(body);
+      expect(sinFirma.status).toBe(403);
+      // Firma de otro cuerpo (prima manipulada después de firmar).
+      const barata = {
+        ...body,
+        datos: {
+          ...datos,
+          alternativas: [{ opcion: 'I', limite: 10000, prima: 1 }],
+        },
+      };
+      const manipulada = await crearFirmada(
+        barata,
+        'admin',
+        firmarCuerpo(SECRETO, JSON.stringify(body)),
+      );
+      expect(manipulada.status).toBe(403);
+      // Firma con otro secreto.
+      const otroSecreto = 'otro-secreto-de-32-caracteres-xxxxxxxx';
+      expect(
+        (
+          await crearFirmada(
+            body,
+            'admin',
+            firmarCuerpo(otroSecreto, JSON.stringify(body)),
+          )
+        ).status,
+      ).toBe(403);
+      // Sin la cabecera de origen del proxy, o con un origen que no existe.
+      expect((await crearFirmada(body, null)).status).toBe(403);
+      expect((await crearFirmada(body, 'navegador')).status).toBe(403);
+      expect(repo.crear).not.toHaveBeenCalled();
+      // Firmada por el proxy: se guarda con el origen del proxy.
+      const ok = await crearFirmada(body, 'admin');
+      expect(ok.status).toBe(201);
+      expect(vi.mocked(repo.crear).mock.calls[0][0]).toMatchObject({
+        origen: 'admin',
+        datos: { alternativas: datos.alternativas },
+      });
+    });
+
+    it('sin COTIZACIONES_RC_SECRET (o con uno corto) no acepta cotizaciones: falla cerrado', async () => {
+      const antes = process.env.COTIZACIONES_RC_SECRET;
+      try {
+        delete process.env.COTIZACIONES_RC_SECRET;
+        expect((await crearFirmada({ producto: 'rcg', datos })).status).toBe(
+          503,
+        );
+        process.env.COTIZACIONES_RC_SECRET = 'corto';
+        expect((await crearFirmada({ producto: 'rcg', datos })).status).toBe(
+          503,
+        );
+      } finally {
+        process.env.COTIZACIONES_RC_SECRET = antes;
+      }
+      expect(repo.crear).not.toHaveBeenCalled();
+    });
+
+    it('registrar la emisión con recibo pendiente es solo del canal', async () => {
+      vi.mocked(repo.porCodigo).mockResolvedValue(fila());
+      for (const h of [KEY, { ...KEY, 'x-cotizador-origen': 'cliente' }]) {
+        expect(
+          (
+            await request(app)
+              .patch(`/api/cotizaciones-rc/${CODIGO}/estado`)
+              .set(h)
+              .send({ estado: 'emitida', poliza: { cnpoliza: '28-1-9' } })
+          ).status,
+        ).toBe(403);
+      }
+      expect(repo.marcarEmitidaPendiente).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('verificación estricta del pago', () => {
+    const banco = (monto: unknown, reciente?: boolean) => ({
+      proveedor: 'bancamiga',
+      estado: null,
+      monto: monto as number | string | null,
+      ...(reciente === undefined ? {} : { reciente }),
+    });
+
+    it('dominio: el registro de Pagos tiene que traer el monto del checkout y ser posterior al checkout', () => {
+      expect(evaluarRegistros([banco(null)], 100).reason).toBe(
+        'amount_missing',
+      );
+      expect(evaluarRegistros([banco(100, false)], 100)).toEqual({
+        verified: false,
+        reason: 'stale',
+      });
+      expect(evaluarRegistros([banco(200)], 100).reason).toBe(
+        'amount_mismatch',
+      );
+      expect(
+        evaluarRegistros([banco(100, false), banco('100.4', true)], 100),
+      ).toEqual({ verified: true, reason: 'ok' });
+    });
+
+    it('el monto del aviso tiene que ser el total del checkout: ni menos ni más', async () => {
+      vi.mocked(repo.porCodigo).mockResolvedValue(pendiente());
+      for (const amount of [100, 18000 * 1.05]) {
+        const r = await request(app).post(urlAviso).send(aviso({ amount }));
+        expect(r.status).toBe(400);
+        expect(r.body.message).toMatch(/no coincide/);
+      }
+      expect(repo.registrosDePago).not.toHaveBeenCalled();
+      expect(repo.marcarPagada).not.toHaveBeenCalled();
+    });
+
+    it('un aviso en otra moneda no paga la cotización (Pagos cobra en Bs)', async () => {
+      vi.mocked(repo.porCodigo).mockResolvedValue(pendiente());
+      vi.mocked(repo.registrosDePago).mockResolvedValue([]);
+      const usd = await request(app)
+        .post(urlAviso)
+        .send(aviso({ currency: 'USD' }));
+      expect(usd.status).toBe(400);
+      expect(usd.body.message).toMatch(/USD/);
+      // En Bs pasa a la verificación (aquí sin registro en Pagos: 409, no 400).
+      const ves = await request(app)
+        .post(urlAviso)
+        .send(aviso({ currency: 'VES' }));
+      expect(ves.status).toBe(409);
+    });
+
+    it('enforce: compara el registro de Pagos con el total del checkout, no con el aviso; sin monto o viejo no emite', async () => {
+      vi.mocked(repo.porCodigo).mockResolvedValue(pendiente());
+      const casos = [
+        [banco(9000)],
+        [banco(null)],
+        [banco(18000, false)],
+        [{ proveedor: 'sypago', estado: 'PEND', monto: 18000 }],
+      ];
+      for (const filas of casos) {
+        vi.mocked(repo.registrosDePago).mockResolvedValueOnce(filas);
+        const r = await request(app).post(urlAviso).send(aviso());
+        expect(r.status).toBe(409);
+        expect(r.body.message).toMatch(/no está verificado/);
+      }
+      // Ventana: desde el checkout (creadoEn) más 24 h de margen.
+      for (const c of vi.mocked(repo.registrosDePago).mock.calls) {
+        expect(c[0]).toBe('219551279300');
+        expect(c[1]).toBeGreaterThanOrEqual(24 * 60);
+      }
+      await espera();
+      expect(repo.marcarPagada).not.toHaveBeenCalled();
+      expect(nest.emitir).not.toHaveBeenCalled();
+    });
+
+    it('un valor mal escrito de COTIZACIONES_RC_VERIFICAR_PAGO cuenta como enforce', async () => {
+      process.env.COTIZACIONES_RC_VERIFICAR_PAGO = 'enforse';
+      vi.mocked(repo.porCodigo).mockResolvedValue(pendiente());
+      vi.mocked(repo.registrosDePago).mockResolvedValue([]);
+      expect((await request(app).post(urlAviso).send(aviso())).status).toBe(
+        409,
+      );
+      expect(repo.marcarPagada).not.toHaveBeenCalled();
+    });
+
+    it('la misma referencia en dos cotizaciones a la vez: el índice único la rechaza y no se emite', async () => {
+      vi.mocked(repo.porCodigo).mockResolvedValue(pendiente());
+      vi.mocked(repo.registrosDePago).mockResolvedValue([banco(18000, true)]);
+      vi.mocked(repo.marcarPagada).mockRejectedValue(
+        new Error(
+          'duplicate key value violates unique constraint "uq_cotizacion_rc_pago_referencia"',
+        ),
+      );
+      const r = await request(app).post(urlAviso).send(aviso());
+      expect(r.status).toBe(409);
+      expect(r.body.message).toMatch(/ya se usó/);
+      await espera();
+      expect(repo.reclamarEmision).not.toHaveBeenCalled();
+      expect(nest.emitir).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('RCP + RCE con un solo pago: el segundo recibo se aplica en caja', () => {
+    const polizas = [
+      {
+        cramo: 27,
+        cnpoliza: '27-1-1',
+        cnrecibo: '27-100',
+        urlpoliza: 'https://sis.test/p27.pdf',
+        cobro: { ok: true },
+      },
+      {
+        cramo: 37,
+        cnpoliza: '37-1-1',
+        cnrecibo: '37-100',
+        urlpoliza: 'https://sis.test/p37.pdf',
+        cobro: { ok: false, pendiente: true, caja: true, mpago: 10000 },
+      },
+    ];
+    const cobrados = polizas.map((p) => ({ ...p, cobro: { ok: true } }));
+
+    it('el correo lo dice claro: cuál quedó cobrado, cuál va a caja y que no paga de nuevo', () => {
+      const correo = armarCorreoPoliza(
+        fila({ producto: 'rc' }),
+        polizas,
+        300,
+        [],
+        false,
+      ) as any;
+      expect(correo.data.extraNote).toContain(
+        'el recibo N.º 27-100 ya quedó cobrado y el recibo N.º 37-100 se aplicará en caja con ese mismo pago',
+      );
+      expect(correo.data.extraNote).toContain('No tiene que pagar de nuevo');
+      const recibo37 = correo.fields.find(
+        (x: any) => x.label === 'Recibo · Responsabilidad Civil Empresarial',
+      );
+      expect(recibo37.value).toBe(
+        '37-100 (se aplica en caja con su mismo pago)',
+      );
+      // Con los dos recibos cobrados no hay aviso.
+      const ambos = armarCorreoPoliza(
+        fila({ producto: 'rc' }),
+        cobrados,
+        300,
+        [],
+        false,
+      ) as any;
+      expect(ambos.data.extraNote).not.toContain('caja');
+      expect(avisoReciboCaja(cobrados)).toBeNull();
+    });
+
+    it('la respuesta trae avisoCobro para la pantalla; la emisión del canal sin pago no', () => {
+      const pagado = {
+        referencia: '1',
+        monto: 30000,
+        fecha: '2026-11-13',
+        opcion: 'I',
+        detalle: {},
+      };
+      const r = aRespuesta(
+        fila({
+          estado: 'emitida',
+          pago: { pagado },
+          poliza: armarPolizaGuardada(polizas),
+        }),
+      );
+      expect(r.avisoCobro).toMatch(/37-100 se aplicará en caja/);
+      const canal = aRespuesta(
+        fila({
+          estado: 'emitida',
+          pago: { canal: { opcion: 'I' } },
+          poliza: armarPolizaGuardada(
+            polizas.map((p) => ({
+              ...p,
+              cobro: { ok: false, pendiente: true },
+            })),
+          ),
+        }),
+      );
+      expect(canal.avisoCobro).toBeNull();
     });
   });
 });

@@ -9,7 +9,7 @@
  * Una opción puede llevar más de una póliza (RCP + RCE = ramos 27 y 37): un solo pago por la suma de las primas,
  * una emisión y un cobro por ramo, y un único correo con todas las pólizas y recibos.
  */
-import { createHash, randomInt, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, randomInt, timingSafeEqual } from 'crypto';
 import { AppError } from '../../utils/app-error';
 
 export const DIAS_VIGENCIA = 15;
@@ -330,6 +330,33 @@ export function tokenCoincide(token: string, hash: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/**
+ * Firma del proxy del cotizador al guardar una cotización (POST /api/cotizaciones-rc).
+ * Contrato: cabecera `x-cotizador-firma` = HMAC-SHA256 en hex (64 caracteres) del cuerpo crudo de la petición, tal
+ * cual sale del proxy, con el secreto compartido COTIZACIONES_RC_SECRET. El navegador nunca tiene el secreto.
+ */
+export const CABECERA_FIRMA = 'x-cotizador-firma';
+export const CABECERA_ORIGEN = 'x-cotizador-origen';
+/** Largo mínimo del secreto compartido: con menos, nexus-api no acepta cotizaciones nuevas. */
+export const MIN_SECRETO = 32;
+
+export const firmarCuerpo = (
+  secreto: string,
+  cuerpo: Buffer | string,
+): string => createHmac('sha256', secreto).update(cuerpo).digest('hex');
+
+export function firmaValida(
+  secreto: string,
+  cuerpo: Buffer | string | undefined,
+  firma: unknown,
+): boolean {
+  const f = String(firma ?? '').trim();
+  if (cuerpo == null || !/^[0-9a-f]{64}$/i.test(f)) return false;
+  const a = Buffer.from(firmarCuerpo(secreto, cuerpo), 'hex');
+  const b = Buffer.from(f, 'hex');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export interface IntentoPago {
   tokenHash: string;
   opcion: Opcion;
@@ -357,6 +384,18 @@ export const intentoPorToken = (
 export const montoTolerancia = (amountVes: number): number =>
   Math.max(1, amountVes * 0.01);
 
+/** Violación del índice único de la referencia pagada (migración 20261116120000_cotizacion_rc_blindaje). */
+export function esReferenciaDuplicada(e: unknown): boolean {
+  const t = e instanceof Error ? e.message : String(e);
+  return /uq_cotizacion_rc_pago_referencia/.test(t);
+}
+
+/** El monto en Bs coincide con el esperado (el total del checkout) dentro de la tolerancia, por arriba y por abajo. */
+export const montoCoincide = (monto: number, esperadoVes: number): boolean =>
+  Number.isFinite(monto) &&
+  esperadoVes > 0 &&
+  Math.abs(monto - esperadoVes) <= montoTolerancia(esperadoVes);
+
 export interface PagoConfirmado {
   referencia: string;
   monto: number;
@@ -382,6 +421,14 @@ export function pagoDeNotificacion(
   const monto = Number(p.amount);
   if (!(monto > 0))
     throw new AppError('La notificación de pago no trae el monto pagado.', 400);
+  // Pagos cobra siempre en bolívares (totalVes del checkout); un aviso en otra moneda no es este cobro.
+  const moneda = texto(p.currency ?? p.moneda, 8).toUpperCase();
+  if (moneda && !['VES', 'BS', 'BS.', 'BSD', 'BSS', 'VEF'].includes(moneda)) {
+    throw new AppError(
+      `La notificación de pago viene en ${moneda}; el cobro de la cotización es en Bs.`,
+      400,
+    );
+  }
   const fecha = texto(p.paidOn ?? p.verifiedOn ?? p.fpago, 10);
   return {
     referencia,
@@ -438,45 +485,53 @@ export type MotivoVerificacion =
   | 'not_found'
   | 'pending'
   | 'amount_mismatch'
+  | 'amount_missing'
+  | 'stale'
   | 'db_unavailable'
   | 'disabled';
 export interface RegistroPago {
   proveedor: string | null;
   estado: string | null;
   monto: number | string | null;
+  /** false: el pago se registró antes del checkout de esta cotización (referencia vieja reutilizada). */
+  reciente?: boolean | null;
 }
 
 /**
- * ¿La referencia es un pago verificado por pagos-api? Misma regla que nest-api (payment-verification.service):
- * SyPago cuenta solo en ACCP; un pago móvil solo se registra en pagos.registros_pago tras verificarse con el banco.
+ * ¿La referencia es un pago verificado por pagos-api por el total del checkout? Base: la regla de nest-api
+ * (payment-verification.service): SyPago cuenta solo en ACCP; un pago móvil solo se registra en pagos.registros_pago
+ * tras verificarse con el banco. Más estricto para emitir sin intervención humana:
+ *   - `amountVes` es el total en Bs del checkout (lo que Nexus mandó a cobrar), no lo que dice el aviso;
+ *   - el registro tiene que traer el monto (sin monto no se emite: `amount_missing`);
+ *   - un registro anterior al checkout no cuenta (`stale`): una referencia vieja no paga una cotización nueva.
  */
 export function evaluarRegistros(
   rows: RegistroPago[],
   amountVes: number,
 ): { verified: boolean; reason: MotivoVerificacion } {
   if (!rows.length) return { verified: false, reason: 'not_found' };
-  let pendiente = false;
+  let motivo: MotivoVerificacion = 'not_found';
   for (const r of rows) {
     const estado =
       r.estado != null ? String(r.estado).toUpperCase().trim() : null;
     const proveedor =
       r.proveedor != null ? String(r.proveedor).toLowerCase().trim() : 'sypago';
     if (proveedor === 'sypago' && estado !== 'ACCP') {
-      pendiente = true;
+      motivo = 'pending';
       continue;
     }
-    const monto = r.monto != null ? Number(r.monto) : null;
-    if (
-      monto != null &&
-      Number.isFinite(monto) &&
-      amountVes > 0 &&
-      Math.abs(monto - amountVes) > montoTolerancia(amountVes)
-    ) {
-      return { verified: false, reason: 'amount_mismatch' };
+    if (r.reciente === false) {
+      if (motivo === 'not_found') motivo = 'stale';
+      continue;
     }
+    const monto = r.monto != null ? Number(r.monto) : NaN;
+    if (!Number.isFinite(monto))
+      return { verified: false, reason: 'amount_missing' };
+    if (!montoCoincide(monto, amountVes))
+      return { verified: false, reason: 'amount_mismatch' };
     return { verified: true, reason: 'ok' };
   }
-  return { verified: false, reason: pendiente ? 'pending' : 'not_found' };
+  return { verified: false, reason: motivo };
 }
 
 export interface FilaCotizacion {
@@ -602,6 +657,33 @@ export interface PolizaCorreo {
   cnpoliza: string;
   cnrecibo?: string;
   urlpoliza?: string;
+  cobro?: Obj;
+}
+
+/**
+ * Recibo de una póliza pagada en línea que no se cobra automáticamente: el pago (una sola referencia) cubre las dos
+ * pólizas (RCP + RCE), ya se aplicó al primer recibo y este se aplica en caja con ese mismo pago (cobranza RCV
+ * congelada: no se esquiva el control «pago ya validado»). El cliente no tiene que pagar de nuevo.
+ */
+export const reciboPendienteCaja = (p: Pick<PolizaCorreo, 'cobro'>): boolean =>
+  esObj(p.cobro) && p.cobro.pendiente === true && p.cobro.caja === true;
+
+/** Texto para el cliente (correo y pantalla) cuando algún recibo quedó para aplicarse en caja; null si no hay. */
+export function avisoReciboCaja(polizas: PolizaCorreo[]): string | null {
+  const enCaja = polizas.filter(reciboPendienteCaja);
+  if (!enCaja.length) return null;
+  const cobrados = polizas.filter(
+    (p) => esObj(p.cobro) && p.cobro.ok === true && p.cnrecibo,
+  );
+  const lista = (ps: PolizaCorreo[]) =>
+    ps.map((p) => `N.º ${p.cnrecibo || p.cnpoliza}`).join(' y ');
+  return (
+    `Su pago en línea cubre la prima de ${polizas.length > 1 ? 'todas sus pólizas' : 'su póliza'}` +
+    (cobrados.length
+      ? `: el recibo ${lista(cobrados)} ya quedó cobrado y el recibo ${lista(enCaja)}`
+      : `: el recibo ${lista(enCaja)}`) +
+    ' se aplicará en caja con ese mismo pago. No tiene que pagar de nuevo; su asesor de seguros le confirmará cuando quede cobrado.'
+  );
 }
 
 /**
@@ -741,7 +823,12 @@ function armarCorreoVariasPolizas(
       : []),
     ...polizas
       .filter((p) => p.cnrecibo)
-      .map((p) => ({ label: `Recibo · ${de(p)}`, value: p.cnrecibo ?? '' })),
+      .map((p) => ({
+        label: `Recibo · ${de(p)}`,
+        value: reciboPendienteCaja(p)
+          ? `${p.cnrecibo} (se aplica en caja con su mismo pago)`
+          : (p.cnrecibo ?? ''),
+      })),
     // Sin botón propio y sin PDF adjunto: el enlace es la única forma de abrir esa póliza.
     ...polizas
       .filter(
@@ -773,9 +860,14 @@ function armarCorreoVariasPolizas(
             ctaUrl: url(conBoton),
           }
         : {}),
-      extraNote: conAnexos
-        ? 'Conserve este correo: el condicionado y los anexos forman parte integrante de su contrato de seguro.'
-        : 'Conserve este correo con los datos de sus pólizas.',
+      extraNote: [
+        avisoReciboCaja(polizas),
+        conAnexos
+          ? 'Conserve este correo: el condicionado y los anexos forman parte integrante de su contrato de seguro.'
+          : 'Conserve este correo con los datos de sus pólizas.',
+      ]
+        .filter(Boolean)
+        .join(' '),
     },
     fields,
     ...adjuntosCorreo(adjuntos),
@@ -849,6 +941,8 @@ export function aRespuesta(f: FilaCotizacion, conDatos = true) {
     // Emisión sin pago por el canal (en curso, a medias o terminada): la cotización ya no se paga en línea.
     canal,
     poliza: f.poliza ?? null,
+    // RCP + RCE con un solo pago: el segundo recibo se aplica en caja. Texto listo para la pantalla del cotizador.
+    avisoCobro: pagado ? avisoReciboCaja(polizasDe(f.poliza)) : null,
     correoPoliza: correoPolizaPublico(f.correoPoliza),
     // El detalle del error de emisión es interno; al cliente le basta saber que el pago está y la póliza en proceso.
     error: f.error

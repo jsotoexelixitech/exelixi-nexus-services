@@ -603,6 +603,8 @@ model MktExpedienteJobRun {
 /// Cotizaciones del cotizador RC (RCG/RCP/RCE): registro permanente; expiraEn (15 días) solo cierra el acceso
 /// y el pago del cliente. Pago en línea (Pagos) y póliza emitida.
 /// El módulo cotizaciones-rc la usa con SQL directo (reclamos atómicos de estado).
+/// Solo en SQL (migración 20261116120000_cotizacion_rc_blindaje): índice único uq_cotizacion_rc_pago_referencia
+/// sobre crc_pago.pagado.referencia y trigger trg_cotizacion_rc_congelada (datos, producto, moneda y código inmutables).
 model CotizacionRc {
   id               Int       @id @default(autoincrement()) @map("crc_id")
   codigo           String    @unique(map: "uq_cotizacion_rc_codigo") @map("crc_codigo") @db.VarChar(40)

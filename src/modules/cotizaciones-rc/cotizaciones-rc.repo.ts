@@ -226,12 +226,19 @@ export async function liberarCanal(codigo: string): Promise<void> {
     WHERE crc_codigo = ${codigo} AND crc_estado IN ('cotizada', 'pendiente_pago') AND crc_poliza IS NULL`;
 }
 
-/** Pagos verificados por pagos-api (misma BD exelixi_nexus, esquema pagos). */
+/**
+ * Pagos verificados por pagos-api (misma BD exelixi_nexus, esquema pagos). `reciente`: el registro es de los últimos
+ * `minutos` (desde el checkout más el margen); se compara contra now() de la misma BD, así no depende de la zona
+ * horaria de Node ni de si la columna es timestamp o timestamptz. NULL si la fila no tiene updated_at.
+ */
 export async function registrosDePago(
   referencia: string,
+  minutos: number,
 ): Promise<RegistroPago[]> {
   return prisma.$queryRaw<RegistroPago[]>`
-    SELECT proveedor, estado, monto FROM pagos.registros_pago
+    SELECT proveedor, estado, monto,
+      (updated_at >= now() - make_interval(mins => ${Math.max(0, Math.round(minutos))}::int)) AS reciente
+    FROM pagos.registros_pago
     WHERE ref_ibp = ${referencia} ORDER BY updated_at DESC LIMIT 5`;
 }
 

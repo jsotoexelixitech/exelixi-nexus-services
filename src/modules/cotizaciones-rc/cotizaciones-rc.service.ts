@@ -36,11 +36,14 @@ import {
   correoValido,
   emisionesDeOpcion,
   esObj,
+  esReferenciaDuplicada,
   evaluarRegistros,
+  firmaValida,
   intentoPorToken,
+  MIN_SECRETO,
+  montoCoincide,
   intentosDe,
   monedaDeCobro,
-  montoTolerancia,
   nombrePdfPoliza,
   normalizarCodigo,
   pagoDeNotificacion,
@@ -63,12 +66,55 @@ import {
 
 type Obj = Record<string, unknown>;
 
-/** COTIZACIONES_RC_VERIFICAR_PAGO: enforce (por defecto) | warn (solo aviso, QA sin pagos.registros_pago) | off. */
+/**
+ * COTIZACIONES_RC_VERIFICAR_PAGO: enforce (por defecto; producción) | warn (solo aviso, QA sin pagos.registros_pago) |
+ * off. Cualquier otro valor, vacío o mal escrito, es enforce: nunca se emite sin pago por un error de configuración.
+ */
 export function modoVerificacion(): ModoVerificacion {
   const raw = String(process.env.COTIZACIONES_RC_VERIFICAR_PAGO ?? 'enforce')
     .toLowerCase()
     .trim();
   return raw === 'warn' || raw === 'off' ? raw : 'enforce';
+}
+
+/**
+ * Secreto compartido con el proxy del cotizador (COTIZACIONES_RC_SECRET, mínimo 32 caracteres). Sin él nexus-api no
+ * acepta cotizaciones nuevas (falla cerrado).
+ */
+function secretoCotizador(): string {
+  const s = String(process.env.COTIZACIONES_RC_SECRET ?? '').trim();
+  if (s.length < MIN_SECRETO) {
+    throw new AppError(
+      `Cotizaciones sin configurar en nexus-api: COTIZACIONES_RC_SECRET (mínimo ${MIN_SECRETO} caracteres).`,
+      503,
+    );
+  }
+  return s;
+}
+
+/**
+ * Solo el servidor del cotizador guarda cotizaciones: cabecera de origen que pone su proxy y firma HMAC del cuerpo
+ * crudo con el secreto compartido (ver firmaValida). La prima del JSON queda congelada desde aquí.
+ */
+export function verificarFirmaCotizador(
+  origen: unknown,
+  cuerpoCrudo: Buffer | undefined,
+  firma: unknown,
+): 'admin' | 'cliente' {
+  const secreto = secretoCotizador();
+  if (origen !== 'admin' && origen !== 'cliente') {
+    throw new AppError(
+      'Solo el servidor del cotizador guarda cotizaciones (falta x-cotizador-origen).',
+      403,
+    );
+  }
+  if (!firmaValida(secreto, cuerpoCrudo, firma)) {
+    logger.warn(
+      `[cotizaciones-rc] cotización rechazada: firma del cotizador ${firma ? 'inválida' : 'ausente'} (origen=${origen})`,
+    );
+    throw new AppError('Firma del cotizador inválida.', 403);
+  }
+  return origen;
 }
 
 function configCheckout() {
@@ -364,16 +410,31 @@ export async function crearCheckout(codigoRaw: unknown, body: unknown) {
   };
 }
 
-/** ¿La referencia es un pago verificado por pagos-api? Sin tabla o con la BD caída: db_unavailable. */
+/**
+ * El registro de Pagos tiene que ser posterior al checkout (con 24 h de margen por reloj y zona horaria): una
+ * referencia de un pago viejo de otro producto no paga esta cotización.
+ */
+const MARGEN_PAGO_MIN = 24 * 60;
+
+/**
+ * ¿La referencia es un pago verificado por pagos-api por el total en Bs del checkout (no por lo que dice el aviso,
+ * que llega desde el navegador vía pagos-api)? Sin tabla o con la BD caída: db_unavailable.
+ */
 async function verificarPago(
   pago: PagoConfirmado,
+  intento: IntentoPago,
+  ahora: Date = new Date(),
 ): Promise<{ verified: boolean; reason: MotivoVerificacion }> {
   if (modoVerificacion() === 'off')
     return { verified: true, reason: 'disabled' };
+  const creado = Date.parse(intento.creadoEn);
+  const minutos = Number.isFinite(creado)
+    ? Math.max(0, Math.ceil((ahora.getTime() - creado) / 60_000))
+    : 0;
   try {
     return evaluarRegistros(
-      await repo.registrosDePago(pago.referencia),
-      pago.monto,
+      await repo.registrosDePago(pago.referencia, minutos + MARGEN_PAGO_MIN),
+      intento.totalVes,
     );
   } catch (e) {
     logger.warn(
@@ -430,12 +491,14 @@ export async function confirmarPago(
   }
 
   const pago = pagoDeNotificacion(b);
-  if (pago.monto < intento.totalVes - montoTolerancia(intento.totalVes)) {
+  // El aviso pasa por el navegador: el monto tiene que ser exactamente el total del checkout (la prima congelada de la
+  // opción a la tasa del día), ni menos ni más. Lo que vale es el registro de Pagos (verificarPago).
+  if (!montoCoincide(pago.monto, intento.totalVes)) {
     logger.warn(
-      `[cotizaciones-rc] ${codigo}: pago ${pago.monto} menor que el total ${intento.totalVes} (ref ${pago.referencia})`,
+      `[cotizaciones-rc] ${codigo}: pago ${pago.monto} distinto del total ${intento.totalVes} (ref ${pago.referencia})`,
     );
     throw new AppError(
-      'El monto pagado es menor que la prima de la cotización.',
+      'El monto pagado no coincide con la prima de la cotización.',
       400,
     );
   }
@@ -445,7 +508,7 @@ export async function confirmarPago(
       409,
     );
   }
-  const check = await verificarPago(pago);
+  const check = await verificarPago(pago, intento);
   if (!check.verified) {
     const modo = modoVerificacion();
     logger.warn(
@@ -459,18 +522,30 @@ export async function confirmarPago(
     }
   }
 
-  const reclamado = await repo.marcarPagada(codigo, intento.opcion, {
-    referencia: pago.referencia,
-    monto: pago.monto,
-    metodo: pago.metodo,
-    fecha: pago.fecha,
-    detalle: pago.detalle,
-    opcion: intento.opcion,
-    totalVes: intento.totalVes,
-    tasa: intento.tasa,
-    verificacion: check.reason,
-    confirmadoEn: new Date().toISOString(),
-  });
+  let reclamado: boolean;
+  try {
+    reclamado = await repo.marcarPagada(codigo, intento.opcion, {
+      referencia: pago.referencia,
+      monto: pago.monto,
+      metodo: pago.metodo,
+      fecha: pago.fecha,
+      detalle: pago.detalle,
+      opcion: intento.opcion,
+      totalVes: intento.totalVes,
+      tasa: intento.tasa,
+      verificacion: check.reason,
+      confirmadoEn: new Date().toISOString(),
+    });
+  } catch (e) {
+    // Índice único uq_cotizacion_rc_pago_referencia: dos avisos simultáneos con la misma referencia en dos cotizaciones.
+    if (esReferenciaDuplicada(e)) {
+      throw new AppError(
+        'La referencia de pago ya se usó en otra cotización.',
+        409,
+      );
+    }
+    throw e;
+  }
   if (!reclamado)
     return {
       codigo,
@@ -532,6 +607,8 @@ async function cobrar(
     return {
       ok: false,
       pendiente: true,
+      // Se aplica en caja con el mismo pago (el cliente no paga de nuevo): el correo y la pantalla lo dicen.
+      caja: true,
       ...(x.mpago != null ? { mpago: x.mpago } : {}),
       error: `Pendiente de cobro en caja: el pago (referencia ${pago.referencia}) cubre las dos pólizas y ya se aplicó al primer recibo.`,
     };

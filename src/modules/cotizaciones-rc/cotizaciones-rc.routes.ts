@@ -2,10 +2,13 @@
  * cotizaciones-rc.routes.ts — cotizaciones del cotizador RC (registro permanente; 15 días de vigencia para el
  * cliente), pago en línea y emisión pagada.
  *
- *   POST  /api/cotizaciones-rc                         → guarda la cotización y devuelve el código (x-api-key)
+ *   POST  /api/cotizaciones-rc                         → guarda la cotización y devuelve el código (x-api-key +
+ *                                                        x-cotizador-origen + x-cotizador-firma: HMAC-SHA256 hex del
+ *                                                        cuerpo crudo con COTIZACIONES_RC_SECRET). El JSON queda congelado.
  *   GET   /api/cotizaciones-rc                         → búsqueda del admin: vigentes, vencidas o todo el historial (x-api-key)
  *   GET   /api/cotizaciones-rc/:codigo                 → trae una cotización; 404 no existe, 410 vencida; ?admin=1 también vencidas
- *   PATCH /api/cotizaciones-rc/:codigo/estado          → registra la emisión con recibo pendiente (x-api-key)
+ *   PATCH /api/cotizaciones-rc/:codigo/estado          → canal (solo x-cotizador-origen: admin): registra la emisión con
+ *                                                        recibo pendiente (x-api-key)
  *   POST  /api/cotizaciones-rc/:codigo/checkout        → manda a pagar: URL del módulo de Pagos; acepta `anexos`
  *                                                        { nombre, base64 } (PDF de condicionado y anexos) (x-api-key)
  *   POST  /api/cotizaciones-rc/:codigo/emitir-pendiente → canal (solo x-cotizador-origen: admin): emite sin pago la opción
@@ -20,7 +23,11 @@ import rateLimit from 'express-rate-limit';
 import { apiKeyGuard } from '../../middlewares/apikey.middleware';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
-import { aRespuesta } from './cotizaciones-rc.domain';
+import {
+  CABECERA_FIRMA,
+  CABECERA_ORIGEN,
+  aRespuesta,
+} from './cotizaciones-rc.domain';
 import * as svc from './cotizaciones-rc.service';
 
 const mensajeLimite = {
@@ -70,12 +77,22 @@ router.post(
 router.use(limiter, apiKeyGuard);
 
 router.post('/', async (req: Request, res: Response) => {
-  // El proxy del cotizador marca lo que entra por el link del cliente; el cuerpo no decide el origen.
-  const origen =
-    req.headers['x-cotizador-origen'] === 'cliente' ? 'cliente' : 'admin';
+  // Solo el servidor del cotizador: origen que pone su proxy (el cuerpo no decide el origen) y firma HMAC del cuerpo
+  // crudo (lo captura app.ts para esta ruta). Desde el navegador directo no hay firma.
+  const origen = svc.verificarFirmaCotizador(
+    req.headers[CABECERA_ORIGEN],
+    (req as Request & { rawBody?: Buffer }).rawBody,
+    req.headers[CABECERA_FIRMA],
+  );
   const fila = await svc.crear({ ...(req.body ?? {}), origen });
   res.status(201).json({ success: true, data: aRespuesta(fila) });
 });
+
+/** Rutas solo del canal (vista admin del cotizador): el proxy marca el origen y por el link del cliente no las deja pasar. */
+function soloCanal(req: Request, mensaje: string): void {
+  if (req.headers[CABECERA_ORIGEN] !== 'admin')
+    throw new AppError(mensaje, 403);
+}
 
 router.get('/', async (req: Request, res: Response) => {
   const filas = await svc.listar(req.query as Record<string, unknown>);
@@ -93,6 +110,10 @@ router.get('/:codigo', async (req: Request, res: Response) => {
 });
 
 router.patch('/:codigo/estado', async (req: Request, res: Response) => {
+  soloCanal(
+    req,
+    'Registrar la emisión con recibo pendiente es solo del canal.',
+  );
   res.json({
     success: true,
     data: aRespuesta(
@@ -113,12 +134,10 @@ router.post('/:codigo/checkout', async (req: Request, res: Response) => {
 router.post(
   '/:codigo/emitir-pendiente',
   async (req: Request, res: Response) => {
-    if (req.headers['x-cotizador-origen'] !== 'admin') {
-      throw new AppError(
-        'Emitir como pendiente es solo del canal: el cliente siempre paga su póliza.',
-        403,
-      );
-    }
+    soloCanal(
+      req,
+      'Emitir como pendiente es solo del canal: el cliente siempre paga su póliza.',
+    );
     res.json({
       success: true,
       data: aRespuesta(await svc.emitirPendiente(req.params.codigo, req.body)),
