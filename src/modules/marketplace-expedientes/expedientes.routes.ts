@@ -61,7 +61,7 @@ import {
   claveAsegurado,
   CODIGO_MINUTOS,
   CODIGO_REENVIO_SEGUNDOS,
-  MENSAJE_VERIFICAR,
+  respuestaSolicitud,
   solicitarCodigo,
   verificarCodigo,
   verificarCodigoSchema,
@@ -586,8 +586,9 @@ const codigoDocLimiter = rateLimit({
 });
 
 /**
- * Siempre la misma respuesta, existan o no pólizas. El envío del código corre fuera de la
- * petición para que el tiempo tampoco delate si el asegurado existe.
+ * Envía el código solo si el documento es de un asegurado con documentos pendientes y correo;
+ * si no, responde el motivo (no es asegurado, nada pendiente, sin correo) para no prometer un
+ * código que no va a llegar. Los límites por IP y por documento frenan el barrido de cédulas.
  */
 router.post(
   '/publico/verificar',
@@ -595,13 +596,17 @@ router.post(
   verificarDocLimiter,
   h(async (req, res) => {
     const body = verificarIdentidadSchema.parse(req.body ?? {});
-    void solicitarCodigo(body.tipoDoc, body.documento).catch((err) =>
-      logger.warn(
-        `[expedientes] acceso por cédula: envío fallido: ${err instanceof Error ? err.message : 'error'}`,
-      ),
+    const solicitud = await solicitarCodigo(body.tipoDoc, body.documento).catch(
+      (err) => {
+        logger.warn(
+          `[expedientes] acceso por cédula: envío fallido: ${err instanceof Error ? err.message : 'error'}`,
+        );
+        return { resultado: 'error' as const };
+      },
     );
+    const { mensaje } = respuestaSolicitud(solicitud);
     return ok(res, {
-      mensaje: MENSAJE_VERIFICAR,
+      mensaje,
       vigenciaMinutos: CODIGO_MINUTOS,
       reenvioSegundos: CODIGO_REENVIO_SEGUNDOS,
     });

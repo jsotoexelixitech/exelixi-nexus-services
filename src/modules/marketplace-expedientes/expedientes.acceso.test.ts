@@ -27,7 +27,9 @@ import {
   CODIGO_MAX_INTENTOS,
   hashCodigo,
   MENSAJE_CODIGO_INVALIDO,
-  MENSAJE_VERIFICAR,
+  MENSAJE_NO_ASEGURADO,
+  MENSAJE_SIN_CORREO,
+  MENSAJE_SIN_PENDIENTES,
   PROPOSITO_CODIGO,
   solicitarCodigo,
   verificarCodigo,
@@ -88,27 +90,21 @@ afterEach(() => {
 });
 
 describe('acceso por cédula + código', () => {
-  it('la respuesta es la misma exista o no el asegurado', async () => {
+  it('asegurado con pendientes: envía el código y dice a qué correo (enmascarado)', async () => {
     await expediente({
       aseguradoKey: 'V12345678',
       aseguradoEmail: 'maria@test.com',
     });
-    const ip = nuevaIp();
     const existe = await request(app)
       .post('/api/expedientes/publico/verificar')
-      .set('X-Forwarded-For', ip)
+      .set('X-Forwarded-For', nuevaIp())
       .send({ tipoDoc: 'V', documento: '12.345.678' });
-    const noExiste = await request(app)
-      .post('/api/expedientes/publico/verificar')
-      .set('X-Forwarded-For', ip)
-      .send({ tipoDoc: 'V', documento: '99999999' });
     expect(existe.status).toBe(200);
-    expect(noExiste.status).toBe(200);
-    expect(existe.body).toEqual(noExiste.body);
-    expect(existe.body.data.mensaje).toBe(MENSAJE_VERIFICAR);
-    // Nada de pólizas, nombres ni correos en la respuesta.
+    expect(existe.body.data.mensaje).toMatch(/Enviamos un código/);
+    expect(existe.body.data.mensaje).toMatch(/@test\.com/);
+    // Nada de pólizas, nombres ni el correo completo en la respuesta.
     expect(JSON.stringify(existe.body)).not.toMatch(/María|maria@|P-/);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     const c = correos()[0];
     expect(c.to).toBe('maria@test.com');
     expect(c.template).toBe('expediente-codigo');
@@ -117,6 +113,35 @@ describe('acceso por cédula + código', () => {
     );
     expect(c.data.codigo).toMatch(/^\d{6}$/);
     expect(JSON.stringify(c)).not.toMatch(/vendedor/i);
+  });
+
+  it('no asegurado, sin pendientes o sin correo: lo dice y no envía código', async () => {
+    await expediente({
+      aseguradoKey: 'V555555',
+      aseguradoEmail: 'maria@test.com',
+      estadoDocumental: 'completo',
+    });
+    await expediente({ aseguradoKey: 'V777777', aseguradoEmail: null });
+    const pedir = (documento: string) =>
+      request(app)
+        .post('/api/expedientes/publico/verificar')
+        .set('X-Forwarded-For', nuevaIp())
+        .send({ tipoDoc: 'V', documento });
+
+    const noAsegurado = await pedir('99999999');
+    expect(noAsegurado.status).toBe(422);
+    expect(noAsegurado.body.message).toBe(MENSAJE_NO_ASEGURADO);
+
+    const completo = await pedir('555555');
+    expect(completo.status).toBe(409);
+    expect(completo.body.message).toBe(MENSAJE_SIN_PENDIENTES);
+
+    const sinCorreo = await pedir('777777');
+    expect(sinCorreo.status).toBe(422);
+    expect(sinCorreo.body.message).toBe(MENSAJE_SIN_CORREO);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(db.mktExpedienteEnlace._rows()).toHaveLength(0);
   });
 
   it('el código se guarda solo como hash (HMAC), nunca en claro', async () => {
@@ -255,10 +280,10 @@ describe('acceso por cédula + código', () => {
       data: { alcance: 'poliza', expedienteId: e.id, motivo: 'x' },
     });
     expect((await solicitarCodigo('V', '12345678')).resultado).toBe(
-      'sin_coincidencia',
+      'sin_pendientes',
     );
     expect((await solicitarCodigo('V', '555555')).resultado).toBe(
-      'sin_coincidencia',
+      'sin_pendientes',
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -329,7 +354,7 @@ describe('acceso por cédula + código', () => {
         .post('/api/expedientes/publico/verificar')
         .set('X-Forwarded-For', nuevaIp())
         .send({ tipoDoc: 'E', documento: '81234567' });
-    for (let i = 0; i < 5; i++) expect((await send()).status).toBe(200);
+    for (let i = 0; i < 5; i++) expect((await send()).status).not.toBe(429);
     expect((await send()).status).toBe(429);
   });
 
@@ -340,7 +365,7 @@ describe('acceso por cédula + código', () => {
         .post('/api/expedientes/publico/verificar')
         .set('X-Forwarded-For', ip)
         .send({ tipoDoc: 'V', documento: String(30000000 + n) });
-    for (let i = 0; i < 10; i++) expect((await send(i)).status).toBe(200);
+    for (let i = 0; i < 10; i++) expect((await send(i)).status).not.toBe(429);
     const r = await send(99);
     expect(r.status).toBe(429);
     expect(r.body.message).toMatch(/Demasiados intentos/);
