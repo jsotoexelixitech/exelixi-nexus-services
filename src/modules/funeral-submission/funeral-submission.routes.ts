@@ -163,7 +163,8 @@ router.get('/', revisionPanelGuard, async (req: Request, res: Response) => {
     typeof req.query.estado === 'string' ? req.query.estado.trim() : undefined;
 
   try {
-    const data = await svc.listByEmpresa(empresaId, { estado });
+    const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+    const data = await svc.listByEmpresa(empresaId, { estado, q, limit: Number(req.query.limit) || undefined });
     res.json({ success: true, data, count: data.length });
   } catch (err: unknown) {
     const msg =
