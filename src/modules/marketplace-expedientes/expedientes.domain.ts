@@ -30,13 +30,16 @@ export type EstadoPago = 'pagada' | 'pendiente';
 /**
  * pastora y viajero (12-nov-2026): pólizas emitidas por las APIs de integración de nest-api
  * (riesgos-generales ramo 25 y viajero-*); los documentos los carga el integrador.
+ * trayecto (17-nov-2026): póliza de flota Trayecto Seguro (servidor de flota): RIF de la empresa
+ * tomadora y un documento por conductor activo.
  */
 export type ProductoExpediente =
   | 'rcv'
   | 'personas'
   | 'patrimonial'
   | 'pastora'
-  | 'viajero';
+  | 'viajero'
+  | 'trayecto';
 
 export const PRODUCTOS_EXPEDIENTE: readonly ProductoExpediente[] = [
   'rcv',
@@ -44,6 +47,7 @@ export const PRODUCTOS_EXPEDIENTE: readonly ProductoExpediente[] = [
   'patrimonial',
   'pastora',
   'viajero',
+  'trayecto',
 ];
 export type AreaExpediente = 'canal' | 'gestor' | 'productor' | 'desconocida';
 
@@ -87,6 +91,8 @@ export const DEFAULT_CONFIG: ExpedientesConfig = {
     // Un documento por viajero: la lista real va en el snapshot de cada póliza
     // (requisitosAplicables con el expediente); esto es solo el respaldo.
     viajero: ['viajero_1'],
+    // RIF de la empresa + un documento por conductor activo: la lista real va en el snapshot.
+    trayecto: ['rif'],
   },
 };
 
@@ -105,9 +111,22 @@ export const REQUISITO_LABELS: Record<string, string> = {
 /** Requisito de Viajero: un documento (cédula o pasaporte) por viajero, en orden. */
 export const PREFIJO_REQUISITO_VIAJERO = 'viajero_';
 
-export function requisitoLabel(tipo: string): string {
+/**
+ * Requisito de Trayecto Seguro: un documento (cédula o pasaporte) por conductor. La clave lleva el
+ * número del conductor para que no cambie al agregar o desactivar otros: conductor_12345678.
+ */
+export const PREFIJO_REQUISITO_CONDUCTOR = 'conductor_';
+
+/** Etiqueta del requisito; `producto` solo cambia el RIF de Trayecto Seguro («RIF de la empresa»). */
+export function requisitoLabel(
+  tipo: string,
+  producto?: string | null,
+): string {
   const viajero = /^viajero_(\d+)$/.exec(tipo);
   if (viajero) return `Cédula o pasaporte del viajero ${viajero[1]}`;
+  const conductor = /^conductor_([A-Z0-9]+)$/.exec(tipo);
+  if (conductor) return `Cédula o pasaporte del conductor ${conductor[1]}`;
+  if (producto === 'trayecto' && tipo === 'rif') return 'RIF de la empresa';
   return REQUISITO_LABELS[tipo] ?? tipo;
 }
 

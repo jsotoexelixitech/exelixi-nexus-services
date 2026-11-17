@@ -4,7 +4,9 @@
  * falta, EXPEDIENTE_INTERNAL_KEY, la misma clave interna de Nexus ↔ OCR). Sin clave: 503.
  * El integrador (dueño de la póliza) llega en `x-integrador`; lo calcula nest-api desde su apikey.
  *
- * POST /registro                          JSON: póliza emitida por una API de integración.
+ * POST /registro                          JSON: póliza emitida por una API de integración
+ *                                         (trayecto: el mismo integrador la re-registra para
+ *                                         actualizar los conductores).
  * GET  /polizas/:cnpoliza                 estado del expediente (contrato publicado).
  * POST /polizas/:cnpoliza/documentos      multipart: file, tipo, documento?.
  */

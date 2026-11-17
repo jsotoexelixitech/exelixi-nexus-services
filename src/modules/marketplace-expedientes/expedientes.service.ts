@@ -345,7 +345,7 @@ export function documentosCorreo(
             : (r?.motivo ?? '')
           : '';
       out.push({
-        nombre: requisitoLabel(tipo),
+        nombre: requisitoLabel(tipo, e.producto),
         estado,
         ...(motivo ? { motivo } : {}),
         ...(varias ? { poliza: e.cnpoliza } : {}),
@@ -1595,7 +1595,7 @@ export class ExpedientesService {
           r?.estado ?? (e.infoDocumental ? 'faltante' : 'sin_informacion');
         return {
           tipo,
-          label: requisitoLabel(tipo),
+          label: requisitoLabel(tipo, e.producto),
           estado,
           motivo: r?.motivo ?? null,
           ref: r?.ref ?? null,
@@ -2802,7 +2802,7 @@ export class ExpedientesService {
             const deIa = !!diag && r?.decision === 'ia';
             return {
               tipo,
-              label: requisitoLabel(tipo),
+              label: requisitoLabel(tipo, e.producto),
               estado,
               motivo:
                 estado === 'observado'

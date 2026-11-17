@@ -33,6 +33,8 @@ import {
   contextoDeRequisito,
   documentoComparable,
   estadoContrato,
+  MAX_CONDUCTORES_TRAYECTO,
+  personaPorDocumento,
   tipoDocumentoDeRequisito,
 } from './expedientes.integracion.domain';
 import { detectarTipoArchivo } from './expedientes.files';
@@ -110,6 +112,36 @@ function registroViajero() {
       // Repetido: un solo requisito por persona.
       { tipoDoc: 'V', documento: 'V-11.222.333', nombre: 'Ana' },
     ],
+  };
+}
+
+const FLOTA = 'flota:7d1c3a52-0000-4000-8000-000000000001';
+
+function conductor(documento: string, nombre: string) {
+  return { tipoDoc: documento.slice(0, 1), documento, nombre };
+}
+
+function registroTrayecto(
+  conductores = [
+    conductor('V-12345678', 'José Pérez'),
+    conductor('E-81234567', 'Luis Gómez'),
+  ],
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    integrador: FLOTA,
+    producto: 'trayecto',
+    cnpoliza: '18-1-1130480881',
+    cramo: 18,
+    cplan: 'RIDER1',
+    canal: { xcanalVenta: 'TRAYECTO SEGURO' },
+    tomador: {
+      tipoDoc: 'J',
+      documento: 'J-50123456-7',
+      nombre: 'Transporte Ejemplo C.A.',
+    },
+    personas: conductores,
+    ...extra,
   };
 }
 
@@ -252,6 +284,83 @@ describe('reglas puras de integración', () => {
     });
     expect(documentoComparable('P-EM2849387')).toBe('EM2849387');
     expect(documentoComparable('V-11.222.333')).toBe('11222333');
+  });
+
+  it('trayecto: RIF de la empresa + un requisito estable por conductor', () => {
+    const r = armarRequisitos(
+      'trayecto',
+      registroTrayecto().tomador,
+      [
+        ...registroTrayecto().personas,
+        // Repetido con otro formato: un solo requisito.
+        conductor('V-12.345.678', 'José'),
+        { tipoDoc: 'P', documento: 'P-EM2849387', nombre: 'John' },
+      ],
+    );
+    expect(r.requisitos).toEqual([
+      'rif',
+      'conductor_12345678',
+      'conductor_81234567',
+      'conductor_EM2849387',
+    ]);
+    expect(r.personas[0]).toMatchObject({ requisito: 'rif', tipoDoc: 'J' });
+    // Sin la empresa el RIF igual se exige.
+    expect(armarRequisitos('trayecto', null, []).requisitos).toEqual(['rif']);
+    // Tope propio de la flota (Viajero sigue en 20).
+    const muchos = Array.from({ length: 600 }, (_, i) =>
+      conductor(`V-${10000000 + i}`, `C${i}`),
+    );
+    expect(armarRequisitos('trayecto', null, muchos).requisitos).toHaveLength(
+      MAX_CONDUCTORES_TRAYECTO + 1,
+    );
+    expect(armarRequisitos('viajero', null, muchos).requisitos).toHaveLength(20);
+
+    expect(requisitoLabel('conductor_12345678')).toBe(
+      'Cédula o pasaporte del conductor 12345678',
+    );
+    expect(requisitoLabel('rif', 'trayecto')).toBe('RIF de la empresa');
+    // Fuera de Trayecto Seguro el RIF se llama como siempre.
+    expect(requisitoLabel('rif')).toBe('RIF');
+    expect(requisitoLabel('rif', 'pastora')).toBe('RIF');
+    expect(normalizarProducto(null, 'trayecto')).toBe('trayecto');
+
+    const exp = {
+      snapshot: {
+        integracion: {
+          integrador: FLOTA,
+          producto: 'trayecto',
+          requisitos: r.requisitos,
+          personas: r.personas,
+          recibidos: {},
+        },
+      },
+    };
+    expect(tipoDocumentoDeRequisito(exp, 'rif')).toBe('rif');
+    expect(tipoDocumentoDeRequisito(exp, 'conductor_12345678')).toBe('cedula');
+    expect(tipoDocumentoDeRequisito(exp, 'conductor_EM2849387')).toBe(
+      'pasaporte',
+    );
+    const ctx = { personas: [], vehiculo: null, producto: 'trayecto' };
+    expect(
+      contextoDeRequisito(ctx, exp, 'conductor_81234567').personas,
+    ).toMatchObject([{ documento: '81234567', nombre: 'Luis Gómez' }]);
+    expect(contextoDeRequisito(ctx, exp, 'rif').personas).toMatchObject([
+      { tipoDoc: 'J', nombre: 'Transporte Ejemplo C.A.' },
+    ]);
+    // La empresa no es un conductor: su número no ubica ningún requisito de cédula.
+    const integ = {
+      version: 1 as const,
+      integrador: FLOTA,
+      apiKeyId: null,
+      producto: 'trayecto' as const,
+      requisitos: r.requisitos,
+      personas: r.personas,
+      recibidos: {},
+    };
+    expect(personaPorDocumento(integ, 'J-50123456-7')).toBeNull();
+    expect(personaPorDocumento(integ, 'V12345678')?.requisito).toBe(
+      'conductor_12345678',
+    );
   });
 
   it('estados del contrato', () => {
@@ -430,6 +539,185 @@ describe('/api/expedientes/integracion', () => {
     const completo = await estado(VIAJERO, '2501-000777');
     expect(completo.body.data.documentos[1].estado).toBe('validado');
     expect(completo.body.data.estado).toBe('completo');
+  });
+
+  it('Trayecto Seguro: RIF de la empresa y cédula de cada conductor contra SU conductor', async () => {
+    conOcr();
+    const r = await registrar(registroTrayecto());
+    expect(r.status).toBe(201);
+    expect(r.body.data.creado).toBe(true);
+    const exp = db.mktExpediente._rows()[0];
+    expect(exp).toMatchObject({
+      producto: 'trayecto',
+      origen: 'integracion',
+      aseguradoNombre: 'Transporte Ejemplo C.A.',
+    });
+    expect(exp.snapshot.correos).toEqual([]);
+    const inicial = await estado(FLOTA, '18-1-1130480881');
+    expect(inicial.body.data.documentos).toEqual([
+      { tipo: 'rif', estado: 'pendiente' },
+      { tipo: 'cedula', documento: '12345678', estado: 'pendiente' },
+      { tipo: 'cedula', documento: '81234567', estado: 'pendiente' },
+    ]);
+    // Monitor: etiquetas legibles.
+    const lista = await svc.listar({ page: 1, pageSize: 20 } as any);
+    expect(JSON.stringify(lista)).toContain('RIF de la empresa');
+    expect(JSON.stringify(lista)).toContain(
+      'Cédula o pasaporte del conductor 12345678',
+    );
+
+    const sinDoc = await subir(FLOTA, '18-1-1130480881', { tipo: 'cedula' });
+    expect(sinDoc.status).toBe(400);
+    expect(sinDoc.body.message).toMatch(/obligatorio/);
+    const ajeno = await subir(FLOTA, '18-1-1130480881', {
+      tipo: 'cedula',
+      documento: '99888777',
+    });
+    expect(ajeno.status).toBe(400);
+    const empresaComoCedula = await subir(FLOTA, '18-1-1130480881', {
+      tipo: 'cedula',
+      documento: 'J-50123456-7',
+    });
+    expect(empresaComoCedula.status).toBe(400);
+    const tipoMal = await subir(FLOTA, '18-1-1130480881', {
+      tipo: 'licencia',
+    });
+    expect(tipoMal.status).toBe(400);
+    expect(
+      (await subir(OTRO, '18-1-1130480881', { tipo: 'rif' })).status,
+    ).toBe(404);
+
+    ocrExtraido = {
+      rif: 'J-50123456-7',
+      razonSocial: 'TRANSPORTE EJEMPLO C.A.',
+      tipoDoc: 'J',
+    };
+    const rif = await subir(FLOTA, '18-1-1130480881', { tipo: 'rif' });
+    expect(rif.status).toBe(201);
+    expect(rif.body.data).toEqual({ tipo: 'rif', estado: 'recibido' });
+    await esperar();
+
+    // Cédula de Luis subida como la de José: no coincide con SU conductor aunque Luis esté en la póliza.
+    ocrExtraido = { documento: 'E-81.234.567', nombre: 'LUIS', apellido: 'GOMEZ' };
+    const jose = await subir(FLOTA, '18-1-1130480881', {
+      tipo: 'cedula',
+      documento: 'V-12345678',
+    });
+    expect(jose.status).toBe(201);
+    expect(jose.body.data).toEqual({
+      tipo: 'cedula',
+      documento: '12345678',
+      estado: 'recibido',
+    });
+    await esperar();
+    ocrExtraido = { documento: 'E-81.234.567', nombre: 'LUIS', apellido: 'GOMEZ' };
+    await subir(FLOTA, '18-1-1130480881', {
+      tipo: 'cedula',
+      documento: '81234567',
+    });
+    await esperar();
+
+    const fin = await estado(FLOTA, '18-1-1130480881');
+    const [docRif, docJose, docLuis] = fin.body.data.documentos;
+    expect(docRif.tipo).toBe('rif');
+    expect(['validado', 'por_corregir']).toContain(docRif.estado);
+    expect(docJose).toMatchObject({ documento: '12345678', estado: 'por_corregir' });
+    expect(docLuis).toMatchObject({ documento: '81234567', estado: 'validado' });
+    // El OCR recibió el tipo real de cada requisito.
+    const tipos = fetchMock.mock.calls
+      .filter(([u]) => String(u).includes('/documento'))
+      .map(([, init]) => (init.body as FormData).get('tipo'));
+    expect(tipos).toEqual(['rif', 'cedula', 'cedula']);
+  });
+
+  it('Trayecto Seguro: re-registro del mismo integrador actualiza conductores y conserva lo cargado', async () => {
+    conOcr();
+    await registrar(registroTrayecto());
+    ocrExtraido = { documento: 'E-81.234.567', nombre: 'LUIS', apellido: 'GOMEZ' };
+    await subir(FLOTA, '18-1-1130480881', {
+      tipo: 'cedula',
+      documento: 'E-81234567',
+    });
+    await esperar();
+    const antes = await estado(FLOTA, '18-1-1130480881');
+    const luisAntes = antes.body.data.documentos[2];
+    expect(luisAntes.estado).toBe('validado');
+    const id = db.mktExpediente._rows()[0].id;
+
+    // Sale José (desactivado), entra Ana; Luis sigue.
+    const otra = await registrar(
+      registroTrayecto([
+        conductor('E-81234567', 'Luis Gómez'),
+        conductor('V-20111222', 'Ana Ruiz'),
+      ]),
+    );
+    expect(otra.status).toBe(201);
+    expect(otra.body.data).toEqual({ id, creado: false, actualizado: true });
+    expect(db.mktExpediente._rows()).toHaveLength(1);
+    const despues = await estado(FLOTA, '18-1-1130480881');
+    expect(despues.body.data.documentos).toEqual([
+      { tipo: 'rif', estado: 'pendiente' },
+      luisAntes,
+      { tipo: 'cedula', documento: '20111222', estado: 'pendiente' },
+    ]);
+    expect(despues.body.data.estado).toBe('incompleto');
+    const snap = db.mktExpediente._rows()[0].snapshot.integracion;
+    expect(snap.recibidos.conductor_81234567).toMatchObject({ tipo: 'cedula' });
+    // José ya no se exige ni recibe documentos.
+    const jose = await subir(FLOTA, '18-1-1130480881', {
+      tipo: 'cedula',
+      documento: 'V-12345678',
+    });
+    expect(jose.status).toBe(400);
+
+    // Mismo registro otra vez: sin cambios.
+    const igual = await registrar(
+      registroTrayecto([
+        conductor('E-81234567', 'Luis Gómez'),
+        conductor('V-20111222', 'Ana Ruiz'),
+      ]),
+    );
+    expect(igual.body.data).toEqual({ id, creado: false, actualizado: false });
+    // Otro integrador no la toca.
+    const ajena = await registrar({ ...registroTrayecto(), integrador: OTRO });
+    expect(ajena.status).toBe(409);
+    expect(
+      db.mktExpediente._rows()[0].snapshot.integracion.requisitos,
+    ).toEqual(['rif', 'conductor_81234567', 'conductor_20111222']);
+  });
+
+  it('Trayecto Seguro admite más de 50 conductores; los demás productos no', async () => {
+    const muchos = Array.from({ length: 120 }, (_, i) =>
+      conductor(`V-${10000000 + i}`, `Conductor ${i}`),
+    );
+    const flota = await registrar(registroTrayecto(muchos));
+    expect(flota.status).toBe(201);
+    const e = await estado(FLOTA, '18-1-1130480881');
+    expect(e.body.data.documentos).toHaveLength(121);
+    const viajero = await registrar({
+      ...registroViajero(),
+      personas: muchos.slice(0, 51),
+    });
+    expect(viajero.status).toBe(400);
+    const pastora = await registrar(
+      registroPastora({ personas: muchos.slice(0, 51) }),
+    );
+    expect(pastora.status).toBe(400);
+  });
+
+  it('Pastora y Viajero siguen idempotentes: el re-registro no cambia sus requisitos', async () => {
+    await registrar(registroViajero());
+    const r = await registrar({
+      ...registroViajero(),
+      personas: [{ tipoDoc: 'V', documento: '30111222', nombre: 'Otro' }],
+    });
+    expect(r.body.data).toEqual({
+      id: db.mktExpediente._rows()[0].id,
+      creado: false,
+    });
+    expect(
+      db.mktExpediente._rows()[0].snapshot.integracion.requisitos,
+    ).toEqual(['viajero_1', 'viajero_2']);
   });
 
   it('OCR caído: el documento queda por corregir para reenviarlo', async () => {
