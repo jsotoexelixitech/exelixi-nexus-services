@@ -456,16 +456,24 @@ async function reporteDeGrupo(
       { ocultarDestinatarios: true },
     );
   }
-  await svc.registrarNotificacion({
-    expedienteId: null,
-    tipo: 'resumen_nocturno',
-    // etapa = intento (0 = primer envío de la noche; 1 a 3 = reintentos).
-    etapa: intento,
-    resultado: r.resultado,
-    destinatarioMasked: r.destinatarioMasked,
-    error: r.error ?? null,
-    lote,
-  });
+  try {
+    await svc.registrarNotificacion({
+      expedienteId: null,
+      tipo: 'resumen_nocturno',
+      // etapa = intento (0 = primer envío de la noche; 1 a 3 = reintentos).
+      etapa: intento,
+      resultado: r.resultado,
+      destinatarioMasked: r.destinatarioMasked,
+      error: r.error ?? null,
+      lote,
+    });
+  } catch (err) {
+    // El reintento depende de r.resultado, no del registro: si el correo ya salió, un fallo al
+    // guardar la evidencia no puede provocar otro envío (17-nov-2026 llegó dos veces).
+    logger.error(
+      `[expedientes] reporte ${grupo}: no se pudo registrar el envío (${r.resultado}): ${err instanceof Error ? err.message.slice(0, 200) : 'error'}`,
+    );
+  }
   if (r.resultado === 'error')
     await alertaReporteFallido({ fecha, grupo, intento, error: r.error });
   return {

@@ -45,6 +45,7 @@ import {
   ExpedientesConfig,
   maskEmail,
   maskPoliza,
+  recortarDestinatarios,
   mergeConfig,
   normalizarCodigoActor,
   normalizarEstadoPago,
@@ -3067,6 +3068,7 @@ export class ExpedientesService {
     return r;
   }
 
+  /** mnot_destinatario es VARCHAR(200): con muchos destinatarios se recorta (ver recortarDestinatarios). */
   async registrarNotificacion(data: {
     expedienteId: number | null;
     aseguradoKey?: string | null;
@@ -3084,7 +3086,7 @@ export class ExpedientesService {
         tipo: data.tipo,
         etapa: data.etapa ?? null,
         resultado: data.resultado,
-        destinatarioMasked: data.destinatarioMasked ?? null,
+        destinatarioMasked: recortarDestinatarios(data.destinatarioMasked),
         proveedor: 'nest-mail',
         error: data.error ?? null,
         lote: data.lote ?? null,
