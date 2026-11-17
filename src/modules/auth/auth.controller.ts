@@ -67,6 +67,34 @@ const ssoPayerSchema = z
 
 const ssoActorCode = z.union([z.string(), z.number()]);
 
+/** Número de cotización de automóvil de SysIP (cproces): solo dígitos, 1 a 20. */
+const COTIZACION_ID_RE = /^\d{1,20}$/;
+
+/**
+ * `cotizacionID` del cotizador de SysIP como texto de dígitos. Si no cumple el formato se omite (undefined)
+ * en vez de rechazar el SSO: sin cotización válida el flujo es el de siempre.
+ */
+export function normalizeCotizacionId(value: unknown): string | undefined {
+  const raw =
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+      ? String(value)
+      : typeof value === 'string'
+        ? value.trim()
+        : '';
+  return COTIZACION_ID_RE.test(raw) ? raw : undefined;
+}
+
+/** `cdepartamento` del usuario Sis2000 como texto corto; si no es texto/número corto se omite. */
+function normalizeCdepartamento(value: unknown): string | undefined {
+  const raw =
+    typeof value === 'number' && Number.isFinite(value)
+      ? String(value)
+      : typeof value === 'string'
+        ? value.trim()
+        : '';
+  return raw && raw.length <= 20 ? raw : undefined;
+}
+
 /** Schema de metadata permitida en el token SSO.
  *  Campos desconocidos se eliminan con strip() — no quitar actor Sis2000. */
 export const ssoMetadataSchema = z
@@ -118,6 +146,13 @@ export const ssoMetadataSchema = z
     payer: ssoPayerSchema,
     /** Datos opacos devueltos al origen (webhook / emisión). */
     payload: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * Cotización de automóvil de SysIP (cproces). Con valor válido el SSO abre Emisión para emitir esa
+     * cotización (ver resolveSsoTarget). Inválida → se omite, no falla.
+     */
+    cotizacionID: z.preprocess(normalizeCotizacionId, z.string().optional()),
+    /** Departamento del usuario Sis2000 (texto corto). Inválido → se omite. */
+    cdepartamento: z.preprocess(normalizeCdepartamento, z.string().optional()),
   })
   .strip();
 
@@ -150,13 +185,15 @@ const SSO_ROOT_METADATA_KEYS = [
   'xform',
   'xproducto',
   'product',
+  'cotizacionID',
+  'cdepartamento',
 ] as const;
 
 /**
  * Fusiona metadata anidada + campos en la ra?z del body SSO.
  * Ignora strings vac?os para no pisar defaults del m?dulo.
  */
-function mergeSsoMetadata(
+export function mergeSsoMetadata(
   body: Record<string, unknown>,
 ): Record<string, unknown> {
   const nested =
@@ -178,6 +215,19 @@ function mergeSsoMetadata(
 }
 
 const authService = new AuthService();
+
+/**
+ * Target efectivo del sso-delegate. Flujo de cotización de SysIP: con `cotizacionID` válido y target `ocr`
+ * (o vacío) se abre Emisión, que retoma la cotización. Sin cotización, o con otro target explícito, no cambia.
+ */
+export function resolveSsoTarget(
+  target: unknown,
+  metadata: { cotizacionID?: string },
+): unknown {
+  if (!metadata.cotizacionID) return target;
+  if (target == null || target === '' || target === 'ocr') return 'emision';
+  return target;
+}
 
 /** Puertos dev local en submodulo.url (fallback si la URL es solo dominio HTTPS). */
 const SSO_TARGET_PORT: Record<string, string> = {
@@ -530,8 +580,10 @@ export class AuthController {
 
       // No need to query empresa again, we already have empresaId and empresaNombre
 
+      // Flujo de cotización de SysIP: ocr/vacío → emision. Sin cotizacionID es el mismo target de siempre.
+      const ssoTarget = resolveSsoTarget(target, metadata);
       const productHint = resolveSsoFlowProduct(metadata);
-      const submodulo = await findSubmoduloForSsoTarget(target, {
+      const submodulo = await findSubmoduloForSsoTarget(ssoTarget as string, {
         empresaId,
         product: productHint,
       });
@@ -539,7 +591,7 @@ export class AuthController {
       if (!submodulo) {
         return res.status(404).json({
           success: false,
-          message: `No se encontr? un subm?dulo activo para el target "${target}".`,
+          message: `No se encontr? un subm?dulo activo para el target "${ssoTarget}".`,
         });
       }
 
@@ -567,7 +619,7 @@ export class AuthController {
         if (!isAdmin) {
           return res.status(403).json({
             success: false,
-            message: `El servicio "${target}" no está activado para esta empresa.`,
+            message: `El servicio "${ssoTarget}" no está activado para esta empresa.`,
           });
         }
       }
@@ -621,7 +673,14 @@ export class AuthController {
         product,
       );
 
-      const ssoMsg = 'sse ' + empresaId + '/' + target + '/' + submodulo.id;
+      const ssoMsg =
+        'sse ' +
+        empresaId +
+        '/' +
+        ssoTarget +
+        '/' +
+        submodulo.id +
+        (metadata.cotizacionID ? ' cotizacion=' + metadata.cotizacionID : '');
       logger.info('ssoDelegate ' + ssoMsg);
       logger.info('sso-body ' + JSON.stringify(mergedRaw));
 
