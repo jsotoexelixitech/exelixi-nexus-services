@@ -252,13 +252,54 @@ function ssoSubHintScore(
  * Si hay empresa: solo entre los que ella tiene activos.
  * Si product=funerario/patrimoniales: prioriza esa cadena (no la de RCV).
  */
-async function findSubmoduloForSsoTarget(
+/** Targets que siempre abren la cadena RCV/personas por OCR (como antes). */
+const SSO_TARGET_ALIAS_OCR = new Set(['', 'ocr', 'rcv', 'funerario', 'personas', 'patrimoniales']);
+
+/**
+ * Target que no es de la cadena (p. ej. «endosos»): submódulo activo de la empresa cuyo nombre o URL lo
+ * contiene. Antes cualquier target desconocido caía a OCR y abría el módulo equivocado (17-nov-2026).
+ */
+async function findSubmoduloPorNombreDeTarget(target: string, empresaId?: number) {
+  const t = target.trim().toLowerCase();
+  if (!/^[a-z0-9_-]{3,20}$/.test(t)) return null;
+  const raiz = t.replace(/s$/, '');
+  const rows = await prisma.submodulo.findMany({
+    where: {
+      activo: true,
+      url: { not: null },
+      OR: [
+        { nombre: { contains: raiz, mode: 'insensitive' as const } },
+        { url: { contains: raiz, mode: 'insensitive' as const } },
+      ],
+    },
+    select: { id: true, url: true, nombre: true },
+    orderBy: { id: 'asc' },
+  });
+  if (!rows.length) return null;
+  if (!empresaId) return rows[0];
+  const links = await prisma.empresaSubmodulo.findMany({
+    where: { empresaId, activo: true, submoduloId: { in: rows.map((r) => r.id) } },
+    select: { submoduloId: true },
+  });
+  const asignados = new Set(links.map((l) => l.submoduloId));
+  return rows.find((r) => asignados.has(r.id)) ?? null;
+}
+
+export async function findSubmoduloForSsoTarget(
   target: string,
   opts?: {
     empresaId?: number;
     product?: 'rcv' | 'funerario' | 'patrimoniales';
   },
 ) {
+  const pedido = String(target ?? '').trim().toLowerCase();
+  if (!(pedido in SSO_TARGET_PORT) && !SSO_TARGET_ALIAS_OCR.has(pedido)) {
+    const propio = await findSubmoduloPorNombreDeTarget(pedido, opts?.empresaId);
+    if (propio) return { id: propio.id, url: propio.url, nombre: propio.nombre };
+    logger.warn(
+      `[sso-delegate] target "${pedido.slice(0, 20)}" sin submódulo propio para la empresa; se abre OCR como antes`,
+    );
+  }
   const key = target in SSO_TARGET_PORT ? target : 'ocr';
   const puerto = SSO_TARGET_PORT[key];
   const nameHint = SSO_TARGET_NAME[key] ?? SSO_TARGET_NAME.ocr;
