@@ -756,6 +756,47 @@ describe('reporte nocturno: reintentos', () => {
     });
   });
 
+  it('17-nov: si guardar el registro falla tras enviar, no reintenta ni duplica el correo', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await destinatarios();
+    const spy = vi
+      .spyOn(svc, 'registrarNotificacion')
+      .mockRejectedValueOnce(
+        new Error('The provided value for the column is too long'),
+      );
+    const base = await ejecutarJob('nocturna', { origen: 'auto', ahora: a(0) });
+    expect(base).toMatchObject({ omitido: false, estado: 'ok' });
+    expect((base as any).resumen).toMatchObject({
+      resultado: 'enviado',
+      reintentar: false,
+    });
+    expect(await reintentarNocturna(a(6))).toBeNull();
+    expect(await reintentarNocturna(a(40))).toBeNull();
+    expect(reporteCalls()).toHaveLength(1);
+    expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+      expect.stringMatching(/no se pudo registrar el envío \(enviado\)/),
+    );
+    spy.mockRestore();
+  });
+
+  it('muchos destinatarios: el registro recorta la lista a 200 caracteres', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    process.env.EXPEDIENTES_ENTORNO = 'produccion';
+    const lista = [
+      'yperez', 'imunoz', 'mvelasquez', 'jsoto', 'aleon', 'ehernandez', 'mgarcia', 'lrodriguez', 'pmartinez',
+    ].map((u) => `${u}@lamundialdeseguros.com`);
+    await destinatarios(lista);
+    const base = await ejecutarJob('nocturna', { origen: 'auto', ahora: a(0) });
+    expect((base as any).resumen).toMatchObject({ resultado: 'enviado' });
+    const notif = db.mktExpedienteNotificacion
+      ._rows()
+      .find((n: any) => n.tipo === 'resumen_nocturno');
+    expect(notif.resultado).toBe('enviado');
+    expect(notif.destinatarioMasked.length).toBeLessThanOrEqual(200);
+    expect(notif.destinatarioMasked).toMatch(/^yp\*\*\*@lamundialdeseguros\.com, .* \+\d+ más$/);
+    expect(reporteCalls()).toHaveLength(1);
+  });
+
   it('sin destinatarios no es un fallo de entrega: no reintenta', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const base = await ejecutarJob('nocturna', { origen: 'auto', ahora: a(0) });

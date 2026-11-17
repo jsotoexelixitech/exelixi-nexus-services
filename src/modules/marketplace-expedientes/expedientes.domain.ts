@@ -571,6 +571,29 @@ export function maskEmail(v?: string | null): string | null {
   return `${u}@${domain}`;
 }
 
+/**
+ * Destinatarios enmascarados («ab***@x.com, cd***@y.com») recortados a `max` caracteres para
+ * mnot_destinatario (VARCHAR(200)): deja los que caben y agrega «+N más».
+ */
+export function recortarDestinatarios(
+  v?: string | null,
+  max = 200,
+): string | null {
+  if (v == null) return null;
+  if (v.length <= max) return v;
+  const partes = v.split(', ');
+  let out = '';
+  for (let i = 0; i < partes.length; i++) {
+    const cand = out ? `${out}, ${partes[i]}` : partes[i];
+    const resto = partes.length - i - 1;
+    if ((cand + (resto ? ` +${resto} más` : '')).length > max) {
+      return `${out} +${partes.length - i} más`.trim().slice(0, max);
+    }
+    out = cand;
+  }
+  return out.slice(0, max);
+}
+
 export function maskPoliza(v?: string | null): string {
   const s = String(v ?? '').trim();
   if (s.length <= 4) return '****';
