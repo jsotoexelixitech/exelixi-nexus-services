@@ -31,8 +31,10 @@ import {
   EstadoContrato,
   IntegracionSnapshot,
   integracionDe,
+  MAX_CONDUCTORES_TRAYECTO,
   personaPorDocumento,
   PRODUCTOS_INTEGRACION,
+  REQUISITO_RIF_EMPRESA,
   TIPOS_CONTRATO,
   TIPOS_POR_PRODUCTO,
   tipoPorDefecto,
@@ -41,6 +43,9 @@ import { expedientesService as svc } from './expedientes.service';
 
 /** Máximo del archivo en la API de integradores (contrato: 10 MB). */
 export const MAX_ARCHIVO_INTEGRACION = 10 * 1024 * 1024;
+
+/** Personas por registro (Pastora, Viajero); Trayecto Seguro admite MAX_CONDUCTORES_TRAYECTO. */
+const MAX_PERSONAS_REGISTRO = 50;
 
 const MENSAJE_NO_ENCONTRADA = 'Póliza no encontrada.';
 
@@ -111,7 +116,22 @@ export const registroIntegracionSchema = z.object({
     .optional()
     .nullable(),
   tomador: personaSchema.optional().nullable(),
-  personas: z.array(personaSchema).max(50).optional().default([]),
+  // 50 personas; Trayecto Seguro (conductores de la flota) hasta MAX_CONDUCTORES_TRAYECTO.
+  personas: z
+    .array(personaSchema)
+    .max(MAX_CONDUCTORES_TRAYECTO)
+    .optional()
+    .default([]),
+}).superRefine((v, ctx) => {
+  if (v.producto !== 'trayecto' && v.personas.length > MAX_PERSONAS_REGISTRO)
+    ctx.addIssue({
+      code: z.ZodIssueCode.too_big,
+      maximum: MAX_PERSONAS_REGISTRO,
+      type: 'array',
+      inclusive: true,
+      path: ['personas'],
+      message: `personas admite hasta ${MAX_PERSONAS_REGISTRO} elementos.`,
+    });
 });
 export type RegistroIntegracion = z.infer<typeof registroIntegracionSchema>;
 
@@ -149,20 +169,111 @@ async function delIntegrador(
 }
 
 /**
+ * Trayecto Seguro: el mismo integrador vuelve a registrar la póliza cuando cambian los conductores.
+ * Se reemplazan requisitos y personas (los conductores nuevos se exigen; los desactivados dejan de
+ * exigirse) y se conservan el expediente, `recibidos` y las filas de requisitos ya cargadas: un
+ * conductor que vuelve recupera su documento. El RIF de la empresa se exige siempre.
+ */
+async function actualizarIntegracion(
+  existente: MktExpediente,
+  input: RegistroIntegracion,
+): Promise<{ id: number; creado: false; actualizado: boolean }> {
+  const { requisitos, personas } = armarRequisitos(
+    input.producto,
+    input.tomador,
+    input.personas ?? [],
+  );
+  const cambio = await enSerie(existente.id, async () => {
+    const actual =
+      (await prisma.mktExpediente.findUnique({
+        where: { id: existente.id },
+      })) ?? existente;
+    const integActual = integracionDe(actual.snapshot);
+    if (!integActual) return null;
+    const antes = integActual.requisitos;
+    const mismos =
+      JSON.stringify(antes) === JSON.stringify(requisitos) &&
+      JSON.stringify(integActual.personas) === JSON.stringify(personas);
+    if (mismos) return null;
+    const snap = (
+      actual.snapshot && typeof actual.snapshot === 'object'
+        ? actual.snapshot
+        : {}
+    ) as Record<string, unknown>;
+    const integNueva: IntegracionSnapshot = {
+      ...integActual,
+      apiKeyId: input.apiKeyId ?? integActual.apiKeyId,
+      requisitos,
+      personas,
+    };
+    const principal = personas[0] ?? null;
+    await prisma.mktExpediente.update({
+      where: { id: actual.id },
+      data: {
+        ...(principal
+          ? {
+              aseguradoKey: aseguradoKey({
+                tipoDoc: principal.tipoDoc,
+                documento: principal.documento,
+              }),
+              aseguradoTipoDoc: principal.tipoDoc?.slice(0, 2) ?? null,
+              aseguradoDocumento: principal.documento.slice(0, 32),
+              aseguradoNombre: principal.nombre,
+              aseguradoApellido: principal.apellido,
+            }
+          : {}),
+        snapshot: {
+          ...snap,
+          ...(input.tomador
+            ? {
+                tomador: {
+                  tipoDoc: input.tomador.tipoDoc,
+                  documento: input.tomador.documento,
+                  nombre: input.tomador.nombre,
+                  apellido: input.tomador.apellido,
+                },
+              }
+            : {}),
+          ...(input.cplan ? { plan: input.cplan } : {}),
+          integracion: integNueva,
+        } as unknown as Prisma.InputJsonValue,
+      },
+    });
+    return {
+      agregados: requisitos.filter((r) => !antes.includes(r)),
+      quitados: antes.filter((r) => !requisitos.includes(r)),
+    };
+  });
+  if (!cambio) return { id: existente.id, creado: false, actualizado: false };
+  await svc.evento(existente.id, 'integracion_actualizada', 'integracion', {
+    ...cambio,
+    apiKeyId: input.apiKeyId ?? null,
+  });
+  // Crea las filas de los requisitos nuevos y deja el estado documental al día.
+  await svc.recalcularEstado(existente.id);
+  return { id: existente.id, creado: false, actualizado: true };
+}
+
+/**
  * Registra (idempotente) la póliza emitida por una API de integración. Una póliza ya registrada
- * por otro integrador o por otra vía (Emisión, conciliación) no se toca: 409.
+ * por otro integrador o por otra vía (Emisión, conciliación) no se toca: 409. Trayecto Seguro: el
+ * mismo integrador la vuelve a registrar para actualizar los conductores (actualizarIntegracion).
  */
 export async function registrarIntegracion(
   input: RegistroIntegracion,
-): Promise<{ id: number; creado: boolean }> {
+): Promise<{ id: number; creado: boolean; actualizado?: boolean }> {
   const empresaId = empresaObligatoria();
   const cnpoliza = input.cnpoliza.trim();
   const existente = await prisma.mktExpediente.findUnique({
     where: { empresaId_cnpoliza: { empresaId, cnpoliza } },
   });
   if (existente) {
-    if (esDuenoDe(existente.snapshot, input.integrador))
+    if (esDuenoDe(existente.snapshot, input.integrador)) {
+      const integ = integracionDe(existente.snapshot);
+      if (integ?.producto === 'trayecto' && input.producto === 'trayecto')
+        return actualizarIntegracion(existente, input);
       return { id: existente.id, creado: false };
+    }
     logger.warn(
       `[expedientes] integración: póliza ${cnpoliza} ya registrada (expediente ${existente.id}, origen ${existente.origen}); no se cambia de dueño`,
     );
@@ -263,8 +374,14 @@ export async function registrarIntegracion(
     const otro = await prisma.mktExpediente.findUnique({
       where: { empresaId_cnpoliza: { empresaId, cnpoliza } },
     });
-    if (otro && esDuenoDe(otro.snapshot, input.integrador))
+    if (otro && esDuenoDe(otro.snapshot, input.integrador)) {
+      if (
+        input.producto === 'trayecto' &&
+        integracionDe(otro.snapshot)?.producto === 'trayecto'
+      )
+        return actualizarIntegracion(otro, input);
       return { id: otro.id, creado: false };
+    }
     throw new AppError('La póliza ya está registrada en el monitor.', 409);
   }
   await svc.evento(exp.id, 'expediente_creado', 'integracion', {
@@ -308,9 +425,15 @@ export async function estadoIntegracion(
     const persona = integ.personas.find((p) => p.requisito === tipoReq);
     const estado = estadoContrato(r?.estado ?? 'faltante');
     const tipo =
-      integ.recibidos[tipoReq]?.tipo ?? tipoPorDefecto(integ.producto, persona);
+      integ.recibidos[tipoReq]?.tipo ??
+      tipoPorDefecto(integ.producto, persona, tipoReq);
     const out: DocumentoContrato = { tipo, estado };
-    if (integ.producto === 'viajero' && persona)
+    // Viajero y conductores de Trayecto Seguro: el número de la persona (el RIF de la empresa, no).
+    if (
+      persona &&
+      (integ.producto === 'viajero' ||
+        (integ.producto === 'trayecto' && tipoReq !== REQUISITO_RIF_EMPRESA))
+    )
       out.documento = persona.documento;
     if (estado === 'por_corregir') {
       const diag = r ? diagnosticoVigente(r) : null;
@@ -394,6 +517,25 @@ export async function cargarIntegracion(
       );
     requisito = persona.requisito;
     documento = persona.documento;
+  } else if (integ.producto === 'trayecto') {
+    if (tipo === 'rif') {
+      // RIF de la empresa tomadora: uno por póliza.
+      requisito = REQUISITO_RIF_EMPRESA;
+    } else {
+      if (!params.documento)
+        throw new AppError(
+          'documento es obligatorio para la cédula o el pasaporte del conductor.',
+          400,
+        );
+      const persona = personaPorDocumento(integ, params.documento);
+      if (!persona)
+        throw new AppError(
+          'El documento no corresponde a ningún conductor activo de la póliza.',
+          400,
+        );
+      requisito = persona.requisito;
+      documento = persona.documento;
+    }
   } else {
     requisito = integ.requisitos[0] ?? 'cedula';
   }

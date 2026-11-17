@@ -9,15 +9,21 @@
  * - requisitos: lista de requisitos de esa póliza (Viajero: uno por viajero).
  * - personas: a quién corresponde cada requisito (documento y nombre, para la IA).
  * - recibidos: el tipo de documento que mandó el integrador en cada requisito (cedula, rif, pasaporte).
+ *
+ * Trayecto Seguro (flota): requisito `rif` de la empresa tomadora + `conductor_<número>` por
+ * conductor activo. El servidor de flota vuelve a registrar la póliza cuando cambian los conductores.
  */
-import { PREFIJO_REQUISITO_VIAJERO } from './expedientes.domain';
+import {
+  PREFIJO_REQUISITO_CONDUCTOR,
+  PREFIJO_REQUISITO_VIAJERO,
+} from './expedientes.domain';
 import {
   ContextoPoliza,
   numeroDocumento,
   PersonaPoliza,
 } from './expedientes.ia';
 
-export const PRODUCTOS_INTEGRACION = ['pastora', 'viajero'] as const;
+export const PRODUCTOS_INTEGRACION = ['pastora', 'viajero', 'trayecto'] as const;
 export type ProductoIntegracion = (typeof PRODUCTOS_INTEGRACION)[number];
 
 /** Tipos del contrato publicado (`tipo` del POST). */
@@ -37,6 +43,8 @@ export const TIPOS_POR_PRODUCTO: Record<ProductoIntegracion, TipoContrato[]> = {
   pastora: ['cedula', 'rif'],
   // Cédula o pasaporte de cada viajero.
   viajero: ['cedula', 'pasaporte'],
+  // RIF de la empresa (requisito `rif`) y cédula o pasaporte de cada conductor.
+  trayecto: ['rif', 'cedula', 'pasaporte'],
 };
 
 /** Estados del contrato publicado. */
@@ -44,6 +52,27 @@ export type EstadoContrato = 'pendiente' | 'recibido' | 'validado' | 'por_correg
 
 /** Máximo de viajeros por póliza (VIAJE3/VIAJE4 admiten titular + 5 dependientes). */
 export const MAX_PERSONAS_INTEGRACION = 20;
+
+/** Máximo de conductores por póliza de flota (Trayecto Seguro). */
+export const MAX_CONDUCTORES_TRAYECTO = 500;
+
+/** Requisito de la empresa tomadora en Trayecto Seguro. */
+export const REQUISITO_RIF_EMPRESA = 'rif';
+
+/** La columna mreq_tipo admite 32 caracteres: conductor_ + hasta 22 del número. */
+const MAX_TIPO_REQUISITO = 32;
+
+/** Requisito del conductor con ese número comparable (conductor_12345678). */
+export function requisitoConductor(documento: string): string {
+  return `${PREFIJO_REQUISITO_CONDUCTOR}${documento}`.slice(
+    0,
+    MAX_TIPO_REQUISITO,
+  );
+}
+
+export function esRequisitoConductor(requisito: string): boolean {
+  return requisito.startsWith(PREFIJO_REQUISITO_CONDUCTOR);
+}
 
 export interface PersonaIntegracion {
   requisito: string;
@@ -165,6 +194,8 @@ export interface PersonaEntrada {
  * Requisitos y personas de la póliza al registrarla:
  * - pastora: un requisito `cedula` (cédula o RIF) del tomador.
  * - viajero: un requisito `viajero_N` por viajero (sin repetir documento), en orden.
+ * - trayecto: `rif` de la empresa (el tomador) + `conductor_<número>` por conductor (personas), sin
+ *   repetir documento y hasta MAX_CONDUCTORES_TRAYECTO.
  */
 export function armarRequisitos(
   producto: ProductoIntegracion,
@@ -189,6 +220,26 @@ export function armarRequisitos(
     const t = tomador ? persona(tomador, 'cedula') : null;
     return { requisitos: ['cedula'], personas: t ? [t] : [] };
   }
+  if (producto === 'trayecto') {
+    // RIF de la empresa (siempre) + un requisito por conductor, sin repetir documento.
+    const empresa = tomador ? persona(tomador, REQUISITO_RIF_EMPRESA) : null;
+    const conductores: PersonaIntegracion[] = [];
+    for (const p of personas) {
+      if (conductores.length >= MAX_CONDUCTORES_TRAYECTO) break;
+      const doc = documentoComparable(p.documento);
+      const requisito = doc ? requisitoConductor(doc) : '';
+      if (!doc || conductores.some((x) => x.requisito === requisito)) continue;
+      const r = persona(p, requisito);
+      if (r) conductores.push(r);
+    }
+    return {
+      requisitos: [
+        REQUISITO_RIF_EMPRESA,
+        ...conductores.map((p) => p.requisito),
+      ],
+      personas: [...(empresa ? [empresa] : []), ...conductores],
+    };
+  }
   const out: PersonaIntegracion[] = [];
   for (const p of personas) {
     if (out.length >= MAX_PERSONAS_INTEGRACION) break;
@@ -200,14 +251,20 @@ export function armarRequisitos(
   return { requisitos: out.map((p) => p.requisito), personas: out };
 }
 
-/** Tipo del contrato que se informa para un requisito todavía sin documento. */
+/**
+ * Tipo del contrato que se informa para un requisito todavía sin documento. `requisito` solo cuenta
+ * en Trayecto Seguro: el de la empresa es siempre RIF.
+ */
 export function tipoPorDefecto(
   producto: ProductoIntegracion,
   persona: Pick<PersonaIntegracion, 'tipoDoc'> | null | undefined,
+  requisito?: string,
 ): TipoContrato {
   const t = persona?.tipoDoc ?? null;
   if (producto === 'pastora')
     return t === 'J' || t === 'G' || t === 'C' ? 'rif' : 'cedula';
+  if (producto === 'trayecto' && requisito === REQUISITO_RIF_EMPRESA)
+    return 'rif';
   return t === 'P' ? 'pasaporte' : 'cedula';
 }
 
@@ -224,16 +281,17 @@ export function tipoDocumentoDeRequisito(
   if (!i) return tipoRequisito;
   const recibido = i.recibidos[tipoRequisito]?.tipo;
   if (recibido) return recibido;
-  if (i.producto === 'viajero') {
+  if (i.producto === 'viajero' || i.producto === 'trayecto') {
     const p = i.personas.find((x) => x.requisito === tipoRequisito);
-    return tipoPorDefecto('viajero', p);
+    return tipoPorDefecto(i.producto, p, tipoRequisito);
   }
   return tipoRequisito;
 }
 
 /**
- * Viajero: el documento de cada requisito se compara SOLO con su viajero (no con cualquiera de la
- * póliza). Lo demás devuelve el contexto sin cambios.
+ * Viajero y Trayecto Seguro: el documento de cada requisito se compara SOLO con su persona (el
+ * viajero, el conductor o la empresa del RIF), no con cualquiera de la póliza. Lo demás devuelve el
+ * contexto sin cambios.
  */
 export function contextoDeRequisito(
   ctx: ContextoPoliza,
@@ -241,7 +299,7 @@ export function contextoDeRequisito(
   tipoRequisito: string,
 ): ContextoPoliza {
   const i = integracionDe(exp.snapshot);
-  if (!i || i.producto !== 'viajero') return ctx;
+  if (!i || (i.producto !== 'viajero' && i.producto !== 'trayecto')) return ctx;
   const p = i.personas.find((x) => x.requisito === tipoRequisito);
   if (!p) return ctx;
   const persona: PersonaPoliza = {
@@ -263,12 +321,23 @@ export function estadoContrato(estado: string): EstadoContrato {
   return 'pendiente';
 }
 
-/** Persona del requisito de Viajero según el número que manda el integrador. */
+/**
+ * Persona del requisito según el número que manda el integrador: el viajero (Viajero) o el conductor
+ * activo (Trayecto Seguro; la empresa del RIF no cuenta).
+ */
 export function personaPorDocumento(
   i: IntegracionSnapshot,
   documento: unknown,
 ): PersonaIntegracion | null {
   const doc = documentoComparable(documento);
   if (!doc) return null;
-  return i.personas.find((p) => p.documento === doc) ?? null;
+  return (
+    i.personas.find(
+      (p) =>
+        p.documento === doc &&
+        (i.producto !== 'trayecto' ||
+          (esRequisitoConductor(p.requisito) &&
+            i.requisitos.includes(p.requisito))),
+    ) ?? null
+  );
 }

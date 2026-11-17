@@ -241,7 +241,7 @@ export const listQuerySchema = z.object({
   // C / G / P (centidad del SSO) o el nombre del área.
   area: z.string().trim().max(20).optional(),
   producto: z
-    .enum(['rcv', 'personas', 'patrimonial', 'pastora', 'viajero'])
+    .enum(['rcv', 'personas', 'patrimonial', 'pastora', 'viajero', 'trayecto'])
     .optional(),
   desde: z
     .string()
