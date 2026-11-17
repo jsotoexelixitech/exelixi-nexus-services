@@ -102,7 +102,7 @@ function normalizeCdepartamento(value: unknown): string | undefined {
 
 /** Schema de metadata permitida en el token SSO.
  *  Campos desconocidos se eliminan con strip() — no quitar actor Sis2000. */
-const ssoMetadataSchema = z
+export const ssoMetadataSchema = z
   .object({
     cproductor: ssoActorCode.optional(),
     canal: z.string().max(50).optional(),
