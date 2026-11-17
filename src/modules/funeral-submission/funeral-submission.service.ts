@@ -1,3 +1,4 @@
+import { limiteLista, terminosBusqueda, whereBusqueda } from './funeral-submission-list';
 import { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
 import { startCheckoutLink, inferModuloGroupId } from '../flow/flow.service';
@@ -261,15 +262,17 @@ export class FuneralSubmissionService {
 
   async listByEmpresa(
     empresaId: number,
-    opts?: { estado?: string; limit?: number },
+    opts?: { estado?: string; limit?: number; q?: string },
   ) {
     const where: Prisma.FuneralSubmissionWhereInput = { empresaId };
     if (opts?.estado) where.estado = opts.estado;
+    const terminos = terminosBusqueda(opts?.q);
+    if (terminos.length) where.AND = whereBusqueda(terminos);
 
     const rows = await prisma.funeralSubmission.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      take: Math.min(opts?.limit ?? 100, 200),
+      take: limiteLista(opts?.limit),
     });
     return rows.map(formatRow);
   }
