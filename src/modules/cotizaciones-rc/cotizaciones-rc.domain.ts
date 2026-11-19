@@ -81,6 +81,80 @@ export interface CotizacionNueva {
   tomadorCorreo: string | null;
   moneda: string | null;
   datos: Obj;
+  /** Intermediario que cotizó (SSO de Sys2000); null = cotización web. */
+  creador: CreadorCotizacion | null;
+}
+
+// ─── Quién cotiza (SSO de Sys2000) ──────────────────────────────────────────
+
+/**
+ * Intermediario que entró al cotizador desde Sys2000. Lo arma el servidor del cotizador con el nexus_token que él
+ * mismo validó (nunca el navegador); llega en el body que solo ese servidor puede mandar (x-api-key).
+ */
+export interface CreadorCotizacion {
+  modo: 'intermediario';
+  cusuario: string | null;
+  cproductor: number | null;
+  crol: string | null;
+  email: string | null;
+  nombre: string | null;
+  login: string | null;
+  canal: string | null;
+}
+
+const textoONull = (v: unknown, max: number): string | null =>
+  typeof v === 'string' || typeof v === 'number'
+    ? texto(v, max) || null
+    : null;
+
+const enteroPositivo = (v: unknown): number | null => {
+  const s = typeof v === 'number' ? String(v) : typeof v === 'string' ? v.trim() : '';
+  return /^\d{1,10}$/.test(s) && Number(s) > 0 ? Number(s) : null;
+};
+
+/** `creador` del body saneado; cualquier otra cosa (o nada) = cotización web. */
+export function creadorDe(v: unknown): CreadorCotizacion | null {
+  if (!esObj(v) || v.modo !== 'intermediario') return null;
+  const c: CreadorCotizacion = {
+    modo: 'intermediario',
+    cusuario: textoONull(v.cusuario, 40),
+    cproductor: enteroPositivo(v.cproductor),
+    crol: textoONull(v.crol, 40),
+    email: textoONull(v.email, 150),
+    nombre: textoONull(v.nombre, 150),
+    login: textoONull(v.login, 80),
+    canal: textoONull(v.canal, 150),
+  };
+  return c.cusuario || c.cproductor ? c : null;
+}
+
+/**
+ * Productor y usuario de la emisión: los del intermediario que cotizó. Cotización web: nada (el body ya trae el
+ * productor de La Mundial directo que puso el cotizador).
+ */
+export function actorDeEmision(creador: unknown): Obj {
+  const c = creadorDe(creador);
+  if (!c) return {};
+  return {
+    ...(c.cproductor ? { productor: c.cproductor } : {}),
+    ...(c.cusuario
+      ? { cusuario: /^\d{1,10}$/.test(c.cusuario) ? Number(c.cusuario) : c.cusuario }
+      : {}),
+  };
+}
+
+/** «Emitida por» para el registro y el monitor: nombre y productor, sin login, correo ni cusuario. */
+export interface EmitidaPor {
+  modo: 'intermediario' | 'web';
+  nombre: string | null;
+  cproductor: number | null;
+}
+
+export function emitidaPorDe(creador: unknown): EmitidaPor {
+  const c = creadorDe(creador);
+  return c
+    ? { modo: 'intermediario', nombre: c.nombre ?? c.canal, cproductor: c.cproductor }
+    : { modo: 'web', nombre: null, cproductor: null };
 }
 
 /** Valida el cuerpo de POST /api/cotizaciones-rc. El JSON `datos` se guarda tal cual. */
@@ -120,6 +194,7 @@ export function validarCotizacionNueva(body: unknown): CotizacionNueva {
     tomadorCorreo: texto(tomador.correo, 200).toLowerCase() || null,
     moneda: texto(datos.moneda, 8) || null,
     datos,
+    creador: creadorDe(b.creador),
   };
 }
 
@@ -496,6 +571,8 @@ export interface FilaCotizacion {
   error: string | null;
   /** Envío automático de la póliza: { enviadoEn, a, error, … }. */
   correoPoliza: unknown;
+  /** Intermediario que cotizó (CreadorCotizacion) o null (web). */
+  creador?: unknown;
   expiraEn: Date;
   createdAt: Date;
   updatedAt: Date | null;
@@ -815,6 +892,8 @@ export function aRespuesta(f: FilaCotizacion, conDatos = true) {
     vencida:
       vencida(f) && (f.estado === 'cotizada' || f.estado === 'pendiente_pago'),
     origen: f.origen,
+    // Intermediario que cotizó (SSO de Sys2000) o la web; con la póliza emitida es quien la emitió.
+    emitidaPor: emitidaPorDe(f.creador),
     tomador: {
       nombre: f.tomadorNombre,
       documento: f.tomadorDocumento,

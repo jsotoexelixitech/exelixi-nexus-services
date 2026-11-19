@@ -23,14 +23,14 @@ export async function crear(
   const rows = await prisma.$queryRaw<FilaCotizacion[]>`
     INSERT INTO cotizacion_rc
       (crc_id, crc_codigo, crc_producto, crc_origen, crc_tomador_nombre, crc_tomador_documento, crc_tomador_correo,
-       crc_moneda, crc_datos, crc_expira_en)
+       crc_moneda, crc_datos, crc_creador, crc_expira_en)
     VALUES
       (${id}, ${codigo}, ${c.producto}, ${c.origen}, ${c.tomadorNombre}, ${c.tomadorDocumento}, ${c.tomadorCorreo},
-       ${c.moneda}, ${json(c.datos)}::jsonb, CURRENT_TIMESTAMP + make_interval(days => ${DIAS_VIGENCIA}::int))
+       ${c.moneda}, ${json(c.datos)}::jsonb, ${c.creador ? json(c.creador) : null}::jsonb, CURRENT_TIMESTAMP + make_interval(days => ${DIAS_VIGENCIA}::int))
     RETURNING crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
       crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
       crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, crc_datos AS datos,
-      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_expira_en AS "expiraEn",
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_creador AS creador, crc_expira_en AS "expiraEn",
       crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"`;
   return rows[0];
 }
@@ -42,7 +42,7 @@ export async function porCodigo(
     SELECT crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
       crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
       crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, crc_datos AS datos,
-      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_expira_en AS "expiraEn",
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_creador AS creador, crc_expira_en AS "expiraEn",
       crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"
     FROM cotizacion_rc WHERE crc_codigo = ${codigo} LIMIT 1`;
   return rows[0] ?? null;
@@ -67,7 +67,7 @@ export async function listar(f: FiltroLista): Promise<FilaCotizacion[]> {
     SELECT crc_id AS id, crc_codigo AS codigo, crc_producto AS producto, crc_estado AS estado, crc_origen AS origen,
       crc_tomador_nombre AS "tomadorNombre", crc_tomador_documento AS "tomadorDocumento",
       crc_tomador_correo AS "tomadorCorreo", crc_moneda AS moneda, crc_opcion AS opcion, NULL::jsonb AS datos,
-      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_expira_en AS "expiraEn",
+      crc_pago AS pago, crc_poliza AS poliza, crc_error AS error, crc_correo_poliza AS "correoPoliza", crc_creador AS creador, crc_expira_en AS "expiraEn",
       crc_created_at AS "createdAt", crc_updated_at AS "updatedAt"
     FROM cotizacion_rc
     WHERE (${f.vigencia}::text = 'todas'

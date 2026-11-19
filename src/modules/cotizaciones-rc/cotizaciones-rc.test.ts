@@ -45,6 +45,7 @@ import * as nest from './cotizaciones-rc.nest';
 import { startCheckoutLink } from '../flow/flow.service';
 import {
   MAX_ADJUNTOS_BYTES,
+  actorDeEmision,
   adjuntosQueCaben,
   alternativaDe,
   anexosDeCheckout,
@@ -52,8 +53,10 @@ import {
   armarCobro,
   armarCorreoPoliza,
   armarPolizaGuardada,
+  creadorDe,
   emisionDeOpcion,
   emisionesDeOpcion,
+  emitidaPorDe,
   polizasDe,
   repartirPago,
   evaluarRegistros,
@@ -1476,5 +1479,106 @@ describe('cotizaciones-rc · varias pólizas con un solo pago (RCP + RCE)', () =
       expect(repo.marcarPagada).not.toHaveBeenCalled();
       expect(nest.emitir).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ─── SSO de Sys2000: quién cotiza (19-nov-2026) ─────────────────────────────
+
+describe('cotizaciones-rc · SSO de Sys2000 (intermediario que cotiza)', () => {
+  const CREADOR = {
+    modo: 'intermediario',
+    cusuario: '20364172',
+    cproductor: 1051,
+    crol: '7',
+    email: 'ana@lamundial.test',
+    nombre: 'ANA PÉREZ',
+    login: 'aperez',
+    canal: 'Corretaje X',
+  };
+
+  const crearConCreador = (creador: unknown) =>
+    request(app)
+      .post('/api/cotizaciones-rc')
+      .set(KEY)
+      .set('x-cotizador-origen', 'admin')
+      .send({ producto: 'rcg', datos, creador });
+
+  it('sanea el creador: solo modo intermediario con usuario o productor; lo demás es cotización web', () => {
+    expect(creadorDe(CREADOR)).toEqual(CREADOR);
+    expect(creadorDe({ ...CREADOR, cproductor: '1051', extra: 'x' })).toEqual(CREADOR);
+    expect(creadorDe({ ...CREADOR, cproductor: 'abc', cusuario: null })).toBeNull();
+    expect(creadorDe({ cproductor: 1051 })).toBeNull();
+    expect(creadorDe(null)).toBeNull();
+    expect(
+      validarCotizacionNueva({ producto: 'rcg', datos, creador: CREADOR }).creador,
+    ).toEqual(CREADOR);
+    expect(validarCotizacionNueva({ producto: 'rcg', datos }).creador).toBeNull();
+  });
+
+  it('emite con el productor y el usuario del creador; la cotización web no toca el body', () => {
+    expect(actorDeEmision(CREADOR)).toEqual({ productor: 1051, cusuario: 20364172 });
+    expect(actorDeEmision({ ...CREADOR, cusuario: 'U7', cproductor: null })).toEqual({
+      cusuario: 'U7',
+    });
+    expect(actorDeEmision(null)).toEqual({});
+  });
+
+  it('«Emitida por» sin login, correo ni cusuario', () => {
+    expect(emitidaPorDe(CREADOR)).toEqual({
+      modo: 'intermediario',
+      nombre: 'ANA PÉREZ',
+      cproductor: 1051,
+    });
+    expect(emitidaPorDe(null)).toEqual({ modo: 'web', nombre: null, cproductor: null });
+    const r = aRespuesta(fila({ creador: CREADOR }));
+    expect(r.emitidaPor).toEqual(emitidaPorDe(CREADOR));
+    expect(JSON.stringify(r.emitidaPor)).not.toMatch(/aperez|ana@|20364172/);
+    expect(aRespuesta(fila()).emitidaPor).toEqual({ modo: 'web', nombre: null, cproductor: null });
+  });
+
+  it('guarda el creador que manda el servidor del cotizador', async () => {
+    vi.mocked(repo.crear).mockResolvedValue(fila({ creador: CREADOR }));
+    const res = await crearConCreador(CREADOR);
+    expect(res.status).toBe(201);
+    expect(vi.mocked(repo.crear).mock.calls[0][0].creador).toEqual(CREADOR);
+    expect(res.body.data.emitidaPor).toEqual({
+      modo: 'intermediario',
+      nombre: 'ANA PÉREZ',
+      cproductor: 1051,
+    });
+  });
+
+  it('la emisión desde Nexus (canal o pago) lleva el productor y el usuario de quien cotizó', async () => {
+    const base = fila({ estado: 'pendiente_pago', pago: { intentos: [intento] }, creador: CREADOR });
+    vi.mocked(repo.reclamarEmisionCanal).mockResolvedValue(true);
+    vi.mocked(repo.porCodigo).mockImplementation(async () => {
+      const guardada = vi.mocked(repo.guardarPoliza).mock.calls[0]?.[1];
+      return {
+        ...base,
+        opcion: 'II',
+        pago: { ...(base.pago as object), canal: { opcion: 'II' } },
+        ...(guardada ? { estado: 'emitida', poliza: guardada } : {}),
+      };
+    });
+    vi.mocked(nest.emitir).mockResolvedValue({
+      cnpoliza: '28-1-1',
+      cnrecibo: '1',
+      urlpoliza: 'https://sis.test/p.pdf',
+    });
+    vi.mocked(repo.reclamarCorreoPoliza).mockResolvedValue(false);
+
+    const res = await request(app)
+      .post(`/api/cotizaciones-rc/${CODIGO}/emitir-pendiente`)
+      .set({ ...KEY, 'x-cotizador-origen': 'admin' })
+      .send({ opcion: 'II' });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(nest.emitir).mock.calls[0][0]).toMatchObject({
+      cramo: 28,
+      prima_total: 180,
+      productor: 1051,
+      cusuario: 20364172,
+      ncotizacion: CODIGO,
+    });
+    await espera();
   });
 });

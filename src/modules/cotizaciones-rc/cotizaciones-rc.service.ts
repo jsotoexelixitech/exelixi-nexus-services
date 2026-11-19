@@ -25,6 +25,7 @@ import {
   MAX_INTENTOS,
   NOMBRE_RAMO,
   OPCIONES,
+  actorDeEmision,
   adjuntosQueCaben,
   alternativaDe,
   anexosDeCheckout,
@@ -104,7 +105,7 @@ export async function crear(body: unknown): Promise<FilaCotizacion> {
   const nueva = validarCotizacionNueva(body);
   const fila = await repo.crear(nueva);
   logger.info(
-    `[cotizaciones-rc] creada ${fila.codigo} producto=${fila.producto} origen=${fila.origen}`,
+    `[cotizaciones-rc] creada ${fila.codigo} producto=${fila.producto} origen=${fila.origen} productor=${nueva.creador?.cproductor ?? 'web'} cusuario=${nueva.creador?.cusuario ?? '-'}`,
   );
   return fila;
 }
@@ -744,7 +745,12 @@ async function emitirPolizas(
         `[cotizaciones-rc] ${codigo}: la póliza del ramo ${cramo} ya estaba emitida (${p.cnpoliza}); no se reemite`,
       );
     } else {
-      const nueva = await emitirUna(codigo, { ...e, ncotizacion: codigo });
+      // Productor y usuario del intermediario que cotizó (SSO de Sys2000); web: los del body (La Mundial directo).
+      const nueva = await emitirUna(codigo, {
+        ...e,
+        ...actorDeEmision(fila.creador),
+        ncotizacion: codigo,
+      });
       p = {
         ...(varias
           ? { cramo, cotizador: String(e.cotizador ?? ''), prima: primas[i] }

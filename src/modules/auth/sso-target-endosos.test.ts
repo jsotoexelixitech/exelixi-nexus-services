@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const SUBMODULOS = [
   { id: 17, url: 'https://nexusqa.exelixitech.com/ocr/', nombre: 'OCR Documentos', modulo: { nombre: 'RCV' } },
   { id: 40, url: 'https://endosos.exelixitech.com', nombre: 'Endosos ampliación de plan', modulo: { nombre: 'Endosos' } },
+  { id: 41, url: 'https://nexusqa.exelixitech.com/cotizador-rc/', nombre: 'Cotizador RC', modulo: { nombre: 'Cotizador RC' } },
+  // Producción: la URL del cotizador no lleva «cotizador-rc»; se encuentra por el nombre.
+  { id: 42, url: 'https://cotizador.exelixitech.com/', nombre: 'Cotizador RC', modulo: { nombre: 'Cotizador RC' } },
 ];
 let asignados = new Set<number>([17, 40]);
 
@@ -51,6 +54,16 @@ describe('sso-delegate: target que no es de la cadena (17-nov-2026)', () => {
     asignados = new Set([17]);
     const r = await findSubmoduloForSsoTarget('endosos', { empresaId: 7 });
     expect(r?.id).toBe(17);
+  });
+
+  it('«cotizador-rc» abre el submódulo «Cotizador RC» por URL o, si la URL no lo dice, por nombre', async () => {
+    asignados = new Set([17, 40, 41]);
+    expect((await findSubmoduloForSsoTarget('cotizador-rc', { empresaId: 7 }))?.id).toBe(41);
+    asignados = new Set([17, 42]);
+    expect((await findSubmoduloForSsoTarget('cotizador-rc', { empresaId: 7 }))?.id).toBe(42);
+    // Sin el submódulo asignado a la empresa: OCR como cualquier target desconocido.
+    asignados = new Set([17]);
+    expect((await findSubmoduloForSsoTarget('cotizador-rc', { empresaId: 7 }))?.id).toBe(17);
   });
 
   it('ocr y los alias de la cadena siguen abriendo OCR', async () => {
