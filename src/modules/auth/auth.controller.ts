@@ -258,11 +258,13 @@ const SSO_TARGET_ALIAS_OCR = new Set(['', 'ocr', 'rcv', 'funerario', 'personas',
 /**
  * Target que no es de la cadena (p. ej. «endosos»): submódulo activo de la empresa cuyo nombre o URL lo
  * contiene. Antes cualquier target desconocido caía a OCR y abría el módulo equivocado (17-nov-2026).
+ * Con guion también por nombre con espacios: «cotizador-rc» → submódulo «Cotizador RC» (19-nov-2026).
  */
 async function findSubmoduloPorNombreDeTarget(target: string, empresaId?: number) {
   const t = target.trim().toLowerCase();
   if (!/^[a-z0-9_-]{3,20}$/.test(t)) return null;
   const raiz = t.replace(/s$/, '');
+  const conEspacios = raiz.replace(/[-_]+/g, ' ');
   const rows = await prisma.submodulo.findMany({
     where: {
       activo: true,
@@ -270,6 +272,9 @@ async function findSubmoduloPorNombreDeTarget(target: string, empresaId?: number
       OR: [
         { nombre: { contains: raiz, mode: 'insensitive' as const } },
         { url: { contains: raiz, mode: 'insensitive' as const } },
+        ...(conEspacios !== raiz
+          ? [{ nombre: { contains: conEspacios, mode: 'insensitive' as const } }]
+          : []),
       ],
     },
     select: { id: true, url: true, nombre: true },
