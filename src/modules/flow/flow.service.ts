@@ -16,6 +16,7 @@ import {
   resolveSsoFlowProduct,
   type FlowProduct,
 } from '../../utils/flow-product';
+import { resolveCotizacionEntrySlot } from './flow-cotizacion-entry';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -625,6 +626,24 @@ export async function startFlowFromToken(
     };
   }
 
+  // Cotización de SysIP: Emisión es entrada válida y la sesión sigue a Pagos (sin OCR ni Formulario)
+  const cotizacionEntry = resolveCotizacionEntrySlot(
+    metadata,
+    { id: submodulo.id, nombre: submodulo.nombre, url: submodulo.url },
+    rawSlots,
+  );
+  if (cotizacionEntry) {
+    return startFlowAtSlot(
+      empresaId,
+      moduloGroupId,
+      rawSlots,
+      cotizacionEntry.order,
+      metadata,
+      flowProduct,
+      'cotizacion',
+    );
+  }
+
   // Solo el primer slot puede iniciar el flujo (o un OCR alterno con la misma URL)
   if (
     !isChainEntrySubmodulo(
@@ -639,6 +658,36 @@ export async function startFlowFromToken(
     };
   }
 
+  return startFlowAtSlot(
+    empresaId,
+    moduloGroupId,
+    rawSlots,
+    rawSlots[0].order,
+    metadata,
+    flowProduct,
+    `token submodulo=${submoduloId}`,
+  );
+}
+
+/**
+ * Crea la sesión del flujo con `current` en el slot indicado. Desde el primer slot es el
+ * auto-arranque de siempre; desde otro (Emisión con cotización) los anteriores no se visitan
+ * y advance sigue al siguiente slot activo.
+ */
+async function startFlowAtSlot(
+  empresaId: number,
+  moduloGroupId: number,
+  rawSlots: SubmoduloSlot[],
+  startOrder: number,
+  metadata: any,
+  flowProduct: FlowProduct,
+  origen: string,
+): Promise<{
+  sid: string;
+  firstUrl: string;
+  totalActive: number;
+  alreadyChained: boolean;
+}> {
   const slots: SubmoduloSlot[] = await Promise.all(
     rawSlots.map(async (s) => ({
       ...s,
@@ -651,13 +700,14 @@ export async function startFlowFromToken(
     })),
   );
 
+  const start = slots.find((s) => s.order === startOrder) ?? slots[0];
   const sid = await createCotizacion(empresaId);
   const session: FlowSession = {
     sid,
     empresaId,
     moduloGroupId,
     slots,
-    current: slots[0].order,
+    current: start.order,
     history: [],
     data: {
       product: flowProduct,
@@ -670,13 +720,12 @@ export async function startFlowFromToken(
   touchFlowMeta(session);
 
   logger.info(
-    `[flow] auto-start sid=${sid} empresa=${empresaId} desde token submodulo=${submoduloId} product=${flowProduct} slots=${slots.length}`,
+    `[flow] auto-start sid=${sid} empresa=${empresaId} desde ${origen} entrada=${start.nombre} (order=${start.order}) product=${flowProduct} slots=${slots.length}`,
   );
 
-  const first = slots[0];
   return {
     sid,
-    firstUrl: appendProductToUrl(`${first.accessUrl}&sid=${sid}`, flowProduct),
+    firstUrl: appendProductToUrl(`${start.accessUrl}&sid=${sid}`, flowProduct),
     totalActive: slots.length,
     alreadyChained: true,
   };
