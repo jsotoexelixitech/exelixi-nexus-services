@@ -3,7 +3,6 @@ import jwt from 'jsonwebtoken';
 import {
   AuthController,
   mergeSsoMetadata,
-  resolveSsoTarget,
   ssoMetadataSchema,
 } from './auth.controller';
 
@@ -24,8 +23,18 @@ vi.mock('../../utils/logger', () => ({
 
 /** Submódulos activos de prueba: OCR (id 11) y Emisión (id 13). */
 const SUBMODULOS = [
-  { id: 11, url: 'https://cierrelmds.exelixitech.com/ocr/', nombre: 'OCR Documentos', modulo: { nombre: 'RCV' } },
-  { id: 13, url: 'https://cierrelmds.exelixitech.com/emision/', nombre: 'Emisión', modulo: { nombre: 'RCV' } },
+  {
+    id: 11,
+    url: 'https://cierrelmds.exelixitech.com/ocr/',
+    nombre: 'OCR Documentos',
+    modulo: { nombre: 'RCV' },
+  },
+  {
+    id: 13,
+    url: 'https://cierrelmds.exelixitech.com/emision/',
+    nombre: 'Emisión',
+    modulo: { nombre: 'RCV' },
+  },
 ];
 
 type SubFilter = { url?: { contains: string }; nombre?: { contains: string } };
@@ -37,12 +46,18 @@ vi.mock('../../config/prisma', () => ({
     },
     submodulo: {
       findMany: vi.fn(async (args: { where: { OR: SubFilter[] } }) => {
-        const hints = args.where.OR.map((f) => f.url?.contains ?? f.nombre?.contains ?? '');
-        return SUBMODULOS.filter((s) => hints.some((h) => h && (s.url.includes(h) || s.nombre.includes(h))));
+        const hints = args.where.OR.map(
+          (f) => f.url?.contains ?? f.nombre?.contains ?? '',
+        );
+        return SUBMODULOS.filter((s) =>
+          hints.some((h) => h && (s.url.includes(h) || s.nombre.includes(h))),
+        );
       }),
     },
     empresaSubmodulo: {
-      findMany: vi.fn(async () => SUBMODULOS.map((s) => ({ submoduloId: s.id }))),
+      findMany: vi.fn(async () =>
+        SUBMODULOS.map((s) => ({ submoduloId: s.id })),
+      ),
       findFirst: vi.fn(async () => ({ tenantToken: null, activo: true })),
       update: vi.fn(async () => ({})),
     },
@@ -51,7 +66,9 @@ vi.mock('../../config/prisma', () => ({
 
 type DelegateResult = { status: number; body: Record<string, unknown> };
 
-async function delegate(body: Record<string, unknown>): Promise<DelegateResult> {
+async function delegate(
+  body: Record<string, unknown>,
+): Promise<DelegateResult> {
   const out: DelegateResult = { status: 200, body: {} };
   const res = {
     status(code: number) {
@@ -70,7 +87,8 @@ async function delegate(body: Record<string, unknown>): Promise<DelegateResult> 
 
 function tokenOf(redirectUrl: unknown) {
   const url = new URL(String(redirectUrl));
-  const token = url.searchParams.get('nexus_token') ?? url.searchParams.get('token');
+  const token =
+    url.searchParams.get('nexus_token') ?? url.searchParams.get('token');
   expect(token).toBeTruthy();
   return jwt.verify(token!, TENANT_SECRET) as {
     submoduloId: number;
@@ -80,17 +98,38 @@ function tokenOf(redirectUrl: unknown) {
 
 describe('ssoMetadataSchema: cotizacionID y cdepartamento', () => {
   it('conserva cotizacionID de dígitos (texto o número) y cdepartamento', () => {
-    expect(ssoMetadataSchema.parse({ cotizacionID: '202600310558', cdepartamento: 4 })).toMatchObject({
+    expect(
+      ssoMetadataSchema.parse({
+        cotizacionID: '202600310558',
+        cdepartamento: 4,
+      }),
+    ).toMatchObject({
       cotizacionID: '202600310558',
       cdepartamento: '4',
     });
-    expect(ssoMetadataSchema.parse({ cotizacionID: 202600310558 }).cotizacionID).toBe('202600310558');
-    expect(ssoMetadataSchema.parse({ cotizacionID: ' 123 ' }).cotizacionID).toBe('123');
+    expect(
+      ssoMetadataSchema.parse({ cotizacionID: 202600310558 }).cotizacionID,
+    ).toBe('202600310558');
+    expect(
+      ssoMetadataSchema.parse({ cotizacionID: ' 123 ' }).cotizacionID,
+    ).toBe('123');
   });
 
   it('omite un cotizacionID inválido sin fallar', () => {
-    for (const bad of ['', 'abc', '12-34', '123456789012345678901', -5, 1.5, {}, null]) {
-      const parsed = ssoMetadataSchema.safeParse({ cotizacionID: bad, cproductor: 80080 });
+    for (const bad of [
+      '',
+      'abc',
+      '12-34',
+      '123456789012345678901',
+      -5,
+      1.5,
+      {},
+      null,
+    ]) {
+      const parsed = ssoMetadataSchema.safeParse({
+        cotizacionID: bad,
+        cproductor: 80080,
+      });
       expect(parsed.success).toBe(true);
       expect(parsed.success && parsed.data.cotizacionID).toBeUndefined();
       expect(parsed.success && parsed.data.cproductor).toBe(80080);
@@ -98,31 +137,20 @@ describe('ssoMetadataSchema: cotizacionID y cdepartamento', () => {
   });
 
   it('omite un cdepartamento demasiado largo sin fallar', () => {
-    const parsed = ssoMetadataSchema.safeParse({ cdepartamento: 'x'.repeat(30) });
+    const parsed = ssoMetadataSchema.safeParse({
+      cdepartamento: 'x'.repeat(30),
+    });
     expect(parsed.success).toBe(true);
     expect(parsed.success && parsed.data.cdepartamento).toBeUndefined();
   });
 
   it('toma cotizacionID y cdepartamento también del root del body', () => {
-    const merged = mergeSsoMetadata({ target: 'ocr', cotizacionID: '77', cdepartamento: '11' });
+    const merged = mergeSsoMetadata({
+      target: 'ocr',
+      cotizacionID: '77',
+      cdepartamento: '11',
+    });
     expect(merged).toMatchObject({ cotizacionID: '77', cdepartamento: '11' });
-  });
-});
-
-describe('resolveSsoTarget', () => {
-  it('sin cotizacionID devuelve el target tal cual', () => {
-    expect(resolveSsoTarget('ocr', {})).toBe('ocr');
-    expect(resolveSsoTarget('', {})).toBe('');
-    expect(resolveSsoTarget(undefined, {})).toBeUndefined();
-    expect(resolveSsoTarget('pagos', {})).toBe('pagos');
-  });
-
-  it('con cotizacionID cambia ocr o vacío por emision y respeta otro target explícito', () => {
-    expect(resolveSsoTarget('ocr', { cotizacionID: '1' })).toBe('emision');
-    expect(resolveSsoTarget('', { cotizacionID: '1' })).toBe('emision');
-    expect(resolveSsoTarget(undefined, { cotizacionID: '1' })).toBe('emision');
-    expect(resolveSsoTarget('formulario', { cotizacionID: '1' })).toBe('formulario');
-    expect(resolveSsoTarget('pagos', { cotizacionID: '1' })).toBe('pagos');
   });
 });
 
@@ -130,7 +158,10 @@ describe('POST /api/auth/sso-delegate con cotización', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('sin cotizacionID abre OCR como siempre', async () => {
-    const { status, body } = await delegate({ target: 'ocr', metadata: { cproductor: 80080 } });
+    const { status, body } = await delegate({
+      target: 'ocr',
+      metadata: { cproductor: 80080 },
+    });
     expect(status).toBe(200);
     expect(body.modulo).toBe('OCR Documentos');
     const payload = tokenOf(body.redirect_url);
@@ -138,27 +169,41 @@ describe('POST /api/auth/sso-delegate con cotización', () => {
     expect(payload.metadata).not.toHaveProperty('cotizacionID');
   });
 
-  it('con cotizacionID válido y target ocr abre Emisión con la cotización firmada en el token', async () => {
+  it('con cotizacionID válido y target ocr abre OCR (igual que el RCV) con la cotización firmada en el token', async () => {
     const { status, body } = await delegate({
       target: 'ocr',
-      metadata: { cproductor: 80080, cotizacionID: '202600310558', cdepartamento: '4', otraCosa: 'x' },
+      metadata: {
+        cproductor: 80080,
+        cotizacionID: '202600310558',
+        cdepartamento: '4',
+        otraCosa: 'x',
+      },
     });
     expect(status).toBe(200);
-    expect(body.modulo).toBe('Emisión');
-    expect(String(body.redirect_url)).toContain('/emision/');
+    expect(body.modulo).toBe('OCR Documentos');
     const payload = tokenOf(body.redirect_url);
-    expect(payload.submoduloId).toBe(13);
-    expect(payload.metadata).toMatchObject({ cotizacionID: '202600310558', cdepartamento: '4', cproductor: 80080 });
+    expect(payload.submoduloId).toBe(11);
+    expect(payload.metadata).toMatchObject({
+      cotizacionID: '202600310558',
+      cdepartamento: '4',
+      cproductor: 80080,
+    });
     expect(payload.metadata).not.toHaveProperty('otraCosa');
   });
 
-  it('sin target y con cotizacionID también abre Emisión', async () => {
-    const { body } = await delegate({ metadata: { cotizacionID: '202600310558' } });
+  it('target emision explícito con cotizacionID sigue abriendo Emisión', async () => {
+    const { body } = await delegate({
+      target: 'emision',
+      metadata: { cotizacionID: '202600310558' },
+    });
     expect(tokenOf(body.redirect_url).submoduloId).toBe(13);
   });
 
   it('con cotizacionID inválido sigue en OCR y no lo firma', async () => {
-    const { status, body } = await delegate({ target: 'ocr', metadata: { cotizacionID: 'ABC-1' } });
+    const { status, body } = await delegate({
+      target: 'ocr',
+      metadata: { cotizacionID: 'ABC-1' },
+    });
     expect(status).toBe(200);
     const payload = tokenOf(body.redirect_url);
     expect(payload.submoduloId).toBe(11);

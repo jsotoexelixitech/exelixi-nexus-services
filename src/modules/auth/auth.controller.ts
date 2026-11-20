@@ -147,8 +147,8 @@ export const ssoMetadataSchema = z
     /** Datos opacos devueltos al origen (webhook / emisión). */
     payload: z.record(z.string(), z.unknown()).optional(),
     /**
-     * Cotización de automóvil de SysIP (cproces). Con valor válido el SSO abre Emisión para emitir esa
-     * cotización (ver resolveSsoTarget). Inválida → se omite, no falla.
+     * Cotización de automóvil de SysIP (cproces). Queda firmada en el token de cada submódulo; el flujo entra
+     * por OCR como el RCV de siempre y Emisión muestra la cotización. Inválida → se omite, no falla.
      */
     cotizacionID: z.preprocess(normalizeCotizacionId, z.string().optional()),
     /** Departamento del usuario Sis2000 (texto corto). Inválido → se omite. */
@@ -215,19 +215,6 @@ export function mergeSsoMetadata(
 }
 
 const authService = new AuthService();
-
-/**
- * Target efectivo del sso-delegate. Flujo de cotización de SysIP: con `cotizacionID` válido y target `ocr`
- * (o vacío) se abre Emisión, que retoma la cotización. Sin cotización, o con otro target explícito, no cambia.
- */
-export function resolveSsoTarget(
-  target: unknown,
-  metadata: { cotizacionID?: string },
-): unknown {
-  if (!metadata.cotizacionID) return target;
-  if (target == null || target === '' || target === 'ocr') return 'emision';
-  return target;
-}
 
 /** Puertos dev local en submodulo.url (fallback si la URL es solo dominio HTTPS). */
 const SSO_TARGET_PORT: Record<string, string> = {
@@ -297,14 +284,24 @@ function ssoSubHintScore(
  * Si product=funerario/patrimoniales: prioriza esa cadena (no la de RCV).
  */
 /** Targets que siempre abren la cadena RCV/personas por OCR (como antes). */
-const SSO_TARGET_ALIAS_OCR = new Set(['', 'ocr', 'rcv', 'funerario', 'personas', 'patrimoniales']);
+const SSO_TARGET_ALIAS_OCR = new Set([
+  '',
+  'ocr',
+  'rcv',
+  'funerario',
+  'personas',
+  'patrimoniales',
+]);
 
 /**
  * Target que no es de la cadena (p. ej. «endosos»): submódulo activo de la empresa cuyo nombre o URL lo
  * contiene. Antes cualquier target desconocido caía a OCR y abría el módulo equivocado (17-nov-2026).
  * Con guion también por nombre con espacios: «cotizador-rc» → submódulo «Cotizador RC» (19-nov-2026).
  */
-async function findSubmoduloPorNombreDeTarget(target: string, empresaId?: number) {
+async function findSubmoduloPorNombreDeTarget(
+  target: string,
+  empresaId?: number,
+) {
   const t = target.trim().toLowerCase();
   if (!/^[a-z0-9_-]{3,20}$/.test(t)) return null;
   const raiz = t.replace(/s$/, '');
@@ -317,7 +314,11 @@ async function findSubmoduloPorNombreDeTarget(target: string, empresaId?: number
         { nombre: { contains: raiz, mode: 'insensitive' as const } },
         { url: { contains: raiz, mode: 'insensitive' as const } },
         ...(conEspacios !== raiz
-          ? [{ nombre: { contains: conEspacios, mode: 'insensitive' as const } }]
+          ? [
+              {
+                nombre: { contains: conEspacios, mode: 'insensitive' as const },
+              },
+            ]
           : []),
       ],
     },
@@ -327,7 +328,11 @@ async function findSubmoduloPorNombreDeTarget(target: string, empresaId?: number
   if (!rows.length) return null;
   if (!empresaId) return rows[0];
   const links = await prisma.empresaSubmodulo.findMany({
-    where: { empresaId, activo: true, submoduloId: { in: rows.map((r) => r.id) } },
+    where: {
+      empresaId,
+      activo: true,
+      submoduloId: { in: rows.map((r) => r.id) },
+    },
     select: { submoduloId: true },
   });
   const asignados = new Set(links.map((l) => l.submoduloId));
@@ -341,10 +346,16 @@ export async function findSubmoduloForSsoTarget(
     product?: 'rcv' | 'funerario' | 'patrimoniales';
   },
 ) {
-  const pedido = String(target ?? '').trim().toLowerCase();
+  const pedido = String(target ?? '')
+    .trim()
+    .toLowerCase();
   if (!(pedido in SSO_TARGET_PORT) && !SSO_TARGET_ALIAS_OCR.has(pedido)) {
-    const propio = await findSubmoduloPorNombreDeTarget(pedido, opts?.empresaId);
-    if (propio) return { id: propio.id, url: propio.url, nombre: propio.nombre };
+    const propio = await findSubmoduloPorNombreDeTarget(
+      pedido,
+      opts?.empresaId,
+    );
+    if (propio)
+      return { id: propio.id, url: propio.url, nombre: propio.nombre };
     logger.warn(
       `[sso-delegate] target "${pedido.slice(0, 20)}" sin submódulo propio para la empresa; se abre OCR como antes`,
     );
@@ -626,8 +637,8 @@ export class AuthController {
 
       // No need to query empresa again, we already have empresaId and empresaNombre
 
-      // Flujo de cotización de SysIP: ocr/vacío → emision. Sin cotizacionID es el mismo target de siempre.
-      const ssoTarget = resolveSsoTarget(target, metadata);
+      // Cotización de SysIP: entra por el mismo target que el RCV de siempre (OCR), ya no salta a Emisión.
+      const ssoTarget = target;
       const productHint = resolveSsoFlowProduct(metadata);
       const submodulo = await findSubmoduloForSsoTarget(ssoTarget as string, {
         empresaId,
