@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { AccessController } from './access.controller';
+import {
+  servirLogoMarca,
+  servirMarcaPublica,
+} from '../marca/marca.controller';
 
 /**
  * @swagger
@@ -67,6 +71,22 @@ const accessLimiter = rateLimit({
  *         description: Token ausente, inválido o manipulado
  */
 router.get('/verify', accessLimiter, (req, res) => controller.verify(req, res));
+
+/**
+ * GET /api/access/marca/:empresaId/logo — logo de la empresa (público: ya se muestra en los portales).
+ * La URL trae ?v=<versión> (viene en verify.marca.logoUrl), así que se puede guardar en caché.
+ */
+router.get('/marca/:empresaId/logo', accessLimiter, (req, res) =>
+  servirLogoMarca(req, res),
+);
+
+/**
+ * GET /api/access/marca/:empresaId — colores y logoUrl de la empresa (público, lo mismo que verify.marca).
+ * Para módulos que no reciben un nexus_token (p. ej. abiertos desde SysIP por sso-delegate).
+ */
+router.get('/marca/:empresaId', accessLimiter, (req, res) =>
+  servirMarcaPublica(req, res),
+);
 
 /**
  * @swagger
