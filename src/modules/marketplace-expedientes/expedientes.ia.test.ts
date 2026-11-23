@@ -1124,7 +1124,7 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     expect(r.motivo).toMatch(/^Revisar: /);
   });
 
-  it('v4: cédula del asegurado (otra persona natural de la póliza) → coincide con el asegurado', async () => {
+  it('v11: cédula del asegurado en el documento del tomador → revisar (ya no valida contra el asegurado)', async () => {
     lee(REF_P, {
       identificacion: '20304050',
       tipoDoc: 'V',
@@ -1137,8 +1137,10 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
       ASEGURADO,
     );
     const d = req(id, 'cedula').diagnostico;
-    expect(d.resultado).toBe('coincide');
-    expect(d.comparadoCon).toBe('asegurado');
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toBe(
+      'El documento corresponde al titular, no al tomador.',
+    );
   });
 
   it('roles: cedula_titular → asegurado; cedula_beneficiario → beneficiario o el siguiente disponible', () => {
@@ -1298,12 +1300,20 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
       apellido: 'Díaz',
     };
     const leida = (identificacion: string) => ({
-      extraido: { identificacion, tipoDoc: 'V', nombre: 'ROSA', apellido: 'DIAZ' },
+      extraido: {
+        identificacion,
+        tipoDoc: 'V',
+        nombre: 'ROSA',
+        apellido: 'DIAZ',
+      },
       confianza: 1,
     });
 
     it('el dígito que cambia está antes de los últimos 4: la máscara lo deja ver y dice la posición', () => {
-      const ctx = contextoPoliza({ producto: 'personas', snapshot: { tomador } });
+      const ctx = contextoPoliza({
+        producto: 'personas',
+        snapshot: { tomador },
+      });
       const d = diagnosticar('cedula', leida('17389126'), ctx);
       expect(d.resultado).toBe('sin_certeza');
       expect(d.resumen).toBe(
@@ -1315,9 +1325,14 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     });
 
     it('un dígito de menos', () => {
-      const ctx = contextoPoliza({ producto: 'personas', snapshot: { tomador } });
+      const ctx = contextoPoliza({
+        producto: 'personas',
+        snapshot: { tomador },
+      });
       const d = diagnosticar('cedula', leida('1734126'), ctx);
-      expect(d.resumen).toContain('tiene un dígito de menos respecto del registrado para el tomador');
+      expect(d.resumen).toContain(
+        'tiene un dígito de menos respecto del registrado para el tomador',
+      );
     });
 
     it('el OCR del wizard leyó lo mismo que la póliza: la diferencia es entre lecturas del documento', () => {
@@ -1692,6 +1707,8 @@ describe('v3: datos cambiados en el formulario (ocrLeido de la emisión)', () =>
   });
 });
 
+// v11 (23-nov): el documento del tomador (`cedula` en personas) se compara SOLO con el tomador (RIF
+// y razón social si es empresa); ya no valida con la cédula del titular u otro asegurado (v4).
 describe('v4: personas — la cédula se compara contra todas las personas de la póliza (prod 9-nov)', () => {
   const REF_V4 = 'La Mundial de Seguros/40111222/2321234-26-11-90/cedula.webp';
   const TOM_V = {
@@ -1739,7 +1756,7 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
   });
   const lectura = (extraido: any) => ({ extraido, confianza: 1 });
 
-  it('caso 1: tomador J y cédula V del titular → coincide con el titular (no con el tomador)', () => {
+  it('caso 1 (v11): tomador J y cédula V del titular → revisar (falta el RIF del tomador), nunca contra el titular', () => {
     const ctx = contextoPoliza(expPersonas(TOM_J), [MESA(TOM_J)]);
     const d = diagnosticar(
       'cedula',
@@ -1751,11 +1768,14 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
       }),
       ctx,
     );
-    expect(d.resultado).toBe('coincide');
-    expect(d.comparadoCon).toBe('asegurado');
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.comparadoCon).toBe('tomador');
+    expect(d.resumen).toMatch(
+      /no se leyó su RIF: se leyó la cédula del titular/,
+    );
   });
 
-  it('caso 2: tomador V y cédula de otra persona de la póliza (asegurada) → coincide', () => {
+  it('caso 2 (v11): tomador V y cédula de otra persona de la póliza (asegurada) → revisar; la del tomador coincide', () => {
     const ctx = contextoPoliza(expPersonas(TOM_V), [MESA(TOM_V)]);
     const d = diagnosticar(
       'cedula',
@@ -1767,7 +1787,10 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
       }),
       ctx,
     );
-    expect(d.resultado).toBe('coincide');
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toBe(
+      'El documento corresponde a otro asegurado de la póliza, no al tomador.',
+    );
     // Sigue valiendo la del tomador natural.
     expect(
       diagnosticar(
@@ -1783,7 +1806,7 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
     ).toMatchObject({ resultado: 'coincide', comparadoCon: 'tomador' });
   });
 
-  it('asegurados del jsonData de la emisión también cuentan', () => {
+  it('asegurados del jsonData de la emisión también se reconocen (v11: no valen como documento del tomador)', () => {
     const ctx = contextoPoliza(expPersonas(TOM_V), [
       { flujo: 'personas', funeral: { asegurados: [HIJA] } },
     ]);
@@ -1797,8 +1820,8 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
           apellido: 'ROJAS',
         }),
         ctx,
-      ).resultado,
-    ).toBe('coincide');
+      ).resumen,
+    ).toBe('El documento corresponde al titular, no al tomador.');
   });
 
   it('caso 3: tomador J y RIF del tomador → coincide (no «se esperaba cédula»)', () => {
@@ -1832,7 +1855,7 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
     expect(estadoPorDiagnostico(d).estado).toBe('observado');
   });
 
-  it('negativo: número de una persona de la póliza con otro nombre → no_coincide', () => {
+  it('negativo (v11): número del titular con otro nombre → no es del tomador: revisar', () => {
     const ctx = contextoPoliza(expPersonas(TOM_V), [MESA(TOM_V)]);
     const d = diagnosticar(
       'cedula',
@@ -1844,7 +1867,10 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
       }),
       ctx,
     );
-    expect(d.resultado).toBe('no_coincide');
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toBe(
+      'El documento corresponde al titular, no al tomador.',
+    );
   });
 
   it('negativo: RIF de otra empresa con tomador J → no_coincide', () => {
@@ -1886,7 +1912,9 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
       ctx,
     );
     expect(d.resultado).toBe('sin_certeza');
-    expect(d.resumen).toMatch(/no trae la cédula del titular/);
+    expect(d.resumen).toContain(
+      'no se leyó su RIF: se leyó una cédula (V-****8363) que no es de nadie de la póliza',
+    );
   });
 
   it('el OCR devolvió el rótulo «nombre» → sin_certeza (lectura fallida), no no_coincide', () => {
@@ -1937,25 +1965,29 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
     return r!.id;
   }
 
-  it('al desplegar: lo observado por la IA con la regla vieja se recompara sin OCR y queda validado; lo validado no se toca', async () => {
-    const id = await expedienteProd('PV-1', TOM_V, {
-      identificacion: '40118363',
-      tipoDoc: 'V',
-      nombre: 'NOEMI',
-      apellido: 'ROJAS',
-    });
-    // Sin mesa técnica todavía: falso no_coincide contra el tomador (como en prod).
-    const fila = req(id, 'cedula');
-    expect(fila.estado).toBe('observado');
-    fila.diagnostico = { ...fila.diagnostico, comparador: 3 };
+  it('v11 al desplegar: tomador J observado con la cédula del titular (v10) se vuelve a leer UNA vez; con el RIF queda validado; lo validado no se toca', async () => {
     await db.funeralSubmission.create({
       data: {
         empresaId: 7,
         cnpoliza: 'PV-1',
         createdAt: new Date(),
-        snapshotJson: MESA(TOM_V),
+        snapshotJson: MESA(TOM_J),
       },
     });
+    // Como 7-7-7000003208: el OCR leyó la cédula del titular (página 2) con otro nombre.
+    const id = await expedienteProd('PV-1', TOM_J, {
+      identificacion: '40118363',
+      tipoDoc: 'V',
+      nombre: 'JHON',
+      apellido: 'ROJAS',
+    });
+    const fila = req(id, 'cedula');
+    expect(fila.estado).toBe('observado');
+    fila.diagnostico = {
+      ...fila.diagnostico,
+      resultado: 'no_coincide',
+      comparador: 10,
+    };
     // Un validado de la v3 (otra póliza) no se reabre.
     const idOk = await expedienteProd('PV-2', TOM_V, {
       identificacion: '40100984',
@@ -1968,10 +2000,24 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
     ok.diagnostico = { ...ok.diagnostico, comparador: 3 };
     const antes = { ...ok };
 
+    // La relectura devuelve el RIF de la página 1 (y la cédula como documento adicional).
+    lee(REF_V4, {
+      rif: 'J-40111874-3',
+      tipoDoc: 'J',
+      razonSocial: 'MINERA EJEMPLO C.A.',
+      documentosAdicionales: [
+        {
+          identificacion: '40118363',
+          tipoDoc: 'V',
+          nombre: 'JHON',
+          apellido: 'ROJAS',
+        },
+      ],
+    });
     const llamadas = llamadasAnalizar().length;
     const r = await svc.revisarConIa({ modo: 'completo' });
     expect(r.motivos).toEqual({ cambio_comparador: 1 });
-    expect(llamadasAnalizar()).toHaveLength(llamadas);
+    expect(llamadasAnalizar()).toHaveLength(llamadas + 1);
     expect(req(id, 'cedula')).toMatchObject({
       estado: 'validado',
       decision: 'ia',
@@ -1979,11 +2025,39 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
     expect(req(id, 'cedula').diagnostico).toMatchObject({
       resultado: 'coincide',
       comparador: VERSION_COMPARADOR,
-      comparadoCon: 'asegurado',
+      comparadoCon: 'tomador',
     });
     expect(req(idOk, 'cedula')).toEqual(antes);
-    // Una segunda pasada no vuelve a tocar nada.
+    // Una segunda pasada no vuelve a tocar nada (ni vuelve a leer).
     expect((await svc.revisarConIa({ modo: 'completo' })).motivos).toEqual({});
+    expect(llamadasAnalizar()).toHaveLength(llamadas + 1);
+  });
+
+  it('v11 al desplegar: si la relectura tampoco trae el RIF queda «Revisar» (no «Errado») y no se vuelve a leer', async () => {
+    await db.funeralSubmission.create({
+      data: {
+        empresaId: 7,
+        cnpoliza: 'PV-9',
+        createdAt: new Date(),
+        snapshotJson: MESA(TOM_J),
+      },
+    });
+    const id = await expedienteProd('PV-9', TOM_J, {
+      identificacion: '40118363',
+      tipoDoc: 'V',
+      nombre: 'JHON',
+      apellido: 'ROJAS',
+    });
+    const fila = req(id, 'cedula');
+    fila.diagnostico = { ...fila.diagnostico, comparador: 10 };
+    const llamadas = llamadasAnalizar().length;
+    await svc.revisarConIa({ modo: 'completo' });
+    expect(llamadasAnalizar()).toHaveLength(llamadas + 1);
+    expect(req(id, 'cedula').estado).toBe('observado');
+    expect(req(id, 'cedula').diagnostico.resultado).toBe('sin_certeza');
+    expect(req(id, 'cedula').motivo).toMatch(/^Revisar: .*no se leyó su RIF/);
+    await svc.revisarConIa({ modo: 'completo' });
+    expect(llamadasAnalizar()).toHaveLength(llamadas + 1);
   });
 
   it('al desplegar: «parece ser un RIF» con tomador J se vuelve a leer aceptando RIF y queda validado', async () => {
@@ -2892,9 +2966,9 @@ describe('v10: falsas alarmas de prod (23-nov)', () => {
         false,
       );
       expect(apellidoDeCasada('MANTILLA RIVAS', 'MANTILLA AMAYA')).toBe(false);
-      expect(
-        apellidoDeCasada('MANTILLA DE BADILLO', 'MANTILLA DE PEREZ'),
-      ).toBe(false);
+      expect(apellidoDeCasada('MANTILLA DE BADILLO', 'MANTILLA DE PEREZ')).toBe(
+        false,
+      );
       expect(apellidoDeCasada('MANTILLA', 'MANTILLA DE BADILLO')).toBe(false);
     });
 

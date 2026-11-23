@@ -483,7 +483,7 @@ describe('v7: validación con los datos de la cotización', () => {
     );
   });
 
-  it('personas: cédula de un asegurado de la cotización → coincide', async () => {
+  it('personas: asegurado de la cotización en el documento del tomador → v11: se reconoce, pero no vale como el del tomador', async () => {
     const ref = 'LM/40121247/pendiente/cedula.webp';
     lee(ref, {
       identificacion: '40121247',
@@ -524,8 +524,11 @@ describe('v7: validación con los datos de la cotización', () => {
       asegurado: HIJA,
     });
     const con = await crear('P-21');
-    expect(req(con, 'cedula')).toMatchObject({ estado: 'validado' });
-    expect(req(con, 'cedula').diagnostico.resultado).toBe('coincide');
+    // v11: el documento del tomador se compara solo con el tomador: revisar, no validado.
+    expect(req(con, 'cedula')).toMatchObject({ estado: 'observado' });
+    expect(req(con, 'cedula').diagnostico.resumen).toBe(
+      'El documento corresponde a otro asegurado de la póliza, no al tomador.',
+    );
   });
 
   it('al desplegar: el observado v6 se recompara sin OCR con la cotización; lo validado no se toca', async () => {
