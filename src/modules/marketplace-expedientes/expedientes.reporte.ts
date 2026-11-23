@@ -43,6 +43,7 @@ import {
 import { conDatosModificados, diagnosticoVigente } from './expedientes.ia';
 import { estaExcluido, nombreActorDeSnapshot } from './expedientes.service';
 import { resolverCanales } from './expedientes.relleno-canal';
+import { ResumenHistorico, resumenHistorico } from './expedientes.historico';
 import {
   ClasificacionOcr,
   clasificacionOcr,
@@ -816,6 +817,24 @@ export interface ReporteSimple {
   nota?: NotaCuadre;
   /** Hoja «Por emisor» del Excel («Emitida por»); nunca va en el cuerpo del correo. */
   porEmisor?: FilaEmisor[];
+  /** Hoja «Histórico 2026» del Excel (carga histórica, solo cifras); solo el reporte de Canales. */
+  historico?: ResumenHistorico;
+}
+
+/** Resumen de la carga histórica para el Excel; null si está vacía o no se pudo leer. */
+async function historicoParaExcel(
+  grupo: GrupoReporte,
+): Promise<ResumenHistorico | null> {
+  if (grupo !== 'canales') return null;
+  try {
+    const r = await resumenHistorico();
+    return r.totales.total > 0 ? r : null;
+  } catch (err) {
+    logger.warn(
+      `[expedientes] reporte: no se pudo leer la carga histórica: ${err instanceof Error ? err.name : 'error'}`,
+    );
+    return null;
+  }
 }
 
 /** Fila de la hoja «Por emisor»: el mismo ranking del monitor. */
@@ -1011,8 +1030,10 @@ export async function armarReporteSimple(
   });
 
   const { hora } = caracasParts(ahora);
+  const historico = await historicoParaExcel(grupo);
   return {
     grupo,
+    ...(historico ? { historico } : {}),
     areas: rotuloGrupo(grupo, config.alcance),
     fecha,
     fechaLocal: fechaLocal(fecha),

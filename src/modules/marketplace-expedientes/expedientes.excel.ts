@@ -19,6 +19,12 @@ import {
   textoCifraPct,
   textoNotaCuadre,
 } from './expedientes.cuadre';
+import {
+  ETIQUETA_ORIGEN,
+  type CifrasHistorico,
+  type OrigenHistorico,
+  type ResumenHistorico,
+} from './expedientes.historico';
 
 export const MAX_BYTES_EXCEL = 5 * 1024 * 1024;
 export const XLSX_CONTENT_TYPE =
@@ -117,6 +123,49 @@ export const COLUMNAS_EMISOR: Columna<FilaEmisor>[] = [
   },
 ];
 
+/** Fila de la hoja «Histórico»: mes × origen, el total de cada mes y el total general. */
+export interface FilaHistoricoExcel extends CifrasHistorico {
+  mes: string;
+  origen: string;
+}
+
+export const COLUMNAS_HISTORICO: Columna<FilaHistoricoExcel>[] = [
+  { header: 'Mes', width: 10, valor: (f) => f.mes },
+  { header: 'Origen', width: 34, valor: (f) => f.origen },
+  { header: 'Pólizas', width: 11, valor: (f) => f.total },
+  { header: 'Pasó por el OCR', width: 14, valor: (f) => f.pasoOcr },
+  { header: 'No pasó por el OCR', width: 14, valor: (f) => f.noPasoOcr },
+  { header: 'Pendientes', width: 12, valor: (f) => f.pendientes },
+  { header: 'Errores', width: 10, valor: (f) => f.errores },
+  {
+    header: '% pasó por el OCR',
+    width: 14,
+    numFmt: '0.0%',
+    valor: (f) => f.pctPasoOcr,
+  },
+];
+
+/** Por mes: cada origen y luego «Todos»; al final el total general. Solo cifras. */
+export function filasHistoricoExcel(r: ResumenHistorico): FilaHistoricoExcel[] {
+  const out: FilaHistoricoExcel[] = [];
+  for (const m of r.porMes) {
+    for (const f of r.filas.filter((x) => x.mes === m.mes))
+      out.push({
+        ...f,
+        origen: ETIQUETA_ORIGEN[f.origen as OrigenHistorico] ?? f.origen,
+      });
+    out.push({ ...m, origen: 'Todos' });
+  }
+  out.push({ ...r.totales, mes: 'Total', origen: 'Todos' });
+  return out;
+}
+
+/** «Histórico 2026» (año del primer mes cargado). */
+export function nombreHojaHistorico(r: ResumenHistorico): string {
+  const anio = r.porMes[0]?.mes.slice(0, 4);
+  return anio ? `Histórico ${anio}` : 'Histórico';
+}
+
 function hoja<T>(
   wb: ExcelJS.Workbook,
   nombre: string,
@@ -190,6 +239,14 @@ async function construir(
   hoja(wb, 'Incompletos', COLUMNAS_INCOMPLETOS, incompletos);
   hoja(wb, 'Completados', COLUMNAS_COMPLETADOS, completados);
   if (r.porEmisor) hoja(wb, 'Por emisor', COLUMNAS_EMISOR, r.porEmisor);
+  // Pocas filas (mes × origen): nunca se recorta por tamaño.
+  if (r.historico)
+    hoja(
+      wb,
+      nombreHojaHistorico(r.historico),
+      COLUMNAS_HISTORICO,
+      filasHistoricoExcel(r.historico),
+    );
   const res = wb.addWorksheet('Resumen', {
     views: [{ state: 'frozen', ySplit: 1 }],
   });

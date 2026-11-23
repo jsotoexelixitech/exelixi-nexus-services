@@ -14,6 +14,7 @@ const UNIQUES: Record<string, string[][]> = {
   mktExpedienteEnlace: [['tokenHash']],
   mktExpedienteJobRun: [['job', 'fecha']],
   mktExpedienteConfig: [['clave']],
+  mktPolizaHistorica: [['cnpoliza']],
   productConfig: [['empresaId', 'producto', 'modulo']],
 };
 
@@ -78,6 +79,14 @@ const DEFAULTS: Record<string, () => Row> = {
     inicio: new Date(),
   }),
   emision: () => ({ createdAt: new Date(), estado: 'emitida' }),
+  mktPolizaHistorica: () => ({
+    resultado: 'pendiente',
+    ubicacionOcr: null,
+    expedienteId: null,
+    intentos: 0,
+    consultadoEn: null,
+    createdAt: new Date(),
+  }),
 };
 
 const OPS = new Set([
@@ -333,6 +342,7 @@ export function createFakePrisma() {
     'funeralSubmission',
     'empresa',
     'productConfig',
+    'mktPolizaHistorica',
   ];
   const client: Record<string, any> = {};
   for (const m of models) client[m] = makeModel(m, store, seq);

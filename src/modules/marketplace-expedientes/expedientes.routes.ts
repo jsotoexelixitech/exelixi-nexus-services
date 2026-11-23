@@ -23,9 +23,19 @@ import {
   expedientesAccesoLibre,
   expedientesEnabled,
   expedientesJobsManualPermitido,
+  historicoConfig,
+  historicoMotivoApagado,
   MENSAJE_OCR_CANAL_SOLO_LECTURA,
   ocrCanalEscrituraHabilitada,
 } from './expedientes.env';
+import {
+  cargaHistoricaCorriendo,
+  iniciarVistaPrevia,
+  reanudarCargaHistorica,
+  reiniciarCargaHistorica,
+  vistaHistorico,
+} from './expedientes.historico';
+import { caracasParts } from './expedientes.domain';
 import {
   requireListaMonitor,
   requireSinSso,
@@ -34,6 +44,7 @@ import {
 import { expedientesService as svc } from './expedientes.service';
 import {
   actoresQuerySchema,
+  cargaHistoricaSchema,
   configUpdateSchema,
   exclusionCreateSchema,
   exclusionesQuerySchema,
@@ -227,6 +238,73 @@ router.post(
       actor: actorDe(req),
     });
     return ok(res, r);
+  }),
+);
+
+// ─── Carga histórica 2026 (tabla liviana; nunca crea expedientes ni correos) ─
+
+/** Resumen por mes y origen + estado de la carga. Solo cifras: sin datos personales. */
+router.get(
+  '/historico',
+  internoLimiter,
+  sesion,
+  h(async (_req, res) => ok(res, await vistaHistorico())),
+);
+
+/**
+ * Admin: vista_previa (cuenta sin escribir, en segundo plano; el resultado sale en GET /historico),
+ * ejecutar (una tanda ahora, en segundo plano, respetando la ventana nocturna salvo prueba fuera de
+ * producción), reanudar (tras «detenida») o reiniciar (recorrer de nuevo sin borrar filas).
+ */
+router.post(
+  '/historico/carga',
+  internoLimiter,
+  sesion,
+  admin,
+  sinSso,
+  h(async (req, res) => {
+    const { body } = cargaHistoricaSchema.parse({ body: req.body ?? {} });
+    if (!historicoConfig())
+      return fail(
+        res,
+        409,
+        historicoMotivoApagado() ?? 'Carga histórica apagada',
+      );
+    const actor = actorDe(req);
+    if (body.modo === 'vista_previa') {
+      const r = iniciarVistaPrevia({
+        maxPaginas: body.maxPaginas,
+        muestraOcr: body.muestraOcr,
+        desdeInicio: body.desdeInicio === true,
+        actor,
+      });
+      return ok(res, r, 202);
+    }
+    if (body.modo === 'ejecutar') {
+      if (cargaHistoricaCorriendo())
+        return fail(res, 409, 'La carga histórica ya está corriendo.');
+      const ignorarVentana =
+        body.ignorarVentana === true && expedientesJobsManualPermitido();
+      const ahora = new Date();
+      const clave = `${caracasParts(ahora).fecha}~manual~${ahora.getTime()}`;
+      void ejecutarJob('carga_historica', {
+        origen: 'manual',
+        actor,
+        clave,
+        historico: { ignorarVentana },
+      }).catch((err) =>
+        logger.error(
+          `[expedientes] carga histórica manual: ${err instanceof Error ? err.message : 'error'}`,
+        ),
+      );
+      return ok(res, { iniciada: true, clave, ignorarVentana }, 202);
+    }
+    return ok(
+      res,
+      body.modo === 'reanudar'
+        ? await reanudarCargaHistorica(actor)
+        : await reiniciarCargaHistorica(actor),
+    );
   }),
 );
 
