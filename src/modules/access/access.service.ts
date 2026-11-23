@@ -7,6 +7,7 @@ import {
 } from '../../utils/tenant-token';
 import { AppError } from '../../utils/app-error';
 import logger from '../../utils/logger';
+import { marcaService } from '../marca/marca.service';
 import { resolveFlowProduct } from '../../utils/flow-product';
 
 /** 8 horas — ventana de renovación por cada petición activa */
@@ -180,9 +181,16 @@ export class AccessService {
       moduloNombre: submodulo.modulo?.nombre,
     });
 
+    // Marca de la empresa para el portal; si falla, el portal sigue con la suya.
+    const marca = await marcaService.publica(empresaId).catch((err: unknown) => {
+      logger.warn(`verify: marca de la empresa ${empresaId} no disponible: ${(err as Error).message}`);
+      return null;
+    });
+
     return {
       active: true,
       product: flowProduct,
+      marca,
       access_token: refreshedToken,
       expires_in: 3600,
       empresa: {

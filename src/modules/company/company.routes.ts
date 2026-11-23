@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { CompanyController } from './company.controller';
+import { MarcaController } from '../marca/marca.controller';
 import { authenticate } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import {
@@ -376,6 +377,17 @@ router.post('/:id/generate-api-key', controller.generateApiKey);
  *         description: Lista de tokens de conexión
  */
 router.get('/:id/connection-tokens', controller.getConnectionTokens);
+
+/**
+ * Marca de la empresa (logo y colores) para los portales de los módulos.
+ * GET/PUT colores, PUT /logo con { logo: base64 }, DELETE /logo y DELETE para volver a la marca por defecto.
+ */
+const marca = new MarcaController();
+router.get('/:id/marca', marca.obtener);
+router.put('/:id/marca', marca.guardarColores);
+router.put('/:id/marca/logo', marca.guardarLogo);
+router.delete('/:id/marca/logo', marca.quitarLogo);
+router.delete('/:id/marca', marca.restablecer);
 
 router.get('/:id/portal-config', controller.getPortalConfig);
 router.put(
