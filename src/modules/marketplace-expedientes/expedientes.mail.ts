@@ -21,7 +21,11 @@ import type {
   ReporteDiario,
   ReporteSimple,
 } from './expedientes.reporte';
-import { lineaCuadre, textoNotaCuadre } from './expedientes.cuadre';
+import {
+  lineaCuadre,
+  textoCifraPct,
+  textoNotaCuadre,
+} from './expedientes.cuadre';
 
 export type TipoCorreoAsegurado =
   | 'solicitud'
@@ -673,6 +677,10 @@ export function correoReporteSimple(
   const nota = textoNotaCuadre(r.nota);
   const pendientes = r.pendientesCanal ?? [];
   const listaPendientes = pendientes.slice(0, MAX_PENDIENTES_CANAL_CORREO);
+  // Solo los dos números del OCR (la tabla por emisor va solo en el Excel).
+  const lineaOcr = c.ocr
+    ? `Pasaron por el OCR: ${textoCifraPct(c.ocr.pasaron, c.ocr.pctPasaron)} · No pasaron por el OCR: ${textoCifraPct(c.ocr.noPasaron, c.ocr.pctNoPasaron)}`
+    : '';
   return {
     subject,
     eyebrow: 'Control documental',
@@ -688,6 +696,18 @@ export function correoReporteSimple(
         ? [{ label: 'Sin canal identificado', value: porArea(sinCanal) }]
         : []),
       { label: 'Cuadre', value: cuadre },
+      ...(c.ocr
+        ? [
+            {
+              label: 'Pasaron por el OCR',
+              value: textoCifraPct(c.ocr.pasaron, c.ocr.pctPasaron),
+            },
+            {
+              label: 'No pasaron por el OCR',
+              value: textoCifraPct(c.ocr.noPasaron, c.ocr.pctNoPasaron),
+            },
+          ]
+        : []),
       ...(pendientes.length
         ? [
             {
@@ -717,6 +737,18 @@ export function correoReporteSimple(
         pendientesCanal: listaPendientes,
         pendientesCanalTotal: pendientes.length,
         nota,
+        // Aditivo: la plantilla de nest-api lo ignora hasta que lo muestre.
+        ...(c.ocr
+          ? {
+              ocr: {
+                pasaron: c.ocr.pasaron,
+                noPasaron: c.ocr.noPasaron,
+                pctPasaron: c.ocr.pctPasaron,
+                pctNoPasaron: c.ocr.pctNoPasaron,
+              },
+              lineaOcr,
+            }
+          : {}),
         adjunto: !!excel,
         ...(excel ? { omitidas: excel.omitidas } : {}),
       },

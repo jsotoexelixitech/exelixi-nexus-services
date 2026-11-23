@@ -42,6 +42,14 @@ const HOY = new Date('2026-11-07T14:00:00.000Z');
 /** 7-nov-2026 23:00 hora de Caracas: corte del reporte. */
 const NOCHE = new Date('2026-11-08T03:00:00.000Z');
 const MIN = 60_000;
+/** Clasificación por OCR del caso principal: 8 en el monitor y 1 descartada. */
+const OCR_ESPERADO = {
+  pasaron: 8,
+  noPasaron: 1,
+  total: 9,
+  pctPasaron: 0.8889,
+  pctNoPasaron: 0.1111,
+};
 
 let fetchMock: ReturnType<typeof vi.fn>;
 /** Respuesta de nest-api para el reporte (los demás correos siempre salen). */
@@ -234,6 +242,9 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
     });
     const p6 = await crear('P-6', { documento: '22333444' });
     const p7 = await crear('P-7', { documento: '66777888' });
+    // No pasó por el OCR (descartada): fuera de todas las cifras salvo «No pasaron por el OCR».
+    const p8 = await crear('P-8', { documento: '44555666' });
+    expediente(p8).estadoDocumental = 'descartada';
     Object.assign(expediente(p4), {
       estadoDocumental: 'completo',
       completadoEn: new Date(HOY.getTime() + 120 * MIN),
@@ -291,6 +302,8 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       pendientesCanal: 1,
       excel: true,
       omitidas: { incompletos: 0, completados: 0 },
+      // 8 en el monitor (incluida la sin información) y 1 descartada.
+      ocr: OCR_ESPERADO,
     });
     const c = r.reportes[0] as any;
     expect(c.completados + c.incompletos).toBe(
@@ -319,6 +332,14 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       pendientesCanal: ['P-6'],
       pendientesCanalTotal: 1,
       nota: "El Monitor puede mostrar otro total: este reporte es la foto al corte y no incluye 1 sin información documental (no son completas ni incompletas); lo emitido después del corte entra en el reporte siguiente.",
+      ocr: {
+        pasaron: 8,
+        noPasaron: 1,
+        pctPasaron: 0.8889,
+        pctNoPasaron: 0.1111,
+      },
+      lineaOcr:
+        'Pasaron por el OCR: 8 (88,9 %) · No pasaron por el OCR: 1 (11,1 %)',
       adjunto: true,
       omitidas: { incompletos: 0, completados: 0 },
     });
@@ -350,9 +371,28 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual([
       'Incompletos',
       'Completados',
+      'Por emisor',
       'Resumen',
       'Pendientes canal (1)',
     ]);
+    // «Emitida por» igual que el Monitor; sin canal ni productor: «Emisor sin identificar»
+    // (nunca el login). Orden: incompletas y luego total.
+    const pe = wb.getWorksheet('Por emisor')!;
+    expect(filas(pe)).toEqual([
+      [
+        'Emitida por',
+        'Canal/Productor',
+        'Emitidas',
+        'Completas',
+        'Incompletas',
+        '% incompletas',
+      ],
+      ['Farmatodo (canal 900)', 'Canal 900', 5, 1, 4, 0.8],
+      ['Emisor sin identificar', '', 1, 0, 1, 1],
+      ['Productor 777', 'Productor 777', 1, 1, 0, 0],
+    ]);
+    expect(pe.getColumn(6).numFmt).toBe('0.0%');
+    expect(pe.getCell('A1').font?.bold).toBe(true);
     // Solo el número de póliza; nunca el login.
     expect(filas(wb.getWorksheet('Pendientes canal (1)')!)).toEqual([
       ['Póliza (pendiente de identificar canal)'],
@@ -441,6 +481,11 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       ['Sin canal identificado', '0 completos / 1 incompletos'],
       ['Cuadre', 'Total 7 = Canales 5 + Productores 1 + Sin canal identificado 1'],
     ]);
+    // Fuera del cuadre: pasaron (en el monitor, con la sin información) y descartadas.
+    expect(fr.slice(7, 9)).toEqual([
+      ['Pasaron por el OCR', '8 (88,9 %)'],
+      ['No pasaron por el OCR', '1 (11,1 %)'],
+    ]);
 
     // Nunca el correo ni el teléfono del asegurado, tampoco en el Excel.
     const celdas = JSON.stringify(wb.worksheets.map(filas));
@@ -511,6 +556,8 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
         { label: 'De canales', value: '0 completos / 1 incompletos' },
         { label: 'De productores', value: '0 completos / 0 incompletos' },
         { label: 'Cuadre', value: 'Total 1 = Canales 1 + Productores 0' },
+        { label: 'Pasaron por el OCR', value: '1 (100,0 %)' },
+        { label: 'No pasaron por el OCR', value: '0 (0,0 %)' },
       ]);
       const json = JSON.stringify(branded);
       expect(json).not.toContain('P-1');

@@ -43,6 +43,12 @@ import {
 import { conDatosModificados, diagnosticoVigente } from './expedientes.ia';
 import { estaExcluido, nombreActorDeSnapshot } from './expedientes.service';
 import { resolverCanales } from './expedientes.relleno-canal';
+import {
+  ClasificacionOcr,
+  clasificacionOcr,
+  RankingEmisor,
+  rankingPorEmisor,
+} from './expedientes.kpis';
 export { lineaCuadre, textoNotaCuadre } from './expedientes.cuadre';
 
 type Exp = MktExpediente;
@@ -365,6 +371,24 @@ export function grupoVisible(
       productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
     },
   ).grupo;
+}
+
+/** textoEmisor completo (texto, grupo, canal y productor) con catálogo y snapshot, como el Monitor. */
+export function emisorDeExpediente(
+  e: Pick<
+    Exp,
+    'area' | 'centidad' | 'citem' | 'cgestor' | 'ccanalalt' | 'cproductor' | 'snapshot'
+  >,
+  catalogo?: CatalogoCanales | null,
+) {
+  return textoEmisor(
+    e,
+    catalogo ? { canal: catalogo.nombres, gestorCanal: catalogo.gestorCanal } : null,
+    {
+      canal: nombreActorDeSnapshot(e.snapshot, 'canal'),
+      productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
+    },
+  );
 }
 
 /** El catálogo de nest-api hace falta para nombrar canales y resolver el canal de un gestor. */
@@ -728,6 +752,11 @@ export interface CifrasControl {
   sinCanal: { completos: number; incompletos: number };
   /** Compatibilidad con la plantilla anterior: sinCanal.completos + sinCanal.incompletos. */
   sinDatos: number;
+  /**
+   * Pasaron por el OCR (completas + incompletas + sin información) frente a las que no pasaron
+   * (descartadas), del mismo alcance. Fuera del cuadre. Opcional: reportes anteriores no lo traen.
+   */
+  ocr?: ClasificacionOcr;
 }
 
 /**
@@ -785,7 +814,15 @@ export interface ReporteSimple {
   /** Pólizas sin canal ni productor identificado: SOLO el número de póliza. */
   pendientesCanal?: string[];
   nota?: NotaCuadre;
+  /** Hoja «Por emisor» del Excel («Emitida por»); nunca va en el cuerpo del correo. */
+  porEmisor?: FilaEmisor[];
 }
+
+/** Fila de la hoja «Por emisor»: el mismo ranking del monitor. */
+export type FilaEmisor = RankingEmisor;
+
+/** Filas máximas de la hoja «Por emisor» (el Excel es el detalle; el monitor muestra 50). */
+export const MAX_EMISORES_EXCEL = 500;
 
 /**
  * Áreas del reporte simple. Canales cubre toda la cartera del alcance (canales con sus gestores,
@@ -935,19 +972,34 @@ export async function armarReporteSimple(
     logger.warn(
       `[expedientes] ALERTA reporte ${grupo}: ${pendientes.length} póliza(s) pendientes de identificar canal`,
     );
-  const [sinInformacion, fueraDeAlcance] = await Promise.all([
-    areas.length
-      ? prisma.mktExpediente.count({
-          where: { area: { in: areas }, estadoDocumental: 'sin_informacion' },
-        })
-      : Promise.resolve(0),
-    prisma.mktExpediente.count({
-      where: {
-        area: { notIn: areas },
-        estadoDocumental: { in: ['completo', 'incompleto'] },
-      },
-    }),
-  ]);
+  const [sinInformacion, fueraDeAlcance, pasaronOcr, noPasaronOcr] =
+    await Promise.all([
+      areas.length
+        ? prisma.mktExpediente.count({
+            where: { area: { in: areas }, estadoDocumental: 'sin_informacion' },
+          })
+        : Promise.resolve(0),
+      prisma.mktExpediente.count({
+        where: {
+          area: { notIn: areas },
+          estadoDocumental: { in: ['completo', 'incompleto'] },
+        },
+      }),
+      // Clasificación por OCR del mismo alcance (acumulado al corte, como las demás cifras).
+      areas.length
+        ? prisma.mktExpediente.count({
+            where: {
+              area: { in: areas },
+              estadoDocumental: { not: ESTADO_DESCARTADA },
+            },
+          })
+        : Promise.resolve(0),
+      areas.length
+        ? prisma.mktExpediente.count({
+            where: { area: { in: areas }, estadoDocumental: ESTADO_DESCARTADA },
+          })
+        : Promise.resolve(0),
+    ]);
   const comunes = (e: Exp) => ({
     poliza: e.cnpoliza,
     asegurado: nombreCompleto(e),
@@ -965,9 +1017,18 @@ export async function armarReporteSimple(
     fecha,
     fechaLocal: fechaLocal(fecha),
     corte: `${fechaLocal(caracasParts(ahora).fecha)} ${hora}`,
-    cifras: cifrasControl(cartera, grupoDe),
+    cifras: {
+      ...cifrasControl(cartera, grupoDe),
+      ocr: clasificacionOcr(pasaronOcr, noPasaronOcr),
+    },
     pendientesCanal: pendientes.map((e) => e.cnpoliza),
     nota: { sinInformacion, fueraDeAlcance },
+    // Toda la cartera del reporte (incluidas las pendientes de canal, como «Emisor sin identificar»).
+    porEmisor: rankingPorEmisor(
+      cartera,
+      (e) => emisorDeExpediente(e, catalogo),
+      MAX_EMISORES_EXCEL,
+    ),
     incompletos: incompletos.map((e) => {
       const u = ultimaDe.get(e.id);
       return {

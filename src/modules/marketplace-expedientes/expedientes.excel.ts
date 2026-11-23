@@ -10,10 +10,15 @@ import { caracasParts } from './expedientes.domain';
 import type {
   CifrasControl,
   FilaCompletado,
+  FilaEmisor,
   FilaIncompleto,
   ReporteSimple,
 } from './expedientes.reporte';
-import { lineaCuadre, textoNotaCuadre } from './expedientes.cuadre';
+import {
+  lineaCuadre,
+  textoCifraPct,
+  textoNotaCuadre,
+} from './expedientes.cuadre';
 
 export const MAX_BYTES_EXCEL = 5 * 1024 * 1024;
 export const XLSX_CONTENT_TYPE =
@@ -24,6 +29,8 @@ type Columna<T> = {
   width: number;
   valor: (f: T) => string | number | Date | null;
   fecha?: boolean;
+  /** Formato numérico de la columna (p. ej. '0.0%'). */
+  numFmt?: string;
 };
 
 /** Día de Caracas como fecha sin hora (Excel no maneja zonas: se escribe a medianoche UTC). */
@@ -95,6 +102,21 @@ export const COLUMNAS_COMPLETADOS: Columna<FilaCompletado>[] = [
   },
 ];
 
+/** Hoja «Por emisor»: quién emitió («Emitida por»), nunca un login ni correo. */
+export const COLUMNAS_EMISOR: Columna<FilaEmisor>[] = [
+  { header: 'Emitida por', width: 40, valor: (f) => f.emisor },
+  { header: 'Canal/Productor', width: 18, valor: (f) => f.contexto ?? '' },
+  { header: 'Emitidas', width: 11, valor: (f) => f.total },
+  { header: 'Completas', width: 11, valor: (f) => f.completos },
+  { header: 'Incompletas', width: 12, valor: (f) => f.incompletos },
+  {
+    header: '% incompletas',
+    width: 13,
+    numFmt: '0.0%',
+    valor: (f) => f.pctIncompletos,
+  },
+];
+
 function hoja<T>(
   wb: ExcelJS.Workbook,
   nombre: string,
@@ -107,7 +129,11 @@ function hoja<T>(
   ws.columns = columnas.map((c) => ({
     header: c.header,
     width: c.width,
-    ...(c.fecha ? { style: { numFmt: 'dd/mm/yyyy' } } : {}),
+    ...(c.fecha
+      ? { style: { numFmt: 'dd/mm/yyyy' } }
+      : c.numFmt
+        ? { style: { numFmt: c.numFmt } }
+        : {}),
   }));
   ws.getRow(1).font = { bold: true };
   ws.getRow(1).alignment = { vertical: 'middle', wrapText: true };
@@ -140,6 +166,16 @@ export function filasResumen(c: CifrasControl): [string, string | number][] {
         ] as [string, string][])
       : []),
     ['Cuadre', lineaCuadre(c)],
+    // Fuera del cuadre: también cuenta las sin información documental y las descartadas.
+    ...(c.ocr
+      ? ([
+          ['Pasaron por el OCR', textoCifraPct(c.ocr.pasaron, c.ocr.pctPasaron)],
+          [
+            'No pasaron por el OCR',
+            textoCifraPct(c.ocr.noPasaron, c.ocr.pctNoPasaron),
+          ],
+        ] as [string, string][])
+      : []),
   ];
 }
 
@@ -153,6 +189,7 @@ async function construir(
   wb.created = new Date(0);
   hoja(wb, 'Incompletos', COLUMNAS_INCOMPLETOS, incompletos);
   hoja(wb, 'Completados', COLUMNAS_COMPLETADOS, completados);
+  if (r.porEmisor) hoja(wb, 'Por emisor', COLUMNAS_EMISOR, r.porEmisor);
   const res = wb.addWorksheet('Resumen', {
     views: [{ state: 'frozen', ySplit: 1 }],
   });

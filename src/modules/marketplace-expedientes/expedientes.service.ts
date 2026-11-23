@@ -112,7 +112,11 @@ import {
   ExpedientePayload,
   ListQuery,
 } from './expedientes.schema';
-import { calcularKpis } from './expedientes.kpis';
+import {
+  calcularKpis,
+  clasificacionOcr,
+  rankingPorEmisor,
+} from './expedientes.kpis';
 import { desgloseIncompletos } from './expedientes.categorias';
 import { contarPendientesCanal } from './expedientes.relleno-canal';
 import {
@@ -1776,11 +1780,15 @@ export class ExpedientesService {
     await catalogoCanales();
     const nombres = nombresActoresEnCache();
     const porArea = { canales: 0, productores: 0, sinDatos: 0 };
+    // «Emitida por» igual que la bandeja (toItem): textoEmisor con el catálogo y el snapshot.
+    const emisores = new Map<number, ReturnType<typeof textoEmisor>>();
     for (const e of exps) {
-      const g = textoEmisor(e, nombres, {
+      const em = textoEmisor(e, nombres, {
         canal: nombreActorDeSnapshot(e.snapshot, 'canal'),
         productor: nombreActorDeSnapshot(e.snapshot, 'intermediario'),
-      }).grupo;
+      });
+      emisores.set(e.id, em);
+      const g = em.grupo;
       if (g === 'canal') porArea.canales++;
       else if (g === 'productor') porArea.productores++;
       else porArea.sinDatos++;
@@ -1801,6 +1809,25 @@ export class ExpedientesService {
       porArea,
       /** Sin canal ni productor identificado (deben ser 0; el relleno de canal las corrige). */
       pendientesCanal: porArea.sinDatos,
+      /**
+       * Por quién emitió («Emitida por», el mismo texto de la bandeja): emitidas, completas,
+       * incompletas y % incompletas. Sin canal ni productor: «Emisor sin identificar». Orden:
+       * incompletas y luego total; tope MAX_RANKING filas.
+       */
+      porEmisor: rankingPorEmisor(
+        exps,
+        (e) =>
+          emisores.get(e.id) ?? {
+            texto: null,
+            grupo: null,
+            canal: null,
+          },
+      ),
+      /**
+       * Pasaron por el OCR (en el monitor: completas + incompletas + sin información) frente a las
+       * que no pasaron (descartadas), con los mismos filtros de área y fechas.
+       */
+      ocr: clasificacionOcr(exps.length, descartadas),
       completos: exps.filter((e) => e.estadoDocumental === 'completo').length,
       incompletos: exps.filter((e) => e.estadoDocumental === 'incompleto')
         .length,

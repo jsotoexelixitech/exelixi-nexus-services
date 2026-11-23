@@ -10,6 +10,8 @@ import {
   canalDeExpediente,
   caracasInicioDia,
   caracasParts,
+  EmisorTexto,
+  ESTADO_DESCARTADA,
   grupoArea,
   productorDeExpediente,
   SIN_IDENTIFICAR,
@@ -125,6 +127,105 @@ export function rankingPorActor(
         a.codigo.localeCompare(b.codigo),
     )
     .slice(0, MAX_RANKING);
+}
+
+// ─── Por emisor («Emitida por») y clasificación por OCR ────────────────────
+
+/** Rótulo del grupo de pólizas sin canal ni productor (nunca un login, correo ni usuario). */
+export const EMISOR_SIN_IDENTIFICAR = 'Emisor sin identificar';
+
+export interface RankingEmisor {
+  /** Texto «Emitida por», el mismo de la bandeja (textoEmisor), o EMISOR_SIN_IDENTIFICAR. */
+  emisor: string;
+  /** Grupo visible: canal (incluye gestores), productor o null (sin identificar). */
+  grupo: 'canal' | 'productor' | null;
+  /** Contexto corto del emisor: «Canal 27» o «Productor 215»; null si no se conoce. */
+  contexto: string | null;
+  total: number;
+  completos: number;
+  incompletos: number;
+  /** incompletos / total, 0..1. */
+  pctIncompletos: number | null;
+}
+
+/** Lo mínimo de textoEmisor que usa el ranking. */
+export type EmisorResuelto = Pick<EmisorTexto, 'texto' | 'grupo' | 'canal'> & {
+  productor?: string | null;
+};
+
+export function contextoEmisor(em: EmisorResuelto): string | null {
+  if (em.grupo === 'canal' && em.canal) return `Canal ${em.canal}`;
+  if (em.grupo === 'productor' && em.productor)
+    return `Productor ${em.productor}`;
+  return null;
+}
+
+/**
+ * Ranking por quién emitió («Emitida por»): emitidas, completas, incompletas y % incompletas.
+ * `emisorDe` debe devolver el mismo textoEmisor de la bandeja. Las descartadas (no pasaron por
+ * el OCR) no cuentan. Orden: incompletas, luego total. Tope `max` filas.
+ */
+export function rankingPorEmisor<T extends { estadoDocumental: string }>(
+  rows: T[],
+  emisorDe: (r: T) => EmisorResuelto,
+  max: number = MAX_RANKING,
+): RankingEmisor[] {
+  const m = new Map<string, RankingEmisor>();
+  for (const r of rows) {
+    if (r.estadoDocumental === ESTADO_DESCARTADA) continue;
+    const em = emisorDe(r);
+    const texto = em.texto?.trim() || null;
+    const emisor = texto ?? EMISOR_SIN_IDENTIFICAR;
+    const it = m.get(emisor) ?? {
+      emisor,
+      grupo: texto ? em.grupo : null,
+      contexto: texto ? contextoEmisor(em) : null,
+      total: 0,
+      completos: 0,
+      incompletos: 0,
+      pctIncompletos: null,
+    };
+    it.total++;
+    if (r.estadoDocumental === 'completo') it.completos++;
+    if (r.estadoDocumental === 'incompleto') it.incompletos++;
+    m.set(emisor, it);
+  }
+  return [...m.values()]
+    .map((x) => ({ ...x, pctIncompletos: ratio(x.incompletos, x.total) }))
+    .sort(
+      (a, b) =>
+        b.incompletos - a.incompletos ||
+        b.total - a.total ||
+        a.emisor.localeCompare(b.emisor),
+    )
+    .slice(0, Math.max(0, max));
+}
+
+export interface ClasificacionOcr {
+  /** No descartadas: completas + incompletas + sin información documental. */
+  pasaron: number;
+  /** Descartadas: no pasaron por el OCR (fuera del monitor). */
+  noPasaron: number;
+  /** pasaron + noPasaron. */
+  total: number;
+  /** 0..1; null si no hay pólizas. */
+  pctPasaron: number | null;
+  pctNoPasaron: number | null;
+}
+
+export function clasificacionOcr(
+  pasaron: number,
+  noPasaron: number,
+): ClasificacionOcr {
+  const p = Math.max(0, pasaron);
+  const n = Math.max(0, noPasaron);
+  return {
+    pasaron: p,
+    noPasaron: n,
+    total: p + n,
+    pctPasaron: ratio(p, p + n),
+    pctNoPasaron: ratio(n, p + n),
+  };
 }
 
 export async function calcularKpis(args: {

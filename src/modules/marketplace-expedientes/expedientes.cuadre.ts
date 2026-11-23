@@ -31,6 +31,13 @@ export function lineaCuadre(c: Cifras): string {
   return `Total ${c.total} = ${partes.join(' + ')}`;
 }
 
+/** «1234 (95,2 %)»: cifra y porcentaje (0..1) con un decimal; sin porcentaje si no hay base. */
+export function textoCifraPct(n: number, pct: number | null): string {
+  if (pct == null) return String(n);
+  const v = (Math.round(pct * 1000) / 10).toFixed(1).replace('.', ',');
+  return `${n} (${v} %)`;
+}
+
 /** Nota corta de por qué el Monitor puede mostrar otro total. */
 export function textoNotaCuadre(n?: Nota | null): string {
   if (!n || (!n.sinInformacion && !n.fueraDeAlcance)) return '';
