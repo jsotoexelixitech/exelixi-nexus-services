@@ -31,11 +31,13 @@ import prisma from '../../config/prisma';
 import router from './expedientes.routes';
 import { expedientesService as svc } from './expedientes.service';
 import {
+  apellidoDeCasada,
   ColaConcurrencia,
   contextoPoliza,
   diagnosticar,
   esperaReintentoMs,
   esRotuloOcr,
+  esSexoOEstadoCivil,
   estadoPorDiagnostico,
   huellaPoliza,
   lecturaFallida,
@@ -2734,6 +2736,336 @@ describe('v8: identidad del vehículo, rótulos del OCR, RIF en la cédula RCV (
         }),
       );
       expect(d.resultado).toBe('datos_modificados');
+    });
+  });
+});
+
+describe('v10: falsas alarmas de prod (23-nov)', () => {
+  const lectura = (extraido: any) => ({ extraido, confianza: 1 });
+  const campoDe = (d: any, c: string) =>
+    d.campos.find((x: any) => x.campo === c);
+  // 18-1-0000144235: la licencia dice el apellido de casada; la póliza usó el de la cédula.
+  const PERSONA = {
+    tipoDoc: 'V',
+    documento: '10099860',
+    nombre: 'Ana Luisa',
+    apellido: 'Mantilla Amaya',
+  };
+  const ctxCasada = (ocrLeido: any = {}) =>
+    contextoPoliza({
+      producto: 'rcv',
+      snapshot: {
+        ...SNAPSHOT,
+        tomador: PERSONA,
+        asegurado: PERSONA,
+        ocrLeido,
+      },
+    });
+  const LIC_CASADA = {
+    identificacion: '10099860',
+    tipoDoc: 'V',
+    nombre: 'ANA LUISA',
+    apellido: 'MANTILLA DE BADILLO',
+    vencimiento: '2031-01-01',
+  };
+  const OL_LIC_CASADA = {
+    documento: '10099860',
+    nombre: 'ANA LUISA',
+    apellido: 'MANTILLA DE BADILLO',
+  };
+
+  describe('caso 2: apellido de casada / el de la cédula de la misma persona', () => {
+    it('apellido de casada en la licencia y la póliza con el de la cédula → coincide, apellido «difiere» (informativo)', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura(LIC_CASADA),
+        ctxCasada({
+          licencia: OL_LIC_CASADA,
+          cedula: {
+            tipoDoc: 'V',
+            documento: '10099860',
+            nombre: 'ANA LUISA',
+            apellido: 'MANTILLA AMAYA',
+          },
+        }),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(campoDe(d, 'apellido')).toMatchObject({
+        estado: 'difiere',
+        coincide: false,
+        enPoliza: 'Mantilla Amaya',
+        enDocumento: 'MANTILLA DE BADILLO',
+      });
+      expect(d.resumen).toMatch(/Difiere \(informativo, no cuenta\): apellido/);
+    });
+
+    it('apellido de casada sin lectura de la cédula → tampoco es dato cambiado', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura(LIC_CASADA),
+        ctxCasada({ licencia: OL_LIC_CASADA }),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(campoDe(d, 'apellido').estado).toBe('difiere');
+    });
+
+    it('el documento no trae el apellido y lo leído al emitir es el de casada → no es dato cambiado', () => {
+      const { apellido: _a, ...sinApellido } = LIC_CASADA;
+      const d = diagnosticar(
+        'licencia',
+        lectura(sinApellido),
+        ctxCasada({ licencia: OL_LIC_CASADA }),
+      );
+      expect(d.resultado).not.toBe('datos_modificados');
+      expect(campoDe(d, 'apellido').estado).toBe('sin_dato_documento');
+    });
+
+    it('apellido distinto (no de casada) pero la póliza dice lo que el OCR leyó en la cédula de esa persona → difiere', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura({ ...LIC_CASADA, apellido: 'BADILLO RIVAS' }),
+        ctxCasada({
+          licencia: { ...OL_LIC_CASADA, apellido: 'BADILLO RIVAS' },
+          cedula: { documento: '10.099.860', apellido: 'Mantilla Amaya' },
+        }),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(campoDe(d, 'apellido').estado).toBe('difiere');
+    });
+
+    it('negativo: cambio real del apellido (sin cédula que lo respalde) → sigue datos_modificados', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura({ ...LIC_CASADA, apellido: 'RODRIGUEZ' }),
+        ctxCasada({ licencia: { ...OL_LIC_CASADA, apellido: 'RODRIGUEZ' } }),
+      );
+      expect(d.resultado).toBe('datos_modificados');
+      expect(campoDe(d, 'apellido').estado).toBe('modificado_en_formulario');
+    });
+
+    it('negativo: la cédula leída es de OTRA persona (otro número) → no excusa el cambio', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura({ ...LIC_CASADA, apellido: 'RODRIGUEZ' }),
+        ctxCasada({
+          licencia: { ...OL_LIC_CASADA, apellido: 'RODRIGUEZ' },
+          cedula: { documento: '20990741', apellido: 'Mantilla Amaya' },
+        }),
+      );
+      expect(d.resultado).toBe('datos_modificados');
+    });
+
+    it('negativo: «X DE Y» con otro primer apellido → sigue datos_modificados', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura({ ...LIC_CASADA, apellido: 'GOMEZ DE BADILLO' }),
+        ctxCasada({
+          licencia: { ...OL_LIC_CASADA, apellido: 'GOMEZ DE BADILLO' },
+        }),
+      );
+      expect(d.resultado).toBe('datos_modificados');
+    });
+
+    it('negativo: el número no es el de la persona de la póliza → no se tolera el apellido', () => {
+      const d = diagnosticar(
+        'cedula',
+        lectura({
+          identificacion: '20990741',
+          tipoDoc: 'V',
+          nombre: 'ANA LUISA',
+          apellido: 'MANTILLA DE BADILLO',
+        }),
+        ctxCasada(),
+      );
+      expect(campoDe(d, 'apellido').estado).toBe('no_coincide');
+      expect(d.resultado).toBe('no_coincide');
+    });
+
+    it('apellidoDeCasada: solo «X DE Y» frente a «X Z» con el mismo primer apellido', () => {
+      expect(apellidoDeCasada('MANTILLA DE BADILLO', 'Mantilla Amaya')).toBe(
+        true,
+      );
+      expect(apellidoDeCasada('Mantilla Amaya', 'MANTILLA DE BADILLO')).toBe(
+        true,
+      );
+      expect(apellidoDeCasada('GOMEZ DE BADILLO', 'MANTILLA AMAYA')).toBe(
+        false,
+      );
+      expect(apellidoDeCasada('MANTILLA RIVAS', 'MANTILLA AMAYA')).toBe(false);
+      expect(
+        apellidoDeCasada('MANTILLA DE BADILLO', 'MANTILLA DE PEREZ'),
+      ).toBe(false);
+      expect(apellidoDeCasada('MANTILLA', 'MANTILLA DE BADILLO')).toBe(false);
+    });
+
+    it('aviso al asegurado: un informativo no aparece como dato que no coincide', () => {
+      const d = diagnosticar(
+        'licencia',
+        lectura({ ...LIC_CASADA, vencimiento: '2020-01-01' }),
+        ctxCasada({ licencia: OL_LIC_CASADA }),
+      );
+      expect(d.resultado).toBe('no_coincide');
+      expect(motivoParaAsegurado(d)).toBe('La licencia está vencida.');
+    });
+  });
+
+  describe('caso 4: nombre leído que es sexo o estado civil (foto girada)', () => {
+    // 18-1-0000139376: el OCR dejó «Masculino» como nombre; la póliza dice DANRY FERNANDO.
+    const DANRY = {
+      tipoDoc: 'V',
+      documento: '25111222',
+      nombre: 'Danry Fernando',
+      apellido: 'Perez Gomez',
+    };
+    const ctxDanry = (ocrLeido: any = {}) =>
+      contextoPoliza({
+        producto: 'rcv',
+        snapshot: { ...SNAPSHOT, tomador: DANRY, asegurado: DANRY, ocrLeido },
+      });
+    const CED = {
+      identificacion: '25111222',
+      tipoDoc: 'V',
+      nombre: 'MASCULINO',
+      apellido: 'PEREZ GOMEZ',
+    };
+
+    it('IA y OCR al emitir leyeron «Masculino» como nombre → no es dato cambiado ni no_coincide', () => {
+      const d = diagnosticar(
+        'cedula',
+        lectura(CED),
+        ctxDanry({
+          cedula: { tipoDoc: 'V', documento: '25111222', nombre: 'Masculino' },
+        }),
+      );
+      expect(d.resultado).toBe('coincide');
+      expect(campoDe(d, 'nombre')).toMatchObject({
+        estado: 'sin_dato_documento',
+        enDocumento: null,
+      });
+      expect(campoDe(d, 'nombre').enOcrAlEmitir).toBeUndefined();
+    });
+
+    it('la IA no leyó el nombre y el OCR al emitir dejó «MASCULINO» → no es dato cambiado', () => {
+      const { nombre: _n, ...sinNombre } = CED;
+      const d = diagnosticar(
+        'cedula',
+        lectura(sinNombre),
+        ctxDanry({ cedula: { documento: '25111222', nombre: 'MASCULINO' } }),
+      );
+      expect(d.resultado).not.toBe('datos_modificados');
+    });
+
+    it('contextoPoliza: el nombre «Soltera» de lo leído al emitir no se guarda como leído', () => {
+      const ctx = ctxDanry({
+        cedula: { documento: '25111222', nombre: 'Soltera', apellido: 'Perez' },
+      });
+      expect(ctx.ocrLeido?.cedula).toEqual({
+        documento: '25111222',
+        apellido: 'Perez',
+      });
+    });
+
+    it('negativo: un nombre real distinto sigue marcándose', () => {
+      const d = diagnosticar(
+        'cedula',
+        lectura({ ...CED, nombre: 'CARLOS' }),
+        ctxDanry({ cedula: { documento: '25111222', nombre: 'CARLOS' } }),
+      );
+      expect(d.resultado).toBe('datos_modificados');
+      expect(campoDe(d, 'nombre').estado).toBe('modificado_en_formulario');
+    });
+
+    it('esSexoOEstadoCivil: solo palabras de sexo o estado civil', () => {
+      for (const v of [
+        'MASCULINO',
+        'Femenino',
+        'M',
+        'f',
+        'Soltera',
+        'CASADO',
+        'Viuda',
+        'Divorciado',
+        'Sexo: M',
+      ])
+        expect(esSexoOEstadoCivil(v)).toBe(true);
+      for (const v of ['Danry Fernando', 'María F', 'Viuda de Pérez', '', null])
+        expect(esSexoOEstadoCivil(v)).toBe(false);
+    });
+  });
+
+  describe('caso 1: certificado rechazado como «documento no reconocido»', () => {
+    function rechazado(id: number, resumen: string, comparador = 9) {
+      const fila = req(id, 'certificado');
+      Object.assign(fila, {
+        estado: 'observado',
+        decision: 'ia',
+        ocrDatos: null,
+        diagnostico: {
+          ...fila.diagnostico,
+          comparador,
+          resultado: 'no_coincide',
+          resumen,
+          campos: [
+            {
+              campo: 'tipoDocumento',
+              etiqueta: 'Tipo de documento',
+              enPoliza: 'Certificado de circulación',
+              enDocumento: null,
+              coincide: false,
+              estado: 'no_coincide',
+            },
+          ],
+        },
+      });
+    }
+    const NO_RECONOCIDO =
+      'El documento subido parece ser un(a) "documento no reconocido", pero el sistema esperaba un(a) "Certificado de Circulacion". Por favor sube el archivo correcto en este espacio.';
+
+    it('al desplegar: se vuelve a leer UNA vez (Certificado de Origen) y se compara como el certificado', async () => {
+      const id = await crearRcv('RCV-ORIGEN-1', {
+        documentos: ['certificado'],
+      });
+      rechazado(id, NO_RECONOCIDO);
+      const antes = llamadasAnalizar(REF.certificado).length;
+      const r = await svc.revisarConIa({ modo: 'completo' });
+      expect(r.motivos).toEqual({ cambio_comparador: 1 });
+      await svc.esperarAnalisisPendientes();
+      expect(llamadasAnalizar(REF.certificado).slice(antes)).toHaveLength(1);
+      expect(req(id, 'certificado')).toMatchObject({
+        estado: 'validado',
+        decision: 'ia',
+      });
+      expect(req(id, 'certificado').diagnostico.comparador).toBe(
+        VERSION_COMPARADOR,
+      );
+      await svc.revisarConIa({ modo: 'completo' });
+      expect(llamadasAnalizar(REF.certificado).slice(antes)).toHaveLength(1);
+    });
+
+    it('negativo: rechazado por ser otro documento (cédula) → no se vuelve a leer y sigue observado', async () => {
+      const id = await crearRcv('RCV-ORIGEN-2', {
+        documentos: ['certificado'],
+      });
+      rechazado(
+        id,
+        'El documento subido parece ser un(a) "Cedula de Identidad", pero el sistema esperaba un(a) "Certificado de Circulacion".',
+      );
+      const antes = llamadasAnalizar().length;
+      await svc.revisarConIa({ modo: 'completo' });
+      await svc.esperarAnalisisPendientes();
+      expect(llamadasAnalizar()).toHaveLength(antes);
+      expect(req(id, 'certificado').estado).toBe('observado');
+    });
+
+    it('negativo: ya con comparador 10 → no se vuelve a leer', async () => {
+      const id = await crearRcv('RCV-ORIGEN-3', {
+        documentos: ['certificado'],
+      });
+      rechazado(id, NO_RECONOCIDO, 10);
+      const antes = llamadasAnalizar().length;
+      await svc.revisarConIa({ modo: 'completo' });
+      await svc.esperarAnalisisPendientes();
+      expect(llamadasAnalizar()).toHaveLength(antes);
     });
   });
 });

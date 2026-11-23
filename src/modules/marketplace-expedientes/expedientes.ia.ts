@@ -59,8 +59,14 @@ export type MotivoAnalisis =
  *   transcripción en el formulario), la posición del dígito que cambia y una máscara que lo deja
  *   ver; con lo leído por el OCR del wizard se precisa si la diferencia es entre lecturas o si la
  *   cédula se cambió en el formulario. Solo recompara lo ya leído (sin llamar al OCR).
+ * v10 (23-nov, falsas alarmas de prod): misma persona (el número coincide) con un nombre o apellido
+ *   distinto que es el que el OCR leyó en su cédula, o un apellido de casada («X DE Y» frente a
+ *   «X Z»): queda `difiere` (informativo), no no_coincide ni datos cambiados. Un nombre o apellido
+ *   que es solo sexo o estado civil («MASCULINO», «SOLTERA»; foto girada) no cuenta como leído.
+ *   El certificado rechazado como «documento no reconocido» (p. ej. Certificado de Origen de un
+ *   vehículo nuevo) se vuelve a leer UNA vez. Lo demás solo recompara lo ya leído.
  */
-export const VERSION_COMPARADOR = 9;
+export const VERSION_COMPARADOR = 10;
 
 /**
  * La v4 a la v7 solo cambian contra quién se compara en personas y licencias (y el orden
@@ -241,6 +247,39 @@ const PARTICULAS = new Set([
   'VAN',
   'VON',
 ]);
+
+/**
+ * v10: palabras de los campos «Sexo» y «Estado civil» de la cédula. Con la foto girada el OCR a veces
+ * las deja como nombre o apellido (18-1-0000139376: nombre «Masculino»).
+ */
+const SEXO_ESTADO_CIVIL = new Set([
+  'M',
+  'F',
+  'MASC',
+  'FEM',
+  'MASCULINO',
+  'FEMENINO',
+  'SEXO',
+  'SOLTERO',
+  'SOLTERA',
+  'CASADO',
+  'CASADA',
+  'DIVORCIADO',
+  'DIVORCIADA',
+  'VIUDO',
+  'VIUDA',
+  'CONCUBINO',
+  'CONCUBINA',
+  'EDO',
+  'ESTADO',
+  'CIVIL',
+]);
+
+/** v10: ¿el nombre o apellido leído es solo sexo o estado civil? Entonces no se leyó el nombre. */
+export function esSexoOEstadoCivil(v?: string | null): boolean {
+  const palabras = normTexto(v).split(' ').filter(Boolean);
+  return palabras.length > 0 && palabras.every((p) => SEXO_ESTADO_CIVIL.has(p));
+}
 
 function tokens(v?: string | null): string[] {
   return normTexto(v)
@@ -475,6 +514,7 @@ export function contextoPoliza(
     otrasFuentes,
     personas,
     cotizacion?.personas ?? [],
+    exp.producto,
   );
   return {
     personas,
@@ -516,9 +556,12 @@ function personasAdicionales(
   yaEstan: PersonaPoliza[],
   /** v7: personas de la cotización con su papel. */
   etiquetadas: [unknown, RolPersona][] = [],
+  producto?: string,
 ): PersonaPoliza[] {
   const fuentes: [unknown, RolPersona][] = [];
   const deFuneral = (f: Record<string, unknown>) => {
+    // v10: en RCV `funeral` puede quedar de un funerario anterior en la misma pestaña: no cuenta.
+    if (producto === 'rcv') return;
     for (const a of lista(f.asegurados)) fuentes.push([a, 'asegurado']);
     for (const b of lista(f.beneficiarios)) fuentes.push([b, 'beneficiario']);
   };
@@ -615,6 +658,9 @@ export function ocrLeidoDe(
     const limpio: Record<string, unknown> = {};
     for (const k of CLAVES_OCR_LEIDO) {
       const t = texto(r[k]);
+      // v10: «MASCULINO» o «SOLTERA» como nombre no es un nombre leído.
+      if ((k === 'nombre' || k === 'apellido') && esSexoOEstadoCivil(t))
+        continue;
       if (t) limpio[k] = t;
     }
     if (Object.keys(limpio).length) out[tipo] = limpio;
@@ -1057,8 +1103,17 @@ function compararPersona(
   );
   campos.push(docCampo);
 
-  const nOcr = tokens(pick(ex, ['nombre', 'nombres', 'razonSocial']));
-  const aOcr = tokens(pick(ex, ['apellido', 'apellidos']));
+  // v10: un nombre o apellido que es solo sexo o estado civil («MASCULINO»; foto girada) no se
+  // leyó: no se compara ni cuenta como dato del documento.
+  const original = (k: string[]) => {
+    for (const key of k) {
+      const v = pick(ex, [key]);
+      if (v && !esSexoOEstadoCivil(v)) return v;
+    }
+    return null;
+  };
+  const nOcr = tokens(original(['nombre', 'nombres', 'razonSocial']));
+  const aOcr = tokens(original(['apellido', 'apellidos']));
   const nPol = tokens(persona?.nombre);
   const aPol = tokens(persona?.apellido);
   const todosOcr = [...nOcr, ...aOcr];
@@ -1069,7 +1124,6 @@ function compararPersona(
   const completo =
     contenido(todosOcr, todosPol) &&
     comunes >= Math.min(2, todosOcr.length, todosPol.length);
-  const original = (k: string[]) => pick(ex, k);
   campos.push(
     campo(
       'nombre',
@@ -1494,6 +1548,8 @@ function marcarModificados(
     detectar: boolean;
     /** v8: solo estos campos pueden quedar como cambiados (certificado: placa y carrocería). */
     soloEn?: string[];
+    /** v10: diferencia explicada (misma persona): no es un dato cambiado. */
+    tolerado?: (campo: string, pol: string, leido: string) => boolean;
   },
 ): CampoDiagnostico[] {
   const out: CampoDiagnostico[] = [];
@@ -1513,11 +1569,58 @@ function marcarModificados(
       ? c.estado === 'no_coincide'
       : c.estado === 'sin_dato_documento' && !igual(cr.pol, leido);
     if (!difiere) continue;
+    if (o.tolerado?.(c.campo, cr.pol, leido)) continue;
     // Lo leído al emitir es lo que dice el documento: no es una lectura distinta del OCR.
     if (cr.doc && !igual(cr.doc, leido)) continue;
     c.estado = 'modificado_en_formulario';
     c.coincide = false;
     out.push(c);
+  }
+  return out;
+}
+
+/**
+ * v10: apellido de casada: «MANTILLA DE BADILLO» (licencia) frente a «MANTILLA AMAYA» (cédula):
+ * mismo primer apellido y uno de los dos sigue con «DE …» (18-1-0000144235).
+ */
+export function apellidoDeCasada(
+  a?: string | null,
+  b?: string | null,
+): boolean {
+  const pa = normTexto(a).split(' ').filter(Boolean);
+  const pb = normTexto(b).split(' ').filter(Boolean);
+  if (pa.length < 2 || pb.length < 2 || !palabraIgual(pa[0], pb[0]))
+    return false;
+  const casada = (p: string[]) => p[1] === 'DE' && p.length >= 3;
+  return (casada(pa) && !casada(pb)) || (casada(pb) && !casada(pa));
+}
+
+/** Requisitos con la cédula (o pasaporte) de una persona, donde se lee su nombre «oficial». */
+const TIPOS_CEDULA = [
+  'cedula',
+  'cedula_titular',
+  'cedula_beneficiario',
+  'pasaporte',
+];
+
+/**
+ * v10: lo que el OCR leyó (al emitir o al escanear en el wizard) de la cédula de la persona con
+ * este número, en otro requisito de la misma póliza.
+ */
+function leidoEnCedulas(
+  ctx: ContextoPoliza,
+  tipo: string,
+  documento: string,
+): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const fuente of [ctx.ocrLeido, ctx.ocrLeidoCotizacion]) {
+    for (const t of TIPOS_CEDULA) {
+      if (t === tipo) continue;
+      const ol = rec(fuente?.[t]);
+      const doc = texto(ol.documento);
+      if (doc && numeroDocumento(doc) === numeroDocumento(documento))
+        out.push(ol);
+    }
   }
   return out;
 }
@@ -1704,6 +1807,45 @@ export function diagnosticar(
   // persona de respaldo o un documento de otra persona de la póliza no se afirma que se cambió.
   // v7: si el expediente no trae lo leído de este documento, lo de la cotización del wizard.
   const ol = rec(ctx.ocrLeido?.[tipo] ?? ctx.ocrLeidoCotizacion?.[tipo]);
+
+  // v10: misma persona (el número del documento coincide con el de la póliza): un nombre o apellido
+  // distinto que es el que el OCR leyó en su cédula, o un apellido de casada, es informativo.
+  const docPolIdent = crudos.documento?.pol ?? null;
+  const leidoDocOl = texto(ol.documento);
+  const mismaPersona =
+    TIPOS_PERSONA.has(tipo) &&
+    !!docPolIdent &&
+    (campos.some((c) => c.campo === 'documento' && c.coincide === true) ||
+      (!!leidoDocOl &&
+        !lecturaFallida('documento', leidoDocOl) &&
+        mismoDato('documento', leidoDocOl, docPolIdent, { tipo, conDv })));
+  const cedulasMismaPersona =
+    mismaPersona && docPolIdent ? leidoEnCedulas(ctx, tipo, docPolIdent) : [];
+  const tolerado = (c: string, pol: string, doc: string): boolean => {
+    if (!mismaPersona || (c !== 'nombre' && c !== 'apellido')) return false;
+    if (c === 'apellido' && apellidoDeCasada(pol, doc)) return true;
+    return cedulasMismaPersona.some((o) => {
+      const enCedula = texto(o[c]);
+      return (
+        !!enCedula &&
+        !esSexoOEstadoCivil(enCedula) &&
+        mismoDato(c, pol, enCedula, { tipo, conDv })
+      );
+    });
+  };
+  for (const c of campos) {
+    const cr = crudos[c.campo];
+    if (
+      c.estado === 'no_coincide' &&
+      cr?.pol &&
+      cr.doc &&
+      tolerado(c.campo, cr.pol, cr.doc)
+    ) {
+      c.estado = 'difiere';
+      c.coincide = false;
+    }
+  }
+
   const modificados = Object.keys(ol).length
     ? marcarModificados(tipo, campos, crudos, ol, {
         conDv,
@@ -1714,6 +1856,7 @@ export function diagnosticar(
           !respaldo &&
           !(tipo === 'certificado' && !vehiculoDe(ctx)),
         soloEn: tipo === 'certificado' ? CLAVE_VEHICULO : undefined,
+        tolerado,
       })
     : [];
   // v9: un dígito distinto y lo que leyó el OCR del wizard al escanear: si leyó lo mismo que trae
@@ -1950,8 +2093,12 @@ export function motivoParaAsegurado(
     const vencida = d.campos.some(
       (c) => c.campo === 'vencimiento' && c.coincide === false,
     );
+    // Los informativos (`difiere`) no cuentan.
     const otros = d.campos.filter(
-      (c) => c.coincide === false && c.campo !== 'vencimiento',
+      (c) =>
+        c.coincide === false &&
+        c.campo !== 'vencimiento' &&
+        c.estado !== 'difiere',
     );
     if (vencida && !otros.length) return 'La licencia está vencida.';
     return `Los datos del documento no coinciden con la póliza (${listaEtiquetas(otros)}).`;

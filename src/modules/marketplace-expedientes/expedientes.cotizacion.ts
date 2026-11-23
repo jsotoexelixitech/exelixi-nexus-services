@@ -11,7 +11,12 @@
  * Lo que sale de aquí no entra en la huella de la póliza (como la mesa técnica en v4): solo amplía
  * contra qué se compara.
  */
-import type { RolPersona } from './expedientes.ia';
+import { esSexoOEstadoCivil, type RolPersona } from './expedientes.ia';
+
+/** v10: «MASCULINO» o «SOLTERA» como nombre (foto girada) no es un nombre leído. */
+function sinSexo(v: string | null): string | null {
+  return v && esSexoOEstadoCivil(v) ? null : v;
+}
 
 /** Lo que aporta la cotización al contexto de la IA. */
 export interface DatosCotizacion {
@@ -156,8 +161,10 @@ function ocrLeidoDeDocumento(
   const campos: Record<string, unknown> = {
     tipoDoc: documento ? tipoDoc : null,
     documento,
-    nombre: pickOcr('nombre', ...(tipo === 'rif' ? ['razonSocial'] : [])),
-    apellido: pickOcr('apellido'),
+    nombre: sinSexo(
+      pickOcr('nombre', ...(tipo === 'rif' ? ['razonSocial'] : [])),
+    ),
+    apellido: sinSexo(pickOcr('apellido')),
     placa: codigo(pickOcr('placa')),
     serial: codigo(pickOcr('serial', 'serialCarroceria', 'vin')),
     serialMotor: codigo(pickOcr('serialMotor', 'numeroMotor')),
@@ -205,7 +212,9 @@ export function datosDeCotizacion(
     add(r.tomador, 'asegurado');
   add(r.titular, 'asegurado');
   for (const a of lista(r.asegurados)) add(a, 'asegurado');
-  const funeral = rec(r.funeral);
+  // v10: en RCV `funeral` puede quedar de un funerario anterior en la misma pestaña (18-1-0000144583):
+  // no cuenta. En personas, igual que antes.
+  const funeral = producto === 'rcv' ? rec(null) : rec(r.funeral);
   for (const a of lista(funeral.asegurados)) add(a, 'asegurado');
   if (r.hasBeneficiary === true) add(r.beneficiario, 'beneficiario');
   for (const b of lista(funeral.beneficiarios)) add(b, 'beneficiario');
