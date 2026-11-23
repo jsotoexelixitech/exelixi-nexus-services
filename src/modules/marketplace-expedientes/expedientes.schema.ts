@@ -314,5 +314,21 @@ export const JOBS = [
   'nocturna',
   'conciliacion',
   'validacion_ia',
+  'carga_historica',
 ] as const;
 export type JobName = (typeof JOBS)[number];
+
+/** POST /historico/carga: acción sobre la carga histórica 2026 (nunca envía correos). */
+export const cargaHistoricaSchema = z.object({
+  body: z.object({
+    modo: z.enum(['vista_previa', 'ejecutar', 'reanudar', 'reiniciar']),
+    /** Vista previa: páginas de nest-api a leer (1-20). */
+    maxPaginas: z.coerce.number().int().min(1).max(20).optional(),
+    /** Vista previa: pólizas sin clasificar a consultar al OCR como muestra (0-50). */
+    muestraOcr: z.coerce.number().int().min(0).max(50).optional(),
+    /** Vista previa: desde el inicio en vez del cursor guardado. */
+    desdeInicio: z.boolean().optional(),
+    /** Ejecutar fuera de la ventana nocturna: solo fuera de producción. */
+    ignorarVentana: z.boolean().optional(),
+  }),
+});

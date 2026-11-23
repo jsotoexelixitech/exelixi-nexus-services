@@ -11,7 +11,14 @@ import { caracasParts } from './expedientes.domain';
 import {
   conciliacionCadaMin,
   expedientesJobsEnabled,
+  historicoConfig,
 } from './expedientes.env';
+import {
+  claveTandaHistorica,
+  dentroDeVentana,
+  ejecutarCargaHistorica,
+  leerEstadoHistorico,
+} from './expedientes.historico';
 import {
   alertaReporteFallido,
   MAX_REINTENTOS_NOCTURNA,
@@ -33,6 +40,8 @@ export interface EjecutarJobOpts {
   fechaReporte?: string;
   /** Clave propia de la ejecución (conciliación periódica `<fecha>~c<n>`); por defecto la del día. */
   clave?: string;
+  /** Solo carga_historica: correr fuera de la ventana nocturna (prueba manual fuera de producción). */
+  historico?: { ignorarVentana?: boolean };
 }
 
 export type JobResultado =
@@ -63,6 +72,14 @@ async function correr(
     case 'validacion_ia':
       return {
         validacionIa: await svc.revisarConIa({ modo: 'completo', ahora }),
+      };
+    case 'carga_historica':
+      // Sin `ahora`: la tanda mide su propio tiempo y la ventana con el reloj real.
+      return {
+        cargaHistorica: await ejecutarCargaHistorica({
+          ignorarVentana: opts.historico?.ignorarVentana === true,
+          actor: opts.actor ?? 'scheduler',
+        }),
       };
     default:
       throw new Error(`Tarea ${String(job)} no implementada`);
@@ -279,6 +296,48 @@ export async function tickScheduler(
   return corridos;
 }
 
+// ─── Carga histórica 2026 (solo con EXPEDIENTES_HISTORICO_ENABLED) ──────────
+
+let historicoTickCorriendo = false;
+let ultimaTandaHistorica: string | null = null;
+let historicoTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Una tanda de la carga histórica por bloque de EXPEDIENTES_HISTORICO_CADA_MIN minutos, solo dentro
+ * de la ventana nocturna. Va en su propio temporizador para no frenar la diaria ni el reporte.
+ * Completada o detenida (errores seguidos): no corre ni deja registro hasta que el admin la reanude.
+ */
+export async function tickHistorico(
+  ahora: Date = new Date(),
+): Promise<JobResultado | null> {
+  if (!expedientesJobsEnabled() || historicoTickCorriendo) return null;
+  const cfg = historicoConfig();
+  if (!cfg || !dentroDeVentana(caracasParts(ahora).hora, cfg.ventana))
+    return null;
+  const clave = claveTandaHistorica(ahora, cfg.cadaMin);
+  if (ultimaTandaHistorica === clave) return null;
+  historicoTickCorriendo = true;
+  try {
+    const estado = await leerEstadoHistorico();
+    ultimaTandaHistorica = clave;
+    if (estado.estado === 'completada' || estado.estado === 'detenida')
+      return null;
+    return await ejecutarJob('carga_historica', {
+      origen: 'auto',
+      ahora,
+      actor: 'scheduler',
+      clave,
+    });
+  } catch (err) {
+    logger.error(
+      `[expedientes] carga histórica: ${err instanceof Error ? err.message : 'error'}`,
+    );
+    return null;
+  } finally {
+    historicoTickCorriendo = false;
+  }
+}
+
 // ─── Validación automática con IA (fuera del registro diario) ───────────────
 
 /** Reintentos de errores técnicos y documentos recién recibidos: cada 5 minutos. */
@@ -330,6 +389,10 @@ export function iniciarSchedulerExpedientes(): void {
     void tickIa('completo');
   }, IA_ARRANQUE_MS);
   iaArranque.unref();
+  historicoTimer = setInterval(() => {
+    void tickHistorico();
+  }, TICK_MS);
+  historicoTimer.unref();
   logger.info('[expedientes] scheduler de tareas activo (hora Caracas)');
 }
 
@@ -342,7 +405,11 @@ export function _resetScheduler(): void {
   if (timer) clearInterval(timer);
   if (iaTimer) clearInterval(iaTimer);
   if (iaArranque) clearTimeout(iaArranque);
+  if (historicoTimer) clearInterval(historicoTimer);
   timer = null;
   iaTimer = null;
   iaArranque = null;
+  historicoTimer = null;
+  historicoTickCorriendo = false;
+  ultimaTandaHistorica = null;
 }

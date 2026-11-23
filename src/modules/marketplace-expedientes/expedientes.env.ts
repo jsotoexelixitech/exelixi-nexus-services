@@ -153,3 +153,94 @@ export function ocrCanalEscrituraHabilitada(): boolean {
 
 export const MENSAJE_OCR_CANAL_SOLO_LECTURA =
   'La configuración de OCR por canal está en solo lectura en este ambiente. Los cambios se solicitan al equipo de Exélixi.';
+
+// ─── Carga histórica 2026 (pólizas de Sis2000 vía nest-api) ─────────────────
+
+/** Entero de una variable dentro de [min, max]; vacío o inválido = `def`. */
+function entero(name: string, def: number, min: number, max: number): number {
+  const raw = String(process.env[name] ?? '').trim();
+  const n = Number(raw);
+  if (raw === '' || !Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+export interface HistoricoConfig {
+  /** Base de nest-api (sin /api/v1...). */
+  nestUrl: string;
+  nestKey: string;
+  /** 'YYYY-MM-DD', inclusivo. */
+  desde: string;
+  /** 'YYYY-MM-DD', exclusivo; null = corte fijo el día en que arranca la carga. */
+  hasta: string | null;
+  /** Pólizas por página de nest-api (1-500). */
+  limit: number;
+  /** Tope de filas de nest-api leídas por corrida. */
+  porCorrida: number;
+  /** Pausa entre páginas de nest-api (cada página recorre adpoliza). */
+  pausaPaginaMs: number;
+  /** Pausa entre consultas al OCR. */
+  pausaOcrMs: number;
+  /** Ventana horaria de Caracas 'HH:MM-HH:MM' (puede cruzar la medianoche). */
+  ventana: { inicio: string; fin: string };
+  /** Cada cuántos minutos arranca una tanda dentro de la ventana. */
+  cadaMin: number;
+  /** Errores seguidos (nest-api u OCR) que detienen la corrida. */
+  maxErrores: number;
+  /** Duración máxima de una corrida. */
+  maxMinutos: number;
+}
+
+const PATRON_DIA = /^\d{4}-\d{2}-\d{2}$/;
+const PATRON_VENTANA = /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * Carga histórica: APAGADA salvo EXPEDIENTES_ENABLED + EXPEDIENTES_HISTORICO_ENABLED=true con
+ * URL, key (scope expedientes:historico) y fecha de inicio válidas. Nunca envía correos.
+ */
+export function historicoConfig(): HistoricoConfig | null {
+  if (!expedientesEnabled() || !flag('EXPEDIENTES_HISTORICO_ENABLED'))
+    return null;
+  const nestUrl = String(process.env.EXPEDIENTES_HISTORICO_NEST_URL ?? '')
+    .trim()
+    .replace(/\/+$/, '');
+  const nestKey = String(
+    process.env.EXPEDIENTES_HISTORICO_NEST_KEY ?? '',
+  ).trim();
+  const desde = String(process.env.EXPEDIENTES_HISTORICO_DESDE ?? '').trim();
+  if (!nestUrl || !nestKey || !PATRON_DIA.test(desde)) return null;
+  const hastaRaw = String(process.env.EXPEDIENTES_HISTORICO_HASTA ?? '').trim();
+  const ventanaRaw = String(process.env.EXPEDIENTES_HISTORICO_VENTANA ?? '')
+    .trim()
+    .replace(/\s+/g, '');
+  const [inicio, fin] = (
+    PATRON_VENTANA.test(ventanaRaw) ? ventanaRaw : '22:00-05:00'
+  ).split('-');
+  return {
+    nestUrl,
+    nestKey,
+    desde,
+    hasta: PATRON_DIA.test(hastaRaw) && hastaRaw > desde ? hastaRaw : null,
+    limit: entero('EXPEDIENTES_HISTORICO_LIMIT', 500, 1, 500),
+    porCorrida: entero('EXPEDIENTES_HISTORICO_POR_CORRIDA', 2000, 1, 20_000),
+    pausaPaginaMs: entero(
+      'EXPEDIENTES_HISTORICO_PAUSA_PAGINA_MS',
+      60_000,
+      0,
+      600_000,
+    ),
+    pausaOcrMs: entero('EXPEDIENTES_HISTORICO_PAUSA_OCR_MS', 250, 0, 10_000),
+    ventana: { inicio, fin },
+    cadaMin: entero('EXPEDIENTES_HISTORICO_CADA_MIN', 30, 5, 720),
+    maxErrores: entero('EXPEDIENTES_HISTORICO_MAX_ERRORES', 3, 1, 20),
+    maxMinutos: entero('EXPEDIENTES_HISTORICO_MAX_MINUTOS', 50, 1, 600),
+  };
+}
+
+/** Motivo por el que la carga histórica no está disponible (para la pantalla/registro). */
+export function historicoMotivoApagado(): string | null {
+  if (historicoConfig()) return null;
+  if (!expedientesEnabled()) return 'EXPEDIENTES_ENABLED apagado';
+  if (!flag('EXPEDIENTES_HISTORICO_ENABLED'))
+    return 'EXPEDIENTES_HISTORICO_ENABLED apagado';
+  return 'Faltan EXPEDIENTES_HISTORICO_NEST_URL, EXPEDIENTES_HISTORICO_NEST_KEY o EXPEDIENTES_HISTORICO_DESDE (YYYY-MM-DD)';
+}

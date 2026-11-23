@@ -618,6 +618,39 @@ model MktExpedienteJobRun {
   @@map("mkt_expediente_job_run")
 }
 
+/// Carga histórica del monitor (23-nov-2026): una fila por póliza de Sis2000 (cnpoliza) emitida por
+/// canales digitales desde EXPEDIENTES_HISTORICO_DESDE, clasificada según si pasó por el OCR.
+/// Liviana a propósito: sin nombre, documento, correo ni teléfono; no entra en indicadores() ni
+/// genera expedientes, recordatorios o correos.
+model MktPolizaHistorica {
+  id           Int       @id @default(autoincrement()) @map("mph_id")
+  cnpoliza     String    @map("mph_cnpoliza") @db.VarChar(30)
+  cramo        Int?      @map("mph_cramo")
+  cprog        String?   @map("mph_cprog") @db.VarChar(20)
+  /// nexus | nest_api | marketplace_sysip
+  origen       String    @map("mph_origen") @db.VarChar(20)
+  /// Primera versión vista (hora local de Sis2000, sin zona).
+  fingreso     DateTime  @map("mph_fingreso") @db.Timestamp(3)
+  /// 'YYYY-MM' de fingreso.
+  mes          String    @map("mph_mes") @db.VarChar(7)
+  /// pendiente | paso_ocr | no_paso_ocr | error
+  resultado    String    @default("pendiente") @map("mph_resultado") @db.VarChar(16)
+  /// poliza | pendiente (carpeta del OCR) | monitor (expediente ya existente)
+  ubicacionOcr String?   @map("mph_ubicacion_ocr") @db.VarChar(16)
+  expedienteId Int?      @map("mph_expediente_id")
+  ccanalalt    String?   @map("mph_ccanalalt") @db.VarChar(32)
+  cproductor   String?   @map("mph_cproductor") @db.VarChar(32)
+  intentos     Int       @default(0) @map("mph_intentos")
+  consultadoEn DateTime? @map("mph_consultado_en") @db.Timestamp(6)
+  createdAt    DateTime  @default(now()) @map("mph_created_at") @db.Timestamp(6)
+  updatedAt    DateTime  @updatedAt @map("mph_updated_at") @db.Timestamp(6)
+
+  @@unique([cnpoliza], map: "uq_mkt_poliza_historica_cnpoliza")
+  @@index([mes, origen, resultado], map: "idx_mkt_poliza_historica_mes_origen")
+  @@index([resultado], map: "idx_mkt_poliza_historica_resultado")
+  @@map("mkt_poliza_historica")
+}
+
 /// Cotizaciones del cotizador RC (RCG/RCP/RCE): registro permanente; expiraEn (15 días) solo cierra el acceso
 /// y el pago del cliente. Pago en línea (Pagos) y póliza emitida.
 /// El módulo cotizaciones-rc la usa con SQL directo (reclamos atómicos de estado).
