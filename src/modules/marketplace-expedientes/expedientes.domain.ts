@@ -276,6 +276,8 @@ export interface EmisorTexto {
   canal: string | null;
   /** Grupo visible resuelto: canal, productor o null (pendiente de identificar canal). */
   grupo: 'canal' | 'productor' | null;
+  /** Productor resuelto cuando el grupo es Productores (cproductor, citem P o prefijo del gestor). */
+  productor?: string | null;
 }
 
 /** Prefijo de un gestor compuesto («80080-1219» → 80080) cuando no es un canal conocido. */
@@ -350,6 +352,7 @@ export function textoEmisor(
       canalSinIdentificar: !texto,
       canal: canalDirecto,
       grupo: texto ? 'productor' : null,
+      productor: texto ? productor : null,
     };
   }
 
@@ -370,6 +373,7 @@ export function textoEmisor(
       canalSinIdentificar: false,
       canal: null,
       grupo: 'productor',
+      productor: prodGestor,
     };
   }
   return { texto: null, canalSinIdentificar: true, canal: null, grupo: null };
