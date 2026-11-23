@@ -2400,10 +2400,20 @@ export class ExpedientesService {
         fueOtroTipoDeDocumento(r.diagnostico) &&
         Number(previoRif.comparador ?? 1) < versionRifEn(exp.producto) &&
         (exp.producto !== 'rcv' || /RIF/.test(String(previoRif.resumen ?? '')));
+      // v10: certificado rechazado como «documento no reconocido» (p. ej. Certificado de Origen de un
+      // vehículo nuevo, que el OCR ahora acepta): se vuelve a leer UNA vez el mismo archivo.
+      const releerCertificado =
+        motivo === 'cambio_comparador' &&
+        r.tipo === 'certificado' &&
+        (!r.ocrDatos || typeof r.ocrDatos !== 'object') &&
+        fueOtroTipoDeDocumento(r.diagnostico) &&
+        Number(previoRif.comparador ?? 1) < 10 &&
+        /no reconocido/i.test(String(previoRif.resumen ?? ''));
       if (
         (motivo === 'cambio_poliza' || motivo === 'cambio_comparador') &&
         r.analisisRef === r.ref &&
-        !releerConRif
+        !releerConRif &&
+        !releerCertificado
       ) {
         // Mismo archivo: se compara de nuevo lo ya leído, sin otra llamada al OCR.
         if (!r.ocrDatos || typeof r.ocrDatos !== 'object') {

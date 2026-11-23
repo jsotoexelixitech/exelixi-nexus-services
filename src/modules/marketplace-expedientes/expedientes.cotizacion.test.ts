@@ -274,6 +274,80 @@ describe('v7: enlace con la cotización del wizard', () => {
     });
   });
 
+  it('v10: en RCV no cuenta el `funeral` de un funerario anterior en la misma pestaña; en personas sí', () => {
+    // 18-1-0000144583: el RCV de WILLIAM CHANAGA traía al asegurado de un funerario anterior.
+    const funeral = {
+      asegurados: [
+        {
+          tipoDoc: 'V',
+          identificacion: '33333333',
+          nombre: 'Greida',
+          apellido: 'Porras',
+        },
+      ],
+      beneficiarios: [
+        {
+          tipoDoc: 'V',
+          identificacion: '44444444',
+          nombre: 'Otro',
+          apellido: 'Ben',
+        },
+      ],
+    };
+    const jd = {
+      tomador: TOMADOR,
+      sameInsured: true,
+      vehicle: VEHICULO,
+      funeral,
+    };
+    const rcv = datosDeCotizacion(jd, 'rcv');
+    expect(rcv.personas.map(([, rol]) => rol)).toEqual([
+      'tomador',
+      'asegurado',
+    ]);
+    expect(JSON.stringify(rcv.personas)).not.toMatch(
+      /Greida|33333333|44444444/,
+    );
+    const ctx = contextoPoliza(
+      {
+        producto: 'rcv',
+        snapshot: { tomador: { tipoDoc: 'V', documento: '12345678' }, funeral },
+      },
+      [],
+      rcv,
+    );
+    expect(
+      [...ctx.personas, ...(ctx.adicionales ?? [])].map((p) => p.documento),
+    ).not.toContain('33333333');
+    const personas = datosDeCotizacion(jd, 'personas');
+    expect(personas.personas.map(([, rol]) => rol)).toEqual([
+      'tomador',
+      'asegurado',
+      'beneficiario',
+    ]);
+  });
+
+  it('v10: lo leído al escanear con «Masculino» como nombre no cuenta como nombre leído', () => {
+    const d = datosDeCotizacion(
+      {
+        tomador: TOMADOR,
+        documents: {
+          cedula: {
+            ocr: {
+              identificacion: 'V-12345678',
+              nombre: 'Masculino',
+              apellido: 'Perez',
+            },
+          },
+        },
+      },
+      'rcv',
+    );
+    expect(d.ocrLeido).toEqual({
+      cedula: { tipoDoc: 'V', documento: '12345678', apellido: 'Perez' },
+    });
+  });
+
   it('la cotización no cambia la huella de la póliza', () => {
     const e = {
       producto: 'rcv',
