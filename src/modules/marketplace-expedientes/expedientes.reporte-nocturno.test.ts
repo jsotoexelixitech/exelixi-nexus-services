@@ -50,6 +50,15 @@ const OCR_ESPERADO = {
   pctPasaron: 0.8889,
   pctNoPasaron: 0.1111,
 };
+/** Indicador del día anterior al 07/11 cuando nada se emitió el 06/11. */
+const DIA_ANTERIOR_VACIO = {
+  fecha: '2026-11-06',
+  fechaLocal: '06/11/2026',
+  emitidas: 0,
+  completas: 0,
+  incompletas: 0,
+  sinInformacion: 0,
+};
 
 let fetchMock: ReturnType<typeof vi.fn>;
 /** Respuesta de nest-api para el reporte (los demás correos siempre salen). */
@@ -304,6 +313,8 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       omitidas: { incompletos: 0, completados: 0 },
       // 8 en el monitor (incluida la sin información) y 1 descartada.
       ocr: OCR_ESPERADO,
+      // Nada emitido el 06/11 (P-3 es del 04/11).
+      diaAnterior: DIA_ANTERIOR_VACIO,
     });
     const c = r.reportes[0] as any;
     expect(c.completados + c.incompletos).toBe(
@@ -340,6 +351,8 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       },
       lineaOcr:
         'Pasaron por el OCR: 8 (88,9 %) · No pasaron por el OCR: 1 (11,1 %)',
+      diaAnterior: DIA_ANTERIOR_VACIO,
+      lineaDiaAnterior: 'Emitidas el 06/11/2026: 0 · 0 completas · 0 incompletas',
       adjunto: true,
       omitidas: { incompletos: 0, completados: 0 },
     });
@@ -472,8 +485,13 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
     expect(fc[2][7]).toEqual(new Date(Date.UTC(2026, 10, 7)));
 
     const fr = filas(wb.getWorksheet('Resumen')!);
-    expect(fr.slice(0, 7)).toEqual([
+    expect(fr.slice(0, 11)).toEqual([
       ['Cifra', 'Valor'],
+      // Indicador del día anterior arriba del acumulado (22/23-nov-2026).
+      ['Emitidas el 06/11/2026 (día anterior)', 0],
+      ['· Completas', 0],
+      ['· Incompletas', 0],
+      ['· Sin información', 0],
       ['Completados', 2],
       ['Incompletos', 5],
       ['De canales', '1 completos / 4 incompletos'],
@@ -482,7 +500,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       ['Cuadre', 'Total 7 = Canales 5 + Productores 1 + Sin canal identificado 1'],
     ]);
     // Fuera del cuadre: pasaron (en el monitor, con la sin información) y descartadas.
-    expect(fr.slice(7, 9)).toEqual([
+    expect(fr.slice(11, 13)).toEqual([
       ['Pasaron por el OCR', '8 (88,9 %)'],
       ['No pasaron por el OCR', '1 (11,1 %)'],
     ]);
@@ -551,6 +569,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
         'Marketplace | Canales | Control documental diario – 07/11/2026',
       );
       expect(branded.data.fields).toEqual([
+        { label: 'Emitidas ayer (06/11)', value: '0 · 0 completas / 0 incompletas' },
         { label: 'Completados', value: '0' },
         { label: 'Incompletos', value: '1' },
         { label: 'De canales', value: '0 completos / 1 incompletos' },

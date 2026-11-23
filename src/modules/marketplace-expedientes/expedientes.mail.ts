@@ -17,6 +17,7 @@ import {
 } from './expedientes.env';
 // Solo tipos: el servicio importa este archivo y el reporte importa el servicio.
 import type {
+  DiaAnterior,
   FilaReporte,
   ReporteDiario,
   ReporteSimple,
@@ -659,6 +660,22 @@ function porArea(c: { completos: number; incompletos: number }): string {
 /** Pólizas pendientes de identificar canal que se listan en el cuerpo (todas van en el Excel). */
 export const MAX_PENDIENTES_CANAL_CORREO = 50;
 
+/** «45 · 30 completas / 15 incompletas» (+ «/ N sin información» si hay). */
+export function valorDiaAnterior(d: DiaAnterior): string {
+  return (
+    `${d.emitidas} · ${d.completas} completas / ${d.incompletas} incompletas` +
+    (d.sinInformacion ? ` / ${d.sinInformacion} sin información` : '')
+  );
+}
+
+/** «Emitidas el 22/11/2026: 45 · 30 completas · 15 incompletas» (+ sin información si hay). */
+export function lineaDiaAnterior(d: DiaAnterior): string {
+  return (
+    `Emitidas el ${d.fechaLocal}: ${d.emitidas} · ${d.completas} completas · ${d.incompletas} incompletas` +
+    (d.sinInformacion ? ` · ${d.sinInformacion} sin información` : '')
+  );
+}
+
 export function correoReporteSimple(
   r: Pick<ReporteSimple, 'areas' | 'fechaLocal' | 'corte' | 'cifras'> &
     Partial<Pick<ReporteSimple, 'pendientesCanal' | 'nota'>>,
@@ -688,6 +705,14 @@ export function correoReporteSimple(
     intro: c.incompletos === 0 ? `${corte} 0 incompletos.` : corte,
     introArriba: false,
     fields: [
+      ...(c.diaAnterior
+        ? [
+            {
+              label: `Emitidas ayer (${c.diaAnterior.fechaLocal.slice(0, 5)})`,
+              value: valorDiaAnterior(c.diaAnterior),
+            },
+          ]
+        : []),
       { label: 'Completados', value: String(c.completados) },
       { label: 'Incompletos', value: String(c.incompletos) },
       { label: 'De canales', value: porArea(c.canales) },
@@ -747,6 +772,13 @@ export function correoReporteSimple(
                 pctNoPasaron: c.ocr.pctNoPasaron,
               },
               lineaOcr,
+            }
+          : {}),
+        // Aditivo (22/23-nov-2026): indicador del día anterior; nest-api lo muestra arriba.
+        ...(c.diaAnterior
+          ? {
+              diaAnterior: { ...c.diaAnterior },
+              lineaDiaAnterior: lineaDiaAnterior(c.diaAnterior),
             }
           : {}),
         adjunto: !!excel,

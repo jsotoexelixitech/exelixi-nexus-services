@@ -757,6 +757,65 @@ export interface CifrasControl {
    * (descartadas), del mismo alcance. Fuera del cuadre. Opcional: reportes anteriores no lo traen.
    */
   ocr?: ClasificacionOcr;
+  /**
+   * Indicador del día anterior (pedido de La Mundial, 22/23-nov-2026): de las pólizas del alcance
+   * emitidas el día calendario de Caracas anterior a la fecha del reporte, cuántas tienen hoy el
+   * expediente completo, incompleto o sin información. Fuera del cuadre. Opcional (aditivo).
+   */
+  diaAnterior?: DiaAnterior;
+}
+
+export interface DiaAnterior {
+  /** YYYY-MM-DD (Caracas). */
+  fecha: string;
+  /** DD/MM/AAAA. */
+  fechaLocal: string;
+  /** completas + incompletas + sinInformacion (sin las descartadas). */
+  emitidas: number;
+  completas: number;
+  incompletas: number;
+  sinInformacion: number;
+}
+
+/** Día calendario de Caracas anterior a `fecha` (YYYY-MM-DD): [desde, hasta) en UTC. */
+export function rangoDiaAnterior(fecha: string): {
+  fecha: string;
+  desde: Date;
+  hasta: Date;
+} {
+  const hasta = caracasInicioDia(fecha);
+  const desde = new Date(hasta.getTime() - 86_400_000);
+  return { fecha: caracasParts(desde).fecha, desde, hasta };
+}
+
+/**
+ * Cifras del día anterior: completas e incompletas salen de la cartera (ya del alcance); las sin
+ * información las cuenta aparte quien llama (la cartera no las trae). Las descartadas no cuentan.
+ */
+export function cifrasDiaAnterior(
+  exps: Pick<Exp, 'emitidaEn' | 'estadoDocumental'>[],
+  rango: { fecha: string; desde: Date; hasta: Date },
+  sinInformacion: number,
+): DiaAnterior {
+  const desde = rango.desde.getTime();
+  const hasta = rango.hasta.getTime();
+  let completas = 0;
+  let incompletas = 0;
+  for (const e of exps) {
+    const t = e.emitidaEn.getTime();
+    if (t < desde || t >= hasta) continue;
+    if (e.estadoDocumental === 'completo') completas++;
+    else if (e.estadoDocumental === 'incompleto') incompletas++;
+  }
+  const sinInfo = Math.max(0, Math.trunc(sinInformacion) || 0);
+  return {
+    fecha: rango.fecha,
+    fechaLocal: fechaLocal(rango.fecha),
+    emitidas: completas + incompletas + sinInfo,
+    completas,
+    incompletas,
+    sinInformacion: sinInfo,
+  };
 }
 
 /**
@@ -1000,6 +1059,17 @@ export async function armarReporteSimple(
           })
         : Promise.resolve(0),
     ]);
+  // Día anterior (Caracas): las sin información del rango se cuentan aparte.
+  const ayer = rangoDiaAnterior(fecha);
+  const sinInfoAyer = areas.length
+    ? await prisma.mktExpediente.count({
+        where: {
+          area: { in: areas },
+          estadoDocumental: 'sin_informacion',
+          emitidaEn: { gte: ayer.desde, lt: ayer.hasta },
+        },
+      })
+    : 0;
   const comunes = (e: Exp) => ({
     poliza: e.cnpoliza,
     asegurado: nombreCompleto(e),
@@ -1020,6 +1090,7 @@ export async function armarReporteSimple(
     cifras: {
       ...cifrasControl(cartera, grupoDe),
       ocr: clasificacionOcr(pasaronOcr, noPasaronOcr),
+      diaAnterior: cifrasDiaAnterior(cartera, ayer, sinInfoAyer),
     },
     pendientesCanal: pendientes.map((e) => e.cnpoliza),
     nota: { sinInformacion, fueraDeAlcance },

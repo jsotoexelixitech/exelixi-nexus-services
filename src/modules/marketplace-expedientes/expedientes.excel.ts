@@ -145,8 +145,21 @@ function hoja<T>(
   return ws;
 }
 
+/** Bloque del día anterior (pedido de La Mundial, 22/23-nov-2026), arriba del acumulado. */
+export function filasDiaAnterior(c: CifrasControl): [string, number][] {
+  const d = c.diaAnterior;
+  if (!d) return [];
+  return [
+    [`Emitidas el ${d.fechaLocal} (día anterior)`, d.emitidas],
+    ['· Completas', d.completas],
+    ['· Incompletas', d.incompletas],
+    ['· Sin información', d.sinInformacion],
+  ];
+}
+
 export function filasResumen(c: CifrasControl): [string, string | number][] {
   return [
+    ...filasDiaAnterior(c),
     ['Completados', c.completados],
     ['Incompletos', c.incompletos],
     [
