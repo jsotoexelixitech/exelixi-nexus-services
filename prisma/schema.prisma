@@ -32,6 +32,7 @@ model Empresa {
   feeTransaccion Decimal?         @default(0) @map("empresa_fee_transaccion") @db.Decimal(10, 2)
   apiKey         String?          @unique @map("empresa_api_key") @db.VarChar(128)
   portalConfig   EmpresaPortalConfig?
+  marca          EmpresaMarca?
 
   @@map("empresa")
 }
@@ -188,6 +189,23 @@ model EmpresaPortalConfig {
   empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@map("empresa_portal_config")
+}
+
+/// Marca (logo y colores) que toman los portales de los módulos para esta empresa.
+model EmpresaMarca {
+  empresaId       Int      @id @map("em_empresa_id")
+  colorPrincipal  String?  @map("em_color_principal") @db.VarChar(7)
+  colorSecundario String?  @map("em_color_secundario") @db.VarChar(7)
+  colorTerciario  String?  @map("em_color_terciario") @db.VarChar(7)
+  logo            Bytes?   @map("em_logo")
+  logoMime        String?  @map("em_logo_mime") @db.VarChar(40)
+  logoTamano      Int?     @map("em_logo_tamano")
+  actualizadoPor  String?  @map("em_actualizado_por") @db.VarChar(160)
+  updatedAt       DateTime @default(now()) @updatedAt @map("em_updated_at")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@map("empresa_marca")
 }
 
 /// Canal marketplace / Sis2000 por operador del portal (Admin).
