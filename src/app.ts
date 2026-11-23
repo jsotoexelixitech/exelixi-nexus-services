@@ -100,6 +100,12 @@ app.post(
     },
   }),
 );
+// Logo de la marca de una empresa: llega en base64 (hasta 1 MB de imagen). Solo con API key.
+app.put(
+  /^\/api\/companies\/\d+\/marca\/logo\/?$/,
+  apiKeyGuard,
+  express.json({ limit: '2mb' }),
+);
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
