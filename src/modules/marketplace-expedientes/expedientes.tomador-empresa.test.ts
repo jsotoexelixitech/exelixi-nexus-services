@@ -2,8 +2,9 @@
  * v11 (23-nov): falsa alarma de prod en la póliza 7-7-7000003208 (Salud). Tomador SUPERMERCADO RIO
  * VIDA CA (J-50058503-9), titular RAMON PEREZ GARCIA (V-17671805). En el espacio del tomador se
  * subió un PDF con el RIF (página 1) y la cédula del titular (página 2); el OCR leyó la cédula
- * («JHON») y el monitor marcó «Errado» comparando con el asegurado. En personas, el documento del
- * tomador (`cedula`) se compara solo con el tomador: RIF y razón social si es empresa.
+ * («JHON») y el monitor marcó «Errado» comparando con el asegurado. En personas, con tomador J/G/C
+ * el documento del tomador (`cedula`) se compara solo con el tomador: RIF y razón social. Con
+ * tomador persona natural no cambia nada (v4).
  */
 import { describe, expect, it } from 'vitest';
 
@@ -261,7 +262,7 @@ describe('v11: tomador persona jurídica — el documento del tomador es su RIF'
   });
 });
 
-describe('v11: tomador persona natural — cédula y nombre del tomador', () => {
+describe('v11: tomador persona natural — sin cambios (v4)', () => {
   const ctxNatural = () =>
     contextoPoliza({
       producto: 'personas',
@@ -305,19 +306,22 @@ describe('v11: tomador persona natural — cédula y nombre del tomador', () => 
     expect(d.comparadoCon).toBe('tomador');
   });
 
-  it('cédula del titular en el espacio del tomador → Revisar (no se compara con el asegurado)', () => {
+  it('cédula del titular en el espacio del tomador → validado, como antes (v4)', () => {
     const d = diagnosticar(
       'cedula',
       lectura({ ...CEDULA_TITULAR, nombre: 'RAMON' }),
       ctxNatural(),
     );
-    expect(d.resultado).toBe('sin_certeza');
-    expect(d.resumen).toBe(
-      'El documento corresponde al titular, no al tomador.',
-    );
+    expect(d.resultado).toBe('coincide');
+    expect(d.comparadoCon).toBe('asegurado');
   });
 
-  it('cédula de alguien que no es de la póliza → no coincide con el tomador', () => {
+  it('número del titular con otro nombre → sigue siendo no coincide (v4)', () => {
+    const d = diagnosticar('cedula', lectura(CEDULA_TITULAR), ctxNatural());
+    expect(d.resultado).toBe('no_coincide');
+  });
+
+  it('cédula de alguien que no es de la póliza → no coincide', () => {
     const d = diagnosticar(
       'cedula',
       lectura({
@@ -329,7 +333,6 @@ describe('v11: tomador persona natural — cédula y nombre del tomador', () => 
       ctxNatural(),
     );
     expect(d.resultado).toBe('no_coincide');
-    expect(d.resumen).toContain('del tomador');
   });
 
   it('la póliza no trae al tomador: se compara con las personas que sí trae (como antes)', () => {

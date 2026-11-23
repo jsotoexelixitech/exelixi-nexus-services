@@ -65,14 +65,12 @@ export type MotivoAnalisis =
  *   que es solo sexo o estado civil («MASCULINO», «SOLTERA»; foto girada) no cuenta como leído.
  *   El certificado rechazado como «documento no reconocido» (p. ej. Certificado de Origen de un
  *   vehículo nuevo) se vuelve a leer UNA vez. Lo demás solo recompara lo ya leído.
- * v11 (23-nov, falsa alarma prod 7-7-7000003208, tomador empresa): en personas cada documento es de
- *   su persona: `cedula` = TOMADOR (con tomador J/G/C, su RIF: número sin guiones ni dígito
- *   verificador y razón social tolerante a «C.A.», «CA», puntos), `cedula_titular` = solo el
- *   titular (asegurado principal), `cedula_beneficiario` = beneficiarios. Con tomador empresa, una
- *   cédula de persona natural en el documento del tomador nunca es «Errado»: si es de alguien de la
- *   póliza (mismo número) queda «Revisar» (no se leyó el RIF) y su nombre distinto es informativo;
- *   si el archivo trae el RIF y además la cédula (PDF de varias páginas, `documentosAdicionales`
- *   del OCR), manda el RIF y la cédula se compara como dato complementario (informativo). Los
+ * v11 (23-nov, falsa alarma prod 7-7-7000003208, tomador empresa): en personas, con tomador J/G/C
+ *   el documento `cedula` se compara SOLO con el tomador: su RIF (sin guiones ni dígito verificador)
+ *   y razón social (tolerante a «C.A.», «CA», puntos); nunca con el asegurado. Si no se leyó el RIF
+ *   queda «Revisar» (nunca «Errado») y la cédula leída es solo complementaria; si el archivo trae
+ *   el RIF y además la cédula (PDF de varias páginas, `documentosAdicionales` del OCR), manda el
+ *   RIF y la cédula es informativa. Con tomador natural, sin cambios (v4). Los
  *   observados v<11 se recomparan con lo ya leído; el documento del tomador empresa sin RIF leído
  *   se vuelve a leer UNA vez (ver expedientes.service).
  */
@@ -659,7 +657,7 @@ function conoceAsegurados(todas: PersonaPoliza[]): boolean {
   );
 }
 
-/** Documento `cedula` de personas (v11: el del tomador; antes, de cualquier persona natural). */
+/** v4: en personas, la cédula de la póliza puede ser de cualquiera de sus personas naturales (v11: con tomador J/G/C, solo el tomador). */
 function cedulaDePersonas(tipo: string, ctx: ContextoPoliza): boolean {
   return tipo === 'cedula' && ctx.producto === 'personas';
 }
@@ -1238,7 +1236,7 @@ function compararPersona(
   // Personas a las que debe pertenecer el documento; si la póliza no las trae, la de respaldo.
   const todas = todasLasPersonas(ctx);
   const reglas = enPersonas
-    ? { esperados: ['tomador'] as RolPersona[], respaldo: [] }
+    ? { esperados: ['tomador', 'asegurado'] as RolPersona[], respaldo: [] }
     : (ROLES_DOCUMENTO[tipo] ?? ROLES_DOCUMENTO.cedula);
   const conRol = (roles: RolPersona[]) => {
     const out: PersonaPoliza[] = [];
@@ -1259,12 +1257,10 @@ function compararPersona(
       (p.roles.includes('asegurado') || p.roles.includes('tomador')),
   );
   if (enPersonas) {
-    // v11: documento del TOMADOR, solo contra el tomador (nunca contra el asegurado): con tomador
-    // J/G/C, su RIF y razón social; con tomador natural, su cédula y nombre. Si la póliza no trae al
-    // tomador, se compara con las personas naturales que sí trae (aviso «no trae la cédula del
-    // tomador», como en v4).
-    const tomadoresNat = naturales.filter((p) => p.roles.includes('tomador'));
-    objetivos = tomJ ? [tomJ] : tomadoresNat.length ? tomadoresNat : naturales;
+    // v11: con tomador J/G/C el documento del tomador se compara SOLO con el tomador (RIF y razón
+    // social), nunca con el asegurado. Con tomador natural, como en v4: vale la cédula de
+    // cualquier persona natural de la póliza (titular, tomador V/E/P o asegurado).
+    objetivos = tomJ ? [tomJ] : naturales;
   } else {
     objetivos = conRol(reglas.esperados);
     if (!objetivos.length) {
@@ -1438,7 +1434,7 @@ function compararPersona(
     // Es de otra persona de la póliza: no es un documento falso, pero tampoco el pedido.
     // v11: en personas el documento `cedula` es solo del tomador.
     aviso = enPersonas
-      ? `El documento corresponde ${aQuien(exacto)}, no al tomador.`
+      ? `El documento corresponde ${aQuien(exacto)}, no al titular, al tomador ni a un asegurado.`
       : `El documento corresponde al ${exacto.rol}, no al ${esperadoTexto}.`;
   } else if (
     !exacto &&
