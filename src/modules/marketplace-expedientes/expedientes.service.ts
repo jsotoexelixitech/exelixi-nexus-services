@@ -90,6 +90,8 @@ import {
   diagnosticoVigente,
   esperaReintentoMs,
   fueOtroTipoDeDocumento,
+  leyoRifDelTomador,
+  tomadorJuridico,
   estadoPorDiagnostico,
   huellaPoliza,
   MotivoAnalisis,
@@ -2436,11 +2438,24 @@ export class ExpedientesService {
         fueOtroTipoDeDocumento(r.diagnostico) &&
         Number(previoRif.comparador ?? 1) < 10 &&
         /no reconocido/i.test(String(previoRif.resumen ?? ''));
+      // v11: personas con tomador empresa: si lo leído del documento del tomador no trae su RIF (p. ej.
+      // PDF con el RIF en la página 1 y la cédula del titular en la 2), se vuelve a leer UNA vez el
+      // mismo archivo (después queda con el comparador vigente y no se repite).
+      const releerTomadorJ =
+        motivo === 'cambio_comparador' &&
+        exp.producto === 'personas' &&
+        r.tipo === 'cedula' &&
+        !!tomadorJuridico(ctx) &&
+        !!r.ocrDatos &&
+        typeof r.ocrDatos === 'object' &&
+        !leyoRifDelTomador(rec(r.ocrDatos)) &&
+        Number(previoRif.comparador ?? 1) < 11;
       if (
         (motivo === 'cambio_poliza' || motivo === 'cambio_comparador') &&
         r.analisisRef === r.ref &&
         !releerConRif &&
-        !releerCertificado
+        !releerCertificado &&
+        !releerTomadorJ
       ) {
         // Mismo archivo: se compara de nuevo lo ya leído, sin otra llamada al OCR.
         if (!r.ocrDatos || typeof r.ocrDatos !== 'object') {
