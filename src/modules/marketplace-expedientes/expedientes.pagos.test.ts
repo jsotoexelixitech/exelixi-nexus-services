@@ -74,6 +74,7 @@ beforeEach(() => {
   process.env.EXPEDIENTES_ENABLED = 'true';
   process.env.EXPEDIENTES_JOBS_ENABLED = 'true';
   process.env.EXPEDIENTES_PAGOS_ENABLED = 'true';
+  process.env.EXPEDIENTES_PAGOS_AUTO = 'true';
   process.env.EXPEDIENTES_PAGOS_NEST_URL = 'http://nest.local/';
   process.env.EXPEDIENTES_PAGOS_NEST_KEY = 'k-pagos';
 });
@@ -81,6 +82,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.EXPEDIENTES_PAGOS_ENABLED;
+  delete process.env.EXPEDIENTES_PAGOS_AUTO;
   delete process.env.EXPEDIENTES_PAGOS_NEST_URL;
   delete process.env.EXPEDIENTES_PAGOS_NEST_KEY;
   delete process.env.EXPEDIENTES_PAGOS_CADA_MIN;
@@ -288,6 +290,11 @@ describe('programación', () => {
     expect(claveTandaPagos(t0, 60)).not.toBe(
       claveTandaPagos(new Date(t0.getTime() + 61 * 60_000), 60),
     );
+  });
+
+  it('habilitada pero sin EXPEDIENTES_PAGOS_AUTO no escribe sola', async () => {
+    delete process.env.EXPEDIENTES_PAGOS_AUTO;
+    expect(await tickPagos()).toBeNull();
   });
 
   it('sin EXPEDIENTES_JOBS_ENABLED no corre', async () => {

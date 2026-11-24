@@ -14,6 +14,8 @@
  *   `estado_pago_sis2000` en el historial del expediente (origen Sis2000, fecha de cobro).
  * - Fallo de nest-api: no cambia nada del lote y se reintenta en la próxima pasada.
  * - Vista previa: consulta y cuenta sin escribir nada en la base.
+ * - EXPEDIENTES_PAGOS_ENABLED solo habilita las rutas manuales (vista previa y aplicar); la tarea
+ *   automática además exige EXPEDIENTES_PAGOS_AUTO=true, para ver el conteo antes de escribir.
  */
 import type { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma';
@@ -258,6 +260,7 @@ export async function vistaPagos() {
   const cfg = pagosConfig();
   return {
     habilitada: !!cfg,
+    automatica: !!cfg && expedientesJobsEnabled() && flag('EXPEDIENTES_PAGOS_AUTO'),
     motivoApagada: pagosMotivoApagado(),
     cadaMin: cfg?.cadaMin ?? null,
     enCurso: corriendo,
@@ -412,7 +415,8 @@ export function claveTandaPagos(ahora: Date, cadaMin: number): string {
 export async function tickPagos(
   ahora: Date = new Date(),
 ): Promise<ResumenPagos | null> {
-  if (!expedientesJobsEnabled() || corriendo) return null;
+  if (!expedientesJobsEnabled() || !flag('EXPEDIENTES_PAGOS_AUTO') || corriendo)
+    return null;
   const cfg = pagosConfig();
   if (!cfg) return null;
   const clave = claveTandaPagos(ahora, cfg.cadaMin);
