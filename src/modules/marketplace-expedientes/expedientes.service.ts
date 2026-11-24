@@ -52,6 +52,11 @@ import {
   normalizarProducto,
   proximoEnvio,
   requisitoLabel,
+  requisitoLabelDe,
+  exigenciaRequisito,
+  estadoSinFila,
+  REQUISITOS_CONDICIONALES,
+  MOTIVO_NO_APLICA_PREVIO,
   requisitosAplicables,
   separarIdentificacion,
   TipoActor,
@@ -92,6 +97,10 @@ import {
   fueOtroTipoDeDocumento,
   leyoRifDelTomador,
   tomadorJuridico,
+  archivoEsDeLaPoliza,
+  lecturasDelArchivo,
+  maskDocumento as maskDocumentoIa,
+  numerosLeidos,
   estadoPorDiagnostico,
   huellaPoliza,
   MotivoAnalisis,
@@ -142,6 +151,8 @@ export interface ResumenRevisionIa {
   observados: number;
   erroresTecnicos: number;
   motivos: Record<string, number>;
+  /** v12: documentos marcados como sobrescritos en esta pasada. */
+  sobrescritos?: number;
 }
 
 /** El OCR no encontró el archivo en la ruta guardada (404 ARCHIVO_NO_ENCONTRADO). */
@@ -184,6 +195,41 @@ function versionRifEn(producto: string): number {
 
 type Exp = MktExpediente;
 type Req = MktExpedienteRequisito;
+
+/** v12: documentos de identidad de una persona (los que se pueden pisar entre emisiones). */
+const TIPOS_DOC_PERSONA = [
+  'cedula',
+  'cedula_titular',
+  'cedula_beneficiario',
+  'rif',
+  'pasaporte',
+];
+
+/** v12: motivo del documento sobrescrito por el de otra persona. */
+export const MOTIVO_SOBRESCRITO = 'Documento sobrescrito: pedirlo de nuevo.';
+
+/** v12: ruta comparable de un archivo (sin host, sin /ocr, sin /files/ y decodificada). */
+export function claveArchivo(ref: string): string {
+  let s = ref.trim();
+  try {
+    if (/^https?:\/\//i.test(s)) s = new URL(s).pathname;
+  } catch {
+    /* se usa tal cual */
+  }
+  const i = s.indexOf('/files/');
+  if (i >= 0) s = s.slice(i + '/files/'.length);
+  try {
+    s = decodeURIComponent(s);
+  } catch {
+    /* se usa tal cual */
+  }
+  return s.replace(/^\/+/, '').toLowerCase();
+}
+
+/** v12: el archivo vive en {cédula o RIF}/pendiente/ (compartida entre emisiones del mismo tomador). */
+function enPendiente(ref: string): boolean {
+  return /(^|\/)pendiente\//.test(claveArchivo(ref));
+}
 
 export interface EmisionFuente {
   id: number;
@@ -331,7 +377,7 @@ export function documentosCorreo(
     const porTipo = new Map((reqs.get(e.id) ?? []).map((r) => [r.tipo, r]));
     for (const tipo of requisitosAplicables(e.producto, config)) {
       const r = porTipo.get(tipo);
-      let estado = estadoDocCorreo(r?.estado ?? 'faltante');
+      let estado = estadoDocCorreo(r?.estado ?? estadoSinFila(tipo));
       if (!estado) continue;
       if (estado === 'en_revision' && recienRecibido === tipo)
         estado = 'recibido';
@@ -343,7 +389,7 @@ export function documentosCorreo(
             : (r?.motivo ?? '')
           : '';
       out.push({
-        nombre: requisitoLabel(tipo),
+        nombre: requisitoLabelDe(tipo, e),
         estado,
         ...(motivo ? { motivo } : {}),
         ...(varias ? { poliza: e.cnpoliza } : {}),
@@ -756,11 +802,13 @@ export class ExpedientesService {
       const r = await prisma.mktExpedienteRequisito.findUnique({
         where: { expedienteId_tipo: { expedienteId: exp.id, tipo } },
       });
-      if (!r || r.estado !== 'faltante') continue;
+      // v12: también lo no exigido (no_aplica): si la mesa técnica tiene el archivo, se revisa.
+      if (!r || (r.estado !== 'faltante' && r.estado !== 'no_aplica')) continue;
       await prisma.mktExpedienteRequisito.update({
         where: { id: r.id },
         data: {
           estado: 'recibido',
+          motivo: null,
           origen: 'mesa_tecnica',
           ref: url ?? null,
           recibidoEn: new Date(),
@@ -843,6 +891,8 @@ export class ExpedientesService {
           plan: str(extra.planNombre) ?? str(jd.planNombre) ?? null,
           prima: extra.monto ?? (jd.monto != null ? Number(jd.monto) : null),
         } as Record<string, unknown>)),
+      // v12: producto de La Mundial (Viajero 25/26: la cédula del titular es opcional).
+      ...(str(p.cproducto) ? { cproducto: str(p.cproducto) } : {}),
       ...(ocrLeido ? { ocrLeido } : {}),
       // v1.4: tomador y asegurado/titular (sin migración). Sin el campo, se resuelve al enviar.
       ...(Array.isArray(p.correos)
@@ -971,20 +1021,60 @@ export class ExpedientesService {
     return out as Prisma.MktExpedienteUpdateInput;
   }
 
+  /**
+   * Crea las filas de los requisitos aplicables que falten. v12 (personas): la cédula del titular
+   * depende de la póliza (`exigenciaRequisito`): si no se exige queda no_aplica con el motivo, y en un
+   * expediente que ya tenía requisitos (registrado antes de separar los documentos por persona) queda
+   * no_aplica sin pedirse ni enviar correos. Si la exigencia cambia (p. ej. llegan los datos del
+   * titular), el requisito sin archivo ni decisión pasa entre faltante y no_aplica; los anteriores a
+   * v12 no se tocan.
+   */
   private async asegurarRequisitos(exp: Exp, config: ExpedientesConfig) {
     const aplicables = requisitosAplicables(exp.producto, config);
     const existentes = await prisma.mktExpedienteRequisito.findMany({
       where: { expedienteId: exp.id },
     });
-    const tipos = new Set(existentes.map((r) => r.tipo));
+    const previo = existentes.length > 0;
+    const sinArchivo = exp.infoDocumental ? 'faltante' : 'sin_informacion';
     for (const tipo of aplicables) {
-      if (tipos.has(tipo)) continue;
+      const condicional = REQUISITOS_CONDICIONALES.has(tipo);
+      const exigencia = exigenciaRequisito(tipo, exp);
+      const fila = existentes.find((r) => r.tipo === tipo);
+      if (fila) {
+        if (
+          !condicional ||
+          fila.ref ||
+          fila.decision ||
+          fila.motivo === MOTIVO_NO_APLICA_PREVIO
+        )
+          continue;
+        const estado = exigencia.exigido ? sinArchivo : 'no_aplica';
+        if (
+          fila.estado === estado ||
+          !['faltante', 'sin_informacion', 'no_aplica'].includes(fila.estado)
+        )
+          continue;
+        await prisma.mktExpedienteRequisito.update({
+          where: { id: fila.id },
+          data: {
+            estado,
+            motivo: exigencia.exigido ? null : exigencia.motivo,
+          },
+        });
+        continue;
+      }
+      const noAplica = condicional && (previo || !exigencia.exigido);
       try {
         await prisma.mktExpedienteRequisito.create({
           data: {
             expedienteId: exp.id,
             tipo,
-            estado: exp.infoDocumental ? 'faltante' : 'sin_informacion',
+            estado: noAplica ? 'no_aplica' : sinArchivo,
+            ...(noAplica
+              ? {
+                  motivo: previo ? MOTIVO_NO_APLICA_PREVIO : exigencia.motivo,
+                }
+              : {}),
           },
         });
       } catch (err) {
@@ -993,7 +1083,10 @@ export class ExpedientesService {
     }
   }
 
-  /** Documentos ya recibidos en la emisión: faltante → recibido (nunca validado). */
+  /**
+   * Documentos ya recibidos en la emisión: faltante → recibido (nunca validado). v12: también lo
+   * no exigido (no_aplica): si la emisión trae el archivo, se revisa.
+   */
   private async aplicarDocumentosEmision(
     exp: Exp,
     documentos: NonNullable<ExpedientePayload['documentos']>,
@@ -1006,12 +1099,16 @@ export class ExpedientesService {
       const r = await prisma.mktExpedienteRequisito.findUnique({
         where: { expedienteId_tipo: { expedienteId: exp.id, tipo } },
       });
-      if (!r || (r.estado !== 'faltante' && r.estado !== 'sin_informacion'))
+      if (
+        !r ||
+        !['faltante', 'sin_informacion', 'no_aplica'].includes(r.estado)
+      )
         continue;
       await prisma.mktExpedienteRequisito.update({
         where: { id: r.id },
         data: {
           estado: 'recibido',
+          motivo: null,
           origen: origenDoc,
           ref: d.ref ?? d.url ?? null,
           recibidoEn: new Date(),
@@ -1589,11 +1686,11 @@ export class ExpedientesService {
       estadoDocumental: e.estadoDocumental,
       requisitos: aplicables.map((tipo) => {
         const r = porTipo.get(tipo);
-        const estado =
-          r?.estado ?? (e.infoDocumental ? 'faltante' : 'sin_informacion');
+        const estado = r?.estado ?? estadoSinFila(tipo, e.infoDocumental);
         return {
           tipo,
-          label: requisitoLabel(tipo),
+          // v12: en personas, «RIF del tomador» / «Cédula del tomador» y «Cédula del titular».
+          label: requisitoLabelDe(tipo, e),
           estado,
           motivo: r?.motivo ?? null,
           ref: r?.ref ?? null,
@@ -1638,10 +1735,22 @@ export class ExpedientesService {
     };
   }
 
-  /** Expedientes con algún documento errado (observado: no coincide, ilegible o sin certeza). */
+  /**
+   * Expedientes con algún documento errado (observado: no coincide, ilegible o sin certeza). v12:
+   * también los de un documento sobrescrito (cuentan en «Con errores»).
+   */
   private async idsConErrores(): Promise<number[]> {
     const rows = await prisma.mktExpedienteRequisito.findMany({
-      where: { estado: 'observado' },
+      where: { estado: { in: ['observado', 'sobrescrito'] } },
+      select: { expedienteId: true },
+    });
+    return Array.from(new Set(rows.map((r) => r.expedienteId)));
+  }
+
+  /** v12: expedientes con un documento sobrescrito por el de otra persona. */
+  private async idsSobrescritos(): Promise<number[]> {
+    const rows = await prisma.mktExpedienteRequisito.findMany({
+      where: { estado: 'sobrescrito' },
       select: { expedienteId: true },
     });
     return Array.from(new Set(rows.map((r) => r.expedienteId)));
@@ -1718,6 +1827,10 @@ export class ExpedientesService {
     if (q.datosModificados) {
       const dm = await this.idsDatosModificados();
       ids = ids ? ids.filter((i) => dm.includes(i)) : dm;
+    }
+    if (q.sobrescritos) {
+      const so = await this.idsSobrescritos();
+      ids = ids ? ids.filter((i) => so.includes(i)) : so;
     }
     if (q.canal || q.productor) {
       const delActor = await this.idsDeActor(where, q.canal, q.productor);
@@ -1851,14 +1964,19 @@ export class ExpedientesService {
       validadosIa: exps.filter(
         (e) =>
           e.estadoDocumental === 'completo' &&
-          requisitosAplicables(e.producto, config).every(
-            (t) =>
-              (reqs.get(e.id) ?? []).find((r) => r.tipo === t)?.validadoPor ===
-              'ia',
-          ),
+          requisitosAplicables(e.producto, config).every((t) => {
+            const r = (reqs.get(e.id) ?? []).find((x) => x.tipo === t);
+            // v12: lo que no se exige en la póliza (no_aplica) no cuenta.
+            return (
+              (r?.estado ?? estadoSinFila(t)) === 'no_aplica' ||
+              r?.validadoPor === 'ia'
+            );
+          }),
       ).length,
       /** Con algún documento errado (no coincide, ilegible o sin certeza): observado. */
       conErrores: exps.filter((e) => conEstado(e, 'observado')).length,
+      /** v12: con un documento sobrescrito por el de otra persona (hay que pedirlo de nuevo). */
+      sobrescritos: exps.filter((e) => conEstado(e, 'sobrescrito')).length,
       /** v1.3: con datos cambiados en el formulario respecto a lo que leyó el OCR al emitir. */
       datosModificados: exps.filter((e) =>
         (reqs.get(e.id) ?? []).some(
@@ -2043,7 +2161,8 @@ export class ExpedientesService {
       ia: ia ? { resultado: ia.resultado, resumen: ia.resumen } : null,
     };
     if (accion === 'validar') {
-      if (r.estado !== 'recibido' && r.estado !== 'observado') {
+      // v12: también el sobrescrito (el analista revisó el archivo y es de esta póliza).
+      if (!['recibido', 'observado', 'sobrescrito'].includes(r.estado)) {
         throw new AppError('Solo se valida un documento recibido.', 409);
       }
       await prisma.mktExpedienteRequisito.update({
@@ -2062,7 +2181,7 @@ export class ExpedientesService {
         motivo: motivoTxt,
       });
     } else {
-      if (r.estado === 'faltante' || r.estado === 'sin_informacion') {
+      if (['faltante', 'sin_informacion', 'no_aplica'].includes(r.estado)) {
         throw new AppError('No hay documento recibido para observar.', 409);
       }
       await prisma.mktExpedienteRequisito.update({
@@ -2340,6 +2459,17 @@ export class ExpedientesService {
     if (!ocrInternalConfig())
       return { ...resumen, omitido: 'ocr_no_configurado' };
     const ahora = opts.ahora ?? new Date();
+    // v12: antes de analizar, los documentos sobrescritos (no se vuelven a leer ni se piden por correo).
+    if (opts.modo !== 'recibidos' && !opts.expedienteIds) {
+      try {
+        const s = await this.detectarSobrescritos();
+        if (s.marcados) resumen.sobrescritos = s.marcados;
+      } catch (err) {
+        logger.warn(
+          `[expedientes] detección de sobrescritos: ${err instanceof Error ? err.message : 'error'}`,
+        );
+      }
+    }
 
     const estados: Prisma.MktExpedienteRequisitoWhereInput =
       opts.modo === 'recibidos'
@@ -2441,6 +2571,9 @@ export class ExpedientesService {
       // v11: personas con tomador empresa: si lo leído del documento del tomador no trae su RIF (p. ej.
       // PDF con el RIF en la página 1 y la cédula del titular en la 2), se vuelve a leer UNA vez el
       // mismo archivo (después queda con el comparador vigente y no se repite).
+      // v12: igual, una sola vez más con el comparador 12 si lo leído tampoco trae documentos
+      // adicionales (lectura anterior al OCR de varios documentos por archivo), salvo que el archivo
+      // lo compartan otros requisitos (archivo pisado de pendiente/: no se gasta IA en él).
       const releerTomadorJ =
         motivo === 'cambio_comparador' &&
         exp.producto === 'personas' &&
@@ -2449,7 +2582,9 @@ export class ExpedientesService {
         !!r.ocrDatos &&
         typeof r.ocrDatos === 'object' &&
         !leyoRifDelTomador(rec(r.ocrDatos)) &&
-        Number(previoRif.comparador ?? 1) < 11;
+        lecturasDelArchivo(rec(r.ocrDatos)).length < 2 &&
+        Number(previoRif.comparador ?? 1) < 12 &&
+        !(await this.archivoCompartido(r));
       if (
         (motivo === 'cambio_poliza' || motivo === 'cambio_comparador') &&
         r.analisisRef === r.ref &&
@@ -2516,16 +2651,280 @@ export class ExpedientesService {
           });
         }
       }
-      return await this.aplicarDiagnostico(exp, r, diag, {
+      const res = await this.aplicarDiagnostico(exp, r, diag, {
         ref: refActual,
         hash,
         lectura,
         ctx,
         config,
       });
+      // v12: el mismo archivo puede cubrir el documento de la otra persona (p. ej. RIF + cédula del
+      // titular en un PDF, o la cédula del titular cargada como documento del tomador).
+      if (
+        res &&
+        exp.producto === 'personas' &&
+        diag.resultado !== 'error_tecnico'
+      ) {
+        const usada = lectura !== undefined ? lectura : null;
+        await this.cubrirConMismoArchivo(
+          exp,
+          r,
+          {
+            ref: refActual,
+            hash,
+            extraido: usada ? usada.extraido : r.ocrDatos,
+            confianza: usada ? usada.confianza : r.ocrConfianza,
+            proveedor: diag.proveedor,
+          },
+          ctx,
+          config,
+        );
+      }
+      return res;
     } finally {
       this.enAnalisis.delete(r.id);
     }
+  }
+
+  /**
+   * v12: ¿otra póliza usa el mismo archivo (la misma ruta de pendiente/ o la misma huella)? Solo
+   * lectura.
+   */
+  private async archivoCompartido(r: Req): Promise<boolean> {
+    if (!r.ref) return false;
+    const mismo = [
+      ...(enPendiente(r.ref) ? [{ ref: r.ref }] : []),
+      ...(r.archivoHash ? [{ archivoHash: r.archivoHash }] : []),
+    ];
+    if (!mismo.length) return false;
+    const otros = await prisma.mktExpedienteRequisito.count({
+      where: {
+        id: { not: r.id },
+        expedienteId: { not: r.expedienteId },
+        OR: mismo,
+      },
+    });
+    return otros > 0;
+  }
+
+  /**
+   * v12 (personas): si el archivo analizado trae el documento de otra persona de la póliza cuyo
+   * requisito no tiene archivo (faltante, o no_aplica por ser un expediente anterior a v12), ese
+   * requisito queda validado con el mismo archivo, sin otra llamada al OCR. Solo si la comparación
+   * con su persona coincide (confianza alta); si no, no se toca. Nunca toca decisiones manuales ni
+   * lo que no se exige por la póliza (titular = tomador, Viajero).
+   */
+  private async cubrirConMismoArchivo(
+    exp: Exp,
+    origen: Req,
+    archivo: {
+      ref: string;
+      hash: string | null;
+      extraido: unknown;
+      confianza: unknown;
+      proveedor: string | null;
+    },
+    ctx: ContextoPoliza,
+    config: ExpedientesConfig,
+  ): Promise<void> {
+    const lecturas = lecturasDelArchivo(rec(archivo.extraido)).filter(
+      (l) => numerosLeidos(l).length > 0,
+    );
+    if (!lecturas.length) return;
+    const aplicables = requisitosAplicables(exp.producto, config).filter(
+      (t) => t !== origen.tipo && TIPOS_DOC_PERSONA.includes(t),
+    );
+    if (!aplicables.length) return;
+    await this.asegurarRequisitos(exp, config);
+    const filas = await prisma.mktExpedienteRequisito.findMany({
+      where: { expedienteId: exp.id, tipo: { in: aplicables } },
+    });
+    let cubiertos = 0;
+    for (const fila of filas) {
+      const cubrible =
+        !fila.ref &&
+        fila.decision !== 'manual' &&
+        (fila.estado === 'faltante' ||
+          fila.estado === 'sin_informacion' ||
+          (fila.estado === 'no_aplica' &&
+            fila.motivo === MOTIVO_NO_APLICA_PREVIO));
+      if (!cubrible) continue;
+      for (const l of lecturas) {
+        const d = diagnosticar(
+          fila.tipo,
+          {
+            extraido: l,
+            confianza: archivo.confianza as number | null,
+            proveedor: archivo.proveedor,
+          },
+          ctx,
+        );
+        if (d.resultado !== 'coincide') continue;
+        d.resumen = `${d.resumen} Tomado del mismo archivo que ${requisitoLabelDe(origen.tipo, exp).toLowerCase()}.`;
+        const ahora = new Date();
+        const upd = await prisma.mktExpedienteRequisito.updateMany({
+          where: { id: fila.id, ref: null, estado: fila.estado },
+          data: {
+            estado: 'validado',
+            motivo: null,
+            origen: origen.origen ?? null,
+            ref: archivo.ref,
+            analisisRef: archivo.ref,
+            archivoHash: archivo.hash,
+            ocrDatos: l as Prisma.InputJsonValue,
+            ocrConfianza: Number.isFinite(Number(archivo.confianza))
+              ? Number(archivo.confianza)
+              : null,
+            recibidoEn: ahora,
+            validadoEn: ahora,
+            validadoPor: 'ia',
+            decision: 'ia',
+            huellaPoliza: huellaPoliza(ctx),
+            analisisIntentos: 0,
+            proximoAnalisis: null,
+            diagnostico: d as unknown as Prisma.InputJsonValue,
+          },
+        });
+        if (!upd.count) break;
+        cubiertos++;
+        await this.evento(exp.id, 'requisito_validado', 'ia', {
+          tipo: fila.tipo,
+          anterior: fila.estado,
+          nuevo: 'validado',
+          mismoArchivoQue: origen.tipo,
+          resultado: d.resultado,
+          diagnostico: d,
+        });
+        break;
+      }
+    }
+    if (cubiertos) await this.recalcularEstado(exp.id, config);
+  }
+
+  /**
+   * v12: documentos sobrescritos. Antes del arreglo del OCR del 23-nov (45577da),
+   * `{empresa}/{cédula o RIF}/pendiente/` usaba nombres fijos (cedula.pdf): la emisión de un empleado
+   * pisaba el archivo de otro del mismo tomador y varios expedientes quedaron apuntando al mismo
+   * archivo. Un requisito cuyo archivo (misma ruta de pendiente/ o misma huella) comparten
+   * expedientes de titulares distintos, y cuya lectura no es de nadie de su póliza, queda
+   * «sobrescrito»: hay que pedirlo de nuevo. No llama al OCR (usa lo ya leído de ese archivo en
+   * cualquiera de los expedientes), no envía correos ni toca decisiones manuales. Las pólizas del
+   * dueño real del archivo no se marcan.
+   */
+  async detectarSobrescritos(): Promise<{ grupos: number; marcados: number }> {
+    const filas = await prisma.mktExpedienteRequisito.findMany({
+      where: {
+        tipo: { in: TIPOS_DOC_PERSONA },
+        ref: { not: null },
+        estado: { in: ['recibido', 'observado', 'validado'] },
+      },
+      select: {
+        id: true,
+        expedienteId: true,
+        ref: true,
+        archivoHash: true,
+      },
+    });
+    // Grupos por ruta de pendiente/ y por huella del archivo.
+    const grupos = new Map<string, typeof filas>();
+    const agregar = (k: string, f: (typeof filas)[number]) => {
+      const g = grupos.get(k) ?? [];
+      g.push(f);
+      grupos.set(k, g);
+    };
+    for (const f of filas) {
+      if (f.ref && enPendiente(f.ref)) agregar(`ref:${claveArchivo(f.ref)}`, f);
+      if (f.archivoHash) agregar(`hash:${f.archivoHash}`, f);
+    }
+    const compartidos = [...grupos.values()].filter(
+      (g) => new Set(g.map((f) => f.expedienteId)).size > 1,
+    );
+    if (!compartidos.length) return { grupos: 0, marcados: 0 };
+    const expIds = [
+      ...new Set(compartidos.flatMap((g) => g.map((f) => f.expedienteId))),
+    ];
+    const exps = new Map(
+      (
+        await prisma.mktExpediente.findMany({ where: { id: { in: expIds } } })
+      ).map((e) => [e.id, e]),
+    );
+    const titular = (id: number) => {
+      const e = exps.get(id);
+      return e?.aseguradoKey ?? e?.aseguradoDocumento ?? `exp:${id}`;
+    };
+    let gruposConTitulares = 0;
+    let marcados = 0;
+    const revisados = new Set<number>();
+    const contextos = new Map<number, ContextoPoliza>();
+    for (const g of compartidos) {
+      if (new Set(g.map((f) => titular(f.expedienteId))).size < 2) continue;
+      gruposConTitulares++;
+      const reqs = await prisma.mktExpedienteRequisito.findMany({
+        where: { id: { in: g.map((f) => f.id) } },
+      });
+      // Lo ya leído de ese archivo en cualquiera de los expedientes (es el mismo archivo).
+      const leido = reqs.find(
+        (r) =>
+          r.ocrDatos &&
+          typeof r.ocrDatos === 'object' &&
+          numerosLeidos(rec(r.ocrDatos)).length > 0,
+      )?.ocrDatos;
+      for (const r of reqs) {
+        if (revisados.has(r.id)) continue;
+        if (r.decision === 'manual') continue;
+        if (r.estado !== 'recibido' && r.estado !== 'observado') continue;
+        const propio =
+          r.ocrDatos &&
+          typeof r.ocrDatos === 'object' &&
+          r.analisisRef === r.ref &&
+          numerosLeidos(rec(r.ocrDatos)).length > 0
+            ? r.ocrDatos
+            : null;
+        const lectura = rec(propio ?? leido);
+        const exp = exps.get(r.expedienteId);
+        if (!exp || !Object.keys(lectura).length) continue;
+        let ctx = contextos.get(exp.id);
+        if (!ctx) {
+          ctx = await this.contextoDe(exp);
+          contextos.set(exp.id, ctx);
+        }
+        revisados.add(r.id);
+        if (archivoEsDeLaPoliza(lectura, ctx) !== false) continue;
+        const nums = numerosLeidos(lectura);
+        const motivo = `${MOTIVO_SOBRESCRITO} El archivo guardado es el documento de otra persona (${maskDocumentoIa(typeof lectura.tipoDoc === 'string' ? lectura.tipoDoc : null, nums[0]) ?? 'sin número'}), que no es de esta póliza: otra emisión del mismo tomador lo reemplazó.`;
+        const upd = await prisma.mktExpedienteRequisito.updateMany({
+          where: {
+            id: r.id,
+            estado: r.estado,
+            ref: r.ref,
+            decision: r.decision,
+          },
+          data: {
+            estado: 'sobrescrito',
+            motivo,
+            validadoEn: null,
+            validadoPor: 'ia',
+            decision: 'ia',
+            proximoAnalisis: null,
+          },
+        });
+        if (!upd.count) continue;
+        marcados++;
+        await this.evento(exp.id, 'documento_sobrescrito', 'ia', {
+          tipo: r.tipo,
+          anterior: r.estado,
+          nuevo: 'sobrescrito',
+          motivo,
+          compartidoCon: g.filter((f) => f.id !== r.id).length,
+        });
+        await this.recalcularEstado(exp.id);
+      }
+    }
+    if (marcados)
+      logger.info(
+        `[expedientes] documentos sobrescritos: ${marcados} marcados en ${gruposConTitulares} archivos compartidos`,
+      );
+    return { grupos: gruposConTitulares, marcados };
   }
 
   /**
@@ -2831,13 +3230,16 @@ export class ExpedientesService {
         requisitos: requisitosAplicables(e.producto, config)
           .map((tipo) => {
             const r = porTipo.get(tipo);
-            const estado = r?.estado ?? 'faltante';
+            // v12: el documento sobrescrito se le muestra al asegurado como por enviar (puede
+            // cargarlo de nuevo); lo que no se exige (no_aplica) no se muestra.
+            const guardado = r?.estado ?? estadoSinFila(tipo);
+            const estado = guardado === 'sobrescrito' ? 'faltante' : guardado;
             // Solo el resultado de la IA: nunca el resumen ni datos de la póliza.
             const diag = r ? diagnosticoVigente(r) : null;
             const deIa = !!diag && r?.decision === 'ia';
             return {
               tipo,
-              label: requisitoLabel(tipo),
+              label: requisitoLabelDe(tipo, e),
               estado,
               motivo:
                 estado === 'observado'
@@ -2845,10 +3247,15 @@ export class ExpedientesService {
                     ? motivoParaAsegurado(diag)
                     : (r?.motivo ?? null)
                   : null,
-              diagnostico: diag ? { resultado: diag.resultado } : null,
+              diagnostico:
+                diag && guardado !== 'sobrescrito'
+                  ? { resultado: diag.resultado }
+                  : null,
             };
           })
-          .filter((r) => r.estado !== 'sin_informacion'),
+          .filter(
+            (r) => r.estado !== 'sin_informacion' && r.estado !== 'no_aplica',
+          ),
       };
     });
     const agregados = new Map<
@@ -2884,12 +3291,15 @@ export class ExpedientesService {
     const config = await this.getConfig();
     const { enlace, expedientes } = await this.resolverEnlace(token);
     const reqs = await this.requisitosDe(expedientes.map((e) => e.id));
-    const pendienteEn = (e: Exp) =>
-      requisitosAplicables(e.producto, config).includes(tipo) &&
-      esPendiente(
+    // v12: el sobrescrito también se puede cargar de nuevo (sin fila, el condicional no aplica).
+    const pendienteEn = (e: Exp) => {
+      if (!requisitosAplicables(e.producto, config).includes(tipo))
+        return false;
+      const estado =
         (reqs.get(e.id) ?? []).find((r) => r.tipo === tipo)?.estado ??
-          'faltante',
-      );
+        estadoSinFila(tipo);
+      return esPendiente(estado) || estado === 'sobrescrito';
+    };
 
     let destino: Exp[];
     if (polizaRef) {
@@ -2919,7 +3329,7 @@ export class ExpedientesService {
       requisitosAplicables(e.producto, config).some((t) =>
         esPendiente(
           (reqsDespues.get(e.id) ?? []).find((r) => r.tipo === t)?.estado ??
-            'faltante',
+            estadoSinFila(t),
         ),
       ),
     );

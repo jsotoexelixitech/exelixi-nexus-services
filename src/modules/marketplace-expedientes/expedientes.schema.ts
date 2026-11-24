@@ -297,6 +297,16 @@ export const listQuerySchema = z.object({
           : undefined,
     z.boolean().optional(),
   ),
+  /** v12: solo pólizas con un documento sobrescrito por el de otra persona (pedirlo de nuevo). */
+  sobrescritos: z.preprocess(
+    (v) =>
+      v === true || v === 'true' || v === '1'
+        ? true
+        : v === false || v === 'false' || v === '0'
+          ? false
+          : undefined,
+    z.boolean().optional(),
+  ),
   page: z.coerce.number().int().min(1).max(10_000).optional(),
   pageSize: z.coerce.number().int().min(1).max(200).optional(),
 });

@@ -73,8 +73,17 @@ export type MotivoAnalisis =
  *   RIF y la cédula es informativa. Con tomador natural, sin cambios (v4). Los
  *   observados v<11 se recomparan con lo ya leído; el documento del tomador empresa sin RIF leído
  *   se vuelve a leer UNA vez (ver expedientes.service).
+ * v12 (24-nov, Rio Vida J-50058503-9): en personas cada documento es de SU persona: `cedula` =
+ *   documento del tomador (RIF si J/G/C; cédula o pasaporte si natural) solo contra el tomador;
+ *   `cedula_titular` (requisito nuevo) solo contra el titular. Un archivo de otra persona de la póliza
+ *   queda «Revisar» con un texto simple («Falta el RIF de la empresa tomadora. El archivo cargado es
+ *   la cédula del titular (V-****1805).»). Si el archivo trae el documento de la otra persona
+ *   (también en `documentosAdicionales`), cubre su requisito sin otra llamada al OCR. Los observados
+ *   v<12 se recomparan con lo ya leído; el documento del tomador empresa sin RIF ni documentos
+ *   adicionales se vuelve a leer UNA vez, salvo que el archivo esté compartido (ver
+ *   expedientes.service: documento sobrescrito).
  */
-export const VERSION_COMPARADOR = 11;
+export const VERSION_COMPARADOR = 12;
 
 /**
  * La v4 a la v7 solo cambian contra quién se compara en personas y licencias (y el orden
@@ -1055,6 +1064,29 @@ export function separarLecturas(ex: Record<string, unknown>): {
   const base: Record<string, unknown> = { ...ex };
   delete base.documentosAdicionales;
   delete base.otrosDocumentos;
+  const lecturas = lecturasDelArchivo(ex);
+  const juridica = lecturas.find((l) => esJuridico(tipoDeLectura(l)));
+  if (!juridica) return { principal: base, complementaria: null };
+  const natural =
+    lecturas.find(
+      (l) =>
+        l !== juridica &&
+        !esJuridico(tipoDeLectura(l)) &&
+        !!pick(l, [...CLAVES_NUMERO, 'rif']),
+    ) ?? null;
+  return { principal: juridica, complementaria: natural };
+}
+
+/**
+ * v12: cada documento que trae un archivo, por separado: la lectura principal (partida en dos si el
+ * OCR mezcló el RIF de una página con la cédula de otra) y los `documentosAdicionales`.
+ */
+export function lecturasDelArchivo(
+  ex: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const base: Record<string, unknown> = { ...ex };
+  delete base.documentosAdicionales;
+  delete base.otrosDocumentos;
   const adicionales = [
     ...lista(ex.documentosAdicionales),
     ...lista(ex.otrosDocumentos),
@@ -1091,16 +1123,38 @@ export function separarLecturas(ex: Record<string, unknown>): {
     ];
   }
   lecturas.push(...adicionales);
-  const juridica = lecturas.find((l) => esJuridico(tipoDeLectura(l)));
-  if (!juridica) return { principal: base, complementaria: null };
-  const natural =
-    lecturas.find(
-      (l) =>
-        l !== juridica &&
-        !esJuridico(tipoDeLectura(l)) &&
-        !!pick(l, [...CLAVES_NUMERO, 'rif']),
-    ) ?? null;
-  return { principal: juridica, complementaria: natural };
+  return lecturas;
+}
+
+/** v12: números de documento leídos en el archivo (todas sus lecturas), sin repetir. */
+export function numerosLeidos(ex: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const l of lecturasDelArchivo(ex)) {
+    for (const k of ['rif', ...CLAVES_NUMERO]) {
+      const v = pick(l, [k]);
+      if (!v || lecturaFallida('documento', v)) continue;
+      const n = numeroDocumento(v);
+      if (n && !out.includes(n)) out.push(n);
+    }
+  }
+  return out;
+}
+
+/**
+ * v12: ¿el archivo es de alguien de la póliza? true si algún número leído es el de una de sus
+ * personas (también el RIF con o sin dígito verificador); false si se leyeron números y ninguno lo
+ * es; null si no se leyó ningún número (no se puede saber).
+ */
+export function archivoEsDeLaPoliza(
+  ex: Record<string, unknown>,
+  ctx: ContextoPoliza,
+): boolean | null {
+  const nums = numerosLeidos(ex);
+  if (!nums.length) return null;
+  const docs = todasLasPersonas(ctx)
+    .map((p) => p.documento)
+    .filter((d): d is string => !!d);
+  return nums.some((n) => docs.some((d) => documentosIguales(d, n, true)));
 }
 
 /** v11: ¿lo leído trae un RIF de persona jurídica (J/G/C)? (también en `documentosAdicionales`). */
@@ -1171,13 +1225,36 @@ function camposComplementarios(
   return out;
 }
 
-/** v11: «al tomador», «a otro asegurado»… de la persona a la que corresponde un documento. */
-function aQuien(p: PersonaPoliza): string {
-  if (p.roles.includes('tomador')) return 'al tomador';
+/**
+ * v12: «la cédula del titular», «el RIF de la empresa tomadora»… para decir en lenguaje simple de
+ * quién es el archivo cargado.
+ */
+function documentoDe(p: PersonaPoliza, tipoLeido?: string | null): string {
+  if (esJuridico(p.tipoDoc))
+    return p.roles.includes('tomador')
+      ? 'el RIF de la empresa tomadora'
+      : 'el RIF de una empresa de la póliza';
+  const doc =
+    String(tipoLeido ?? '').toUpperCase() === 'P'
+      ? 'el pasaporte'
+      : 'la cédula';
+  if (p.roles.includes('tomador')) return `${doc} del tomador`;
   if (p.roles.includes('asegurado'))
-    return p.titular ? 'al titular' : 'a otro asegurado de la póliza';
-  if (p.roles.includes('beneficiario')) return 'a un beneficiario';
-  return `al ${p.rol}`;
+    return p.titular
+      ? `${doc} del titular`
+      : `${doc} de otro asegurado de la póliza`;
+  if (p.roles.includes('beneficiario')) return `${doc} de un beneficiario`;
+  return `${doc} del ${p.rol}`;
+}
+
+/** v12: «Falta la cédula del titular. El archivo cargado es la cédula del tomador (V-****1234).» */
+function textoFaltaOtro(
+  pedido: string,
+  p: PersonaPoliza,
+  tipoLeido?: string | null,
+): string {
+  const mask = maskDocumento(p.tipoDoc ?? tipoLeido, p.documento);
+  return `Falta ${pedido}. El archivo cargado es ${documentoDe(p, tipoLeido)}${mask ? ` (${mask})` : ''}.`;
 }
 
 function compararPersona(
@@ -1190,6 +1267,9 @@ function compararPersona(
   // empresa vale su RIF. Si el archivo trae el RIF y además una cédula, manda el RIF y la cédula es
   // complementaria. Si no se leyó el RIF, lo leído (una cédula) es solo complementario.
   const enPersonas = cedulaDePersonas(tipo, ctx);
+  /** v12: personas — la cédula del titular se compara solo con el titular. */
+  const titularPersonas =
+    tipo === 'cedula_titular' && ctx.producto === 'personas';
   const tomJ = enPersonas ? tomadorJuridico(ctx) : null;
   let lecturas: {
     principal: Record<string, unknown>;
@@ -1256,11 +1336,41 @@ function compararPersona(
       !esJuridico(p.tipoDoc) &&
       (p.roles.includes('asegurado') || p.roles.includes('tomador')),
   );
+  /** v12: la cédula del titular, sin nadie con quien compararla (ni titular ni asegurados). */
+  let sinTitular = false;
   if (enPersonas) {
     // v11: con tomador J/G/C el documento del tomador se compara SOLO con el tomador (RIF y razón
-    // social), nunca con el asegurado. Con tomador natural, como en v4: vale la cédula de
-    // cualquier persona natural de la póliza (titular, tomador V/E/P o asegurado).
-    objetivos = tomJ ? [tomJ] : naturales;
+    // social), nunca con el asegurado. v12: con tomador natural y un titular distinto en la póliza
+    // (la cédula del titular es otro requisito), también solo con el tomador. Si la póliza no trae
+    // al tomador o no trae un titular aparte (un solo requisito para los dos), como en v4: con las
+    // personas naturales de la póliza.
+    const tomadores = naturales.filter((p) => p.roles.includes('tomador'));
+    const titularAparte = ctx.personas.some(
+      (p) =>
+        p.titular &&
+        !!p.documento &&
+        !esJuridico(p.tipoDoc) &&
+        !p.roles.includes('tomador'),
+    );
+    objetivos = tomJ
+      ? [tomJ]
+      : tomadores.length && titularAparte
+        ? tomadores
+        : naturales;
+  } else if (titularPersonas) {
+    // v12: solo el titular; si Nexus no sabe quién es, los asegurados; sin asegurados, el tomador
+    // natural (respaldo).
+    const titulares = naturales.filter((p) => p.titular);
+    objetivos = titulares.length
+      ? titulares
+      : naturales.filter((p) => p.roles.includes('asegurado'));
+    if (!objetivos.length) {
+      const tomadores = naturales.filter((p) => p.roles.includes('tomador'));
+      if (tomadores.length) {
+        objetivos = tomadores;
+        respaldo = 'tomador';
+      } else sinTitular = true;
+    }
   } else {
     objetivos = conRol(reglas.esperados);
     if (!objetivos.length) {
@@ -1280,15 +1390,16 @@ function compararPersona(
 
   const igualA = (p: PersonaPoliza) =>
     !!p.documento && documentosIguales(docDe(p), docOcr, conDv);
+  const porPersona = enPersonas || titularPersonas;
   const exacto = docOcr
-    ? enPersonas
+    ? porPersona
       ? (objetivos.find(igualA) ?? todas.find(igualA) ?? null)
       : (todas.find(igualA) ?? null)
     : null;
   const persona =
     exacto && objetivos.includes(exacto)
       ? exacto
-      : enPersonas
+      : porPersona
         ? // Sin coincidencia exacta: la que difiere en un dígito (posible error de lectura) o la
           // primera; sin personas naturales no se compara contra el tomador J.
           (objetivos.find((p) => casiIgual(docOcr, docDe(p))) ??
@@ -1412,30 +1523,58 @@ function compararPersona(
     // v11: tomador empresa y en el archivo no se leyó su RIF (p. ej. PDF con el RIF en la página 1 y
     // la cédula del titular en la 2: el OCR devolvió la cédula). No se compara con el asegurado ni
     // se marca «Errado»: la cédula leída es solo complementaria (informativa); revisar.
-    const comp = camposComplementarios(lecturas.complementaria, naturales);
-    const leida = comp.find((c) => c.campo === 'adicionalDocumento');
-    const deQuien =
-      leida?.estado === 'coincide'
-        ? `la cédula ${leida.etiqueta.replace(/^.*\((.+)\)$/, 'del $1')} (${leida.enDocumento})`
-        : leida
-          ? `una cédula (${leida.enDocumento}) que no es de nadie de la póliza (puede ser del representante legal)`
-          : 'otro documento';
+    // v12: en lenguaje simple, de quién es el archivo cargado.
+    const l = lecturas.complementaria;
+    const numRaw = pick(l, [...CLAVES_NUMERO, 'rif']);
+    const tipoL = tipoDeLectura(l);
+    const num =
+      numRaw && !lecturaFallida('documento', numRaw)
+        ? numeroDocumento(numRaw)
+        : '';
+    const de = num
+      ? naturales.find((x) => documentosIguales(x.documento ?? '', num, true))
+      : undefined;
+    const pedido = 'el RIF de la empresa tomadora';
+    aviso = de
+      ? textoFaltaOtro(pedido, de, tipoL)
+      : num
+        ? `Falta ${pedido}. El archivo cargado es ${tipoL === 'P' ? 'un pasaporte' : 'una cédula'} (${maskDocumento(tipoL, num)}) que no es de nadie de esta póliza.`
+        : `Falta ${pedido}: no se leyó en el archivo cargado.`;
+  } else if (sinTitular) {
     aviso =
-      `El tomador es una persona jurídica (${maskDocumento(tomJ.tipoDoc, tomJ.documento) ?? 'RIF'}) ` +
-      `y en el archivo no se leyó su RIF: se leyó ${deQuien}. ` +
-      'Revisar si el archivo trae el RIF del tomador (p. ej. en otra página).';
+      'No se pudo comparar: la póliza no trae en Nexus los datos del titular.';
+    sinDatos = true;
   } else if (rotulo || docFallido) {
     const noLeido = [
       ...(docFallido ? ['el número'] : []),
       ...(rotulo ? ['el nombre'] : []),
     ].join(' ni ');
     aviso = `El OCR no leyó ${noLeido} del documento (devolvió el rótulo del campo o un valor sin sentido); hay que revisarlo.`;
-  } else if (exacto && !objetivos.includes(exacto)) {
+  } else if (
+    exacto &&
+    !objetivos.includes(exacto) &&
+    // v12 (personas): solo si el nombre leído es el de esa persona; con el número de otra persona de
+    // la póliza y otro nombre sigue siendo «no coincide» (como en v4).
+    (!porPersona ||
+      !todosOcr.length ||
+      contenido(todosOcr, [
+        ...tokens(exacto.nombre),
+        ...tokens(exacto.apellido),
+      ]) ||
+      !(exacto.nombre || exacto.apellido))
+  ) {
     // Es de otra persona de la póliza: no es un documento falso, pero tampoco el pedido.
-    // v11: en personas el documento `cedula` es solo del tomador.
+    // v11: en personas el documento `cedula` es solo del tomador. v12: y la cédula del titular, solo
+    // del titular; el texto dice qué falta y de quién es el archivo cargado.
     aviso = enPersonas
-      ? `El documento corresponde ${aQuien(exacto)}, no al titular, al tomador ni a un asegurado.`
-      : `El documento corresponde al ${exacto.rol}, no al ${esperadoTexto}.`;
+      ? textoFaltaOtro(
+          tomJ ? 'el RIF de la empresa tomadora' : 'la cédula del tomador',
+          exacto,
+          tipoOcr,
+        )
+      : titularPersonas
+        ? textoFaltaOtro('la cédula del titular', exacto, tipoOcr)
+        : `El documento corresponde al ${exacto.rol}, no al ${esperadoTexto}.`;
   } else if (
     !exacto &&
     docCampo.coincide === false &&

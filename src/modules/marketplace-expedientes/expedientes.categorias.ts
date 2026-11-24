@@ -14,7 +14,11 @@
  * 6. faltanDocumentos solo le faltan documentos por enviar
  * 7. otros            cualquier caso no previsto (estado guardado desactualizado); debería ser 0
  */
-import { ExpedientesConfig, requisitosAplicables } from './expedientes.domain';
+import {
+  estadoSinFila,
+  ExpedientesConfig,
+  requisitosAplicables,
+} from './expedientes.domain';
 import { conDatosModificados, diagnosticoVigente } from './expedientes.ia';
 
 /** En orden de prioridad. */
@@ -51,10 +55,15 @@ export function categoriaIncompleto(
   const aplicables: RequisitoCategoria[] = requisitosAplicables(
     exp.producto,
     config,
-  ).map((tipo) => porTipo.get(tipo) ?? { tipo, estado: 'faltante' });
+  ).map((tipo) => porTipo.get(tipo) ?? { tipo, estado: estadoSinFila(tipo) });
 
   const observados = aplicables.filter((r) => r.estado === 'observado');
-  if (observados.some((r) => !conDatosModificados(r))) return 'conErrores';
+  // v12: un documento sobrescrito por el de otra persona también es un error (pedirlo de nuevo).
+  if (
+    aplicables.some((r) => r.estado === 'sobrescrito') ||
+    observados.some((r) => !conDatosModificados(r))
+  )
+    return 'conErrores';
   if (observados.length) return 'datosCambiados';
 
   const recibidos = aplicables.filter((r) => r.estado === 'recibido');
