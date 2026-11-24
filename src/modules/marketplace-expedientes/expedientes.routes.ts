@@ -37,6 +37,7 @@ import {
 } from './expedientes.historico';
 import { caracasParts } from './expedientes.domain';
 import { revisarHuellas, vistaHuellas } from './expedientes.huellas';
+import { ejecutarRifCompartido } from './expedientes.rif-compartido';
 import {
   ejecutarSincronizacionPagos,
   vistaPagos,
@@ -381,6 +382,30 @@ router.post(
     return ok(res, r);
   }),
 );
+/**
+ * Admin: RIF de la empresa tomadora ya validado en otra póliza cubre las demás de esa empresa.
+ * `vistaPrevia` (por defecto true) cuenta sin escribir. Solo el RIF jurídico; sin correos ni IA.
+ */
+router.post(
+  '/rif-compartido',
+  internoLimiter,
+  sesion,
+  admin,
+  sinSso,
+  h(async (req, res) => {
+    const vp = req.body?.vistaPrevia;
+    if (vp !== undefined && typeof vp !== 'boolean')
+      throw new AppError('vistaPrevia debe ser true o false.', 400);
+    if (!expedientesEnabled()) return fail(res, 409, 'EXPEDIENTES_ENABLED apagado');
+    const r = await ejecutarRifCompartido(svc, {
+      vistaPrevia: vp !== false,
+      actor: actorDe(req),
+    });
+    if ('omitido' in r) return fail(res, 409, r.motivo);
+    return ok(res, r);
+  }),
+);
+
 // ─── Acceso (el portal decide si muestra el monitor) ───────────────────────
 
 router.get(

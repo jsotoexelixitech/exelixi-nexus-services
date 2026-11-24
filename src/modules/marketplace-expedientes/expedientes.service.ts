@@ -12,6 +12,10 @@ import { randomUUID } from 'crypto';
 import prisma from '../../config/prisma';
 import { marcaArchivoCambiado } from './expedientes.huellas';
 import {
+  ejecutarRifCompartido,
+  rifCompartidoActivo,
+} from './expedientes.rif-compartido';
+import {
   catalogoCanales,
   gestorCanalEnCache,
   nombresActoresEnCache,
@@ -2521,6 +2525,17 @@ export class ExpedientesService {
       }
     }
 
+    // 24-nov: el RIF de la empresa tomadora ya validado en otra póliza cubre las demás (apagado por defecto).
+    if (opts.modo !== 'recibidos' && !opts.expedienteIds && rifCompartidoActivo()) {
+      try {
+        await ejecutarRifCompartido(this, { vistaPrevia: false });
+      } catch (err) {
+        logger.warn(
+          `[expedientes] RIF compartido: ${err instanceof Error ? err.message : 'error'}`,
+        );
+      }
+    }
+
     const estados: Prisma.MktExpedienteRequisitoWhereInput =
       opts.modo === 'recibidos'
         ? { estado: 'recibido' }
@@ -2999,7 +3014,7 @@ export class ExpedientesService {
    * trae cuando la póliza llegó sin bloque `expediente` (conciliación). Solo lectura; si falla, se
    * compara con lo del expediente como antes.
    */
-  private async contextoDe(exp: Exp): Promise<ContextoPoliza> {
+  async contextoDe(exp: Exp): Promise<ContextoPoliza> {
     // v7: la cotización del wizard (solo si es la única con ese cnpoliza), fuera de la huella.
     let cotizacion: DatosCotizacion | null = null;
     if (exp.producto === 'rcv' || exp.producto === 'personas') {
@@ -3190,7 +3205,8 @@ export class ExpedientesService {
     const r = await prisma.mktExpedienteRequisito.findUnique({
       where: { expedienteId_tipo: { expedienteId: id, tipo } },
     });
-    if (r?.estado === 'validado') {
+    // Lo validado con el RIF compartido de la empresa no impide cargar un RIF propio.
+    if (r?.estado === 'validado' && r.validadoPor !== 'rif_compartido') {
       throw new AppError('Ese documento ya está validado.', 409);
     }
     const [res] = await this.cargarDocumento({
