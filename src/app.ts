@@ -1,6 +1,11 @@
 import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
+import {
+  corsOriginValidator,
+  CORS_ALLOWED_HEADERS,
+  CORS_ALLOWED_METHODS,
+} from './config/cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import compression from 'compression';
@@ -19,6 +24,14 @@ import roleRoutes from './modules/role/role.routes';
 import authRoutes from './modules/auth/auth.routes';
 import userRoutes from './modules/user/user.routes';
 import moduleRoutes from './modules/module/module.routes';
+import accessRoutes from './modules/access/access.routes';
+import flowRoutes from './modules/flow/flow.routes';
+import productConfigRoutes from './modules/config/product-config.routes';
+import emisionRoutes from './modules/emision/emision.routes';
+import funeralSubmissionRoutes from './modules/funeral-submission/funeral-submission.routes';
+import portalRoutes from './modules/portal/portal.routes';
+import expedientesRoutes from './modules/marketplace-expedientes/expedientes.routes';
+import cotizacionesRcRoutes from './modules/cotizaciones-rc/cotizaciones-rc.routes';
 
 import { apiKeyGuard } from './middlewares/apikey.middleware';
 import { requestIdMiddleware } from './middlewares/request-id.middleware';
@@ -59,13 +72,41 @@ app.use(
 );
 app.use(
   cors({
-    origin: env.ALLOWED_ORIGINS?.split(',') || '*',
+    origin: corsOriginValidator,
     credentials: true,
+    methods: CORS_ALLOWED_METHODS,
+    allowedHeaders: CORS_ALLOWED_HEADERS,
+    optionsSuccessStatus: 200, // Compatibilidad para navegadores legacy y algunos clientes HTTP (ej. Angular)
   }),
 );
 app.use(compression());
 app.use(cookieParser());
-app.use(express.json({ limit: '10kb' }));
+// Checkout y «emitir como pendiente» del cotizador RC: traen el PDF «Condicionado y anexos» en base64 (hasta 8 MB). Solo con API key.
+app.post(
+  /^\/api\/cotizaciones-rc\/[A-Za-z0-9-]+\/(checkout|emitir-pendiente)\/?$/,
+  apiKeyGuard,
+  express.json({ limit: '12mb' }),
+);
+// Guardar una cotización del cotizador RC: se conserva el cuerpo crudo para verificar la firma HMAC del proxy
+// (x-cotizador-firma). Solo con API key.
+app.post(
+  /^\/api\/cotizaciones-rc\/?$/,
+  apiKeyGuard,
+  express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody =
+        Buffer.from(buf);
+    },
+  }),
+);
+// Logo de la marca de una empresa: llega en base64 (hasta 1 MB de imagen). Solo con API key.
+app.put(
+  /^\/api\/companies\/\d+\/marca\/logo\/?$/,
+  apiKeyGuard,
+  express.json({ limit: '2mb' }),
+);
+app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
 // Rate Limiting
@@ -84,6 +125,31 @@ const limiter = rateLimit({
 app.use('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date(), env: env.NODE_ENV });
 });
+
+// --- Public API: verificación de acceso para submódulos externos ---
+// No requiere x-api-key. Protegido por firma JWT (TENANT_TOKEN_SECRET) + rate limit propio.
+app.use('/api/access', accessRoutes);
+
+// --- Public API: bridge inter-módulo (session/save/done sin API key; start requiere API key) ---
+app.use('/api/flow', flowRoutes);
+
+// GET /api/config/:empresaId/:producto/:modulo es público para que los módulos lo lean sin API key.
+// PUT/POST tienen apiKeyGuard dentro del router.
+app.use('/api/config', productConfigRoutes);
+
+// Solicitudes funerario (revisión técnica) — guards propios en el router
+app.use('/api/funeral-submissions', funeralSubmissionRoutes);
+
+// Portal operadores La Mundial — solo JWT Bearer (authenticate en el router)
+app.use('/api/portal', portalRoutes);
+
+// Monitor de expedientes Marketplace — sesión del portal + enlace firmado público.
+// Apagado por defecto (EXPEDIENTES_ENABLED); sin la variable responde 404.
+app.use('/api/expedientes', expedientesRoutes);
+
+// Cotizaciones del cotizador RC (vigencia de 15 días para el cliente), pago en línea y emisión pagada — x-api-key en el router;
+// el aviso de pago de pagos-api entra con token propio.
+app.use('/api/cotizaciones-rc', cotizacionesRcRoutes);
 
 // --- Protected API Routes ---
 app.use('/api', apiKeyGuard, limiter);
@@ -106,6 +172,7 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/modules', moduleRoutes);
+app.use('/api/emisiones', emisionRoutes);
 
 // --- 404 Handler ---
 app.use((req, res) => {

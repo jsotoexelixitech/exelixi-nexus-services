@@ -1,9 +1,11 @@
 import { Response } from 'express';
 import { ModuleService } from './module.service';
+import { CompanyService } from '../company/company.service';
 import { AuthRequest } from '../../middlewares/auth.middleware';
 import { getErrorMessage } from '../../utils/error-handler';
 
 const moduleService = new ModuleService();
+const companyService = new CompanyService();
 
 export class ModuleController {
   async getActive(req: AuthRequest, res: Response) {
@@ -74,6 +76,7 @@ export class ModuleController {
         nombre,
         url,
       );
+      await companyService.provisionSubmoduleForAllCompanies(submodule.id);
       res.status(201).json({
         success: true,
         data: submodule,
@@ -101,6 +104,34 @@ export class ModuleController {
         success: true,
         message: 'Submódulo desactivado correctamente',
       });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async getFlowStatus(req: AuthRequest, res: Response) {
+    try {
+      const queryEmpresa = req.query.empresaId;
+      const empresaId = queryEmpresa
+        ? Number(queryEmpresa)
+        : req.user?.empresaId;
+      if (!empresaId || Number.isNaN(empresaId)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'empresaId requerido.' });
+      }
+
+      const data = await moduleService.getFlowStatus(empresaId);
+      res.json({ success: true, data });
+    } catch (error: unknown) {
+      res.status(400).json({ success: false, message: getErrorMessage(error) });
+    }
+  }
+
+  async getNetworkInfo(_req: AuthRequest, res: Response) {
+    try {
+      const data = moduleService.getNetworkInfo();
+      res.json({ success: true, data });
     } catch (error: unknown) {
       res.status(400).json({ success: false, message: getErrorMessage(error) });
     }

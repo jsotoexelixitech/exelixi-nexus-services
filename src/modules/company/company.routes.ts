@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { CompanyController } from './company.controller';
+import { MarcaController } from '../marca/marca.controller';
 import { authenticate } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import {
@@ -7,6 +8,7 @@ import {
   updateCompanySchema,
   toggleModuleSchema,
   toggleSubmoduleSchema,
+  empresaPortalConfigSchema,
 } from './company.schema';
 
 const router = Router();
@@ -325,6 +327,73 @@ router.post(
   '/toggle-submodule',
   validate(toggleSubmoduleSchema),
   controller.toggleSubmodule,
+);
+
+/**
+ * @openapi
+ * /api/companies/{id}/generate-api-key:
+ *   post:
+ *     tags: [Companies]
+ *     summary: Regenerar o crear API Key para una empresa
+ *     description: Solo accesible por administradores. Devuelve una llave segura de 64 caracteres hex.
+ *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, example: 1 }
+ *     responses:
+ *       200:
+ *         description: API Key generada
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "API Key generada exitosamente"
+ *               apiKey: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+ *               data: { id: 1, apiKey: "..." }
+ *       400:
+ *         $ref: '#/components/responses/BadRequestError'
+ */
+router.post('/:id/generate-api-key', controller.generateApiKey);
+
+/**
+ * @openapi
+ * /api/companies/{id}/connection-tokens:
+ *   get:
+ *     tags: [Companies]
+ *     summary: Tokens de conexión de todos los submódulos de una empresa
+ *     description: |
+ *       Retorna el `tenantToken` (API Key) de cada submódulo habilitado.
+ *       El estado puede ser: `activo`, `expirado`, `sin_conexion` o `inactivo`.
+ *     security: [{ apiKeyAuth: [], bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, example: 1 }
+ *     responses:
+ *       200:
+ *         description: Lista de tokens de conexión
+ */
+router.get('/:id/connection-tokens', controller.getConnectionTokens);
+
+/**
+ * Marca de la empresa (logo y colores) para los portales de los módulos.
+ * GET/PUT colores, PUT /logo con { logo: base64 }, DELETE /logo y DELETE para volver a la marca por defecto.
+ */
+const marca = new MarcaController();
+router.get('/:id/marca', marca.obtener);
+router.put('/:id/marca', marca.guardarColores);
+router.put('/:id/marca/logo', marca.guardarLogo);
+router.delete('/:id/marca/logo', marca.quitarLogo);
+router.delete('/:id/marca', marca.restablecer);
+
+router.get('/:id/portal-config', controller.getPortalConfig);
+router.put(
+  '/:id/portal-config',
+  validate(empresaPortalConfigSchema),
+  controller.putPortalConfig,
 );
 
 export default router;

@@ -3,6 +3,7 @@ import { env } from './config/env';
 import logger from './utils/logger';
 import prisma from './config/prisma';
 import { initSentry } from './config/sentry';
+import { iniciarSchedulerExpedientes } from './modules/marketplace-expedientes/expedientes.jobs';
 
 // Inicializar Sentry antes de cualquier otra cosa
 initSentry();
@@ -14,6 +15,8 @@ const server = app.listen(PORT, () => {
   logger.info(
     `📝 Documentación Swagger disponible en http://localhost:${PORT}/api-docs`,
   );
+  // Monitor de expedientes: no hace nada sin EXPEDIENTES_ENABLED + EXPEDIENTES_JOBS_ENABLED.
+  iniciarSchedulerExpedientes();
 });
 
 // --- Graceful Shutdown ---

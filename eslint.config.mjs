@@ -26,6 +26,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['node_modules', 'dist', 'combined.log', 'error.log', 'prisma'],
+    ignores: ['node_modules', 'dist', 'combined.log', 'error.log', 'prisma', 'sdk'],
   },
 );

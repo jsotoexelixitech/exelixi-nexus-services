@@ -142,6 +142,7 @@ const controller = new UserController();
  *               $ref: '#/components/schemas/MessageError'
  */
 router.get('/', authenticate, controller.list);
+router.get('/:id', authenticate, controller.getById);
 router.post('/', authenticate, validate(createUserSchema), controller.create);
 
 /**

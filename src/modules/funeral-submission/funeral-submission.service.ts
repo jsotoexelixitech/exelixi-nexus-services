@@ -1,0 +1,570 @@
+import { limiteLista, terminosBusqueda, whereBusqueda } from './funeral-submission-list';
+import { Prisma } from '@prisma/client';
+import prisma from '../../config/prisma';
+import { startCheckoutLink, inferModuloGroupId } from '../flow/flow.service';
+import { buildFuneralCheckoutPatch } from './funeral-checkout-patch';
+import { sendFuneralPaymentLinkEmail } from './funeral-approval-mail';
+import { sendFuneralReviewAlertEmail } from './funeral-review-mail';
+import { sendFuneralRejectedEmail } from './funeral-rejected-mail';
+
+export type FuneralSubmissionStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'paid'
+  | 'expired';
+
+export interface CreateFuneralSubmissionInput {
+  empresaId: number;
+  sessionId: string;
+  canal?: string;
+  tomadorRif?: string;
+  tomadorNombre?: string;
+  tomadorEmail?: string;
+  cplan: string;
+  planName?: string;
+  cramo?: number;
+  scoreTotal: number;
+  scoreBreakdown: unknown[];
+  healthAnswers: Record<string, unknown>;
+  snapshot: Record<string, unknown>;
+  verdict?: string;
+  reviewerEmails?: string[];
+  notifyReviewers?: boolean;
+  autoApprove?: boolean;
+  /** Verde: aprobar sin link ni correo; el emisor sigue al pago en la misma sesión. */
+  directPay?: boolean;
+}
+
+const PAYMENT_LINK_TTL_HOURS = Number(
+  process.env.FUNERAL_PAYMENT_LINK_TTL_HOURS || 72,
+);
+
+function asSnapshot(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
+}
+
+function clipReviewedBy(value?: string): string {
+  const t = String(value || '').trim();
+  return (t || 'tecnico').slice(0, 128);
+}
+
+function emailFromPerson(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const e = (value as Record<string, unknown>).email;
+  return typeof e === 'string' ? e.trim() : '';
+}
+
+function resolveTomadorEmail(
+  column: string | null | undefined,
+  snapshot: unknown,
+): string {
+  const fromCol = String(column || '').trim();
+  if (fromCol.includes('@')) return fromCol;
+  return emailFromPerson(asSnapshot(snapshot).tomador);
+}
+
+/** Producto que eligió el SSO (lo guarda emisión en el snapshot). */
+function productLabelFromSnapshot(snapshot: unknown): string | undefined {
+  const label = asSnapshot(snapshot).productLabel;
+  return typeof label === 'string' && label.trim() ? label.trim() : undefined;
+}
+
+function mailFlagsFromSnapshot(snapshot: unknown): {
+  emailSent?: boolean;
+  emailError?: string;
+} {
+  const decision = asSnapshot(snapshot).reviewDecision;
+  if (!decision || typeof decision !== 'object' || Array.isArray(decision)) {
+    return {};
+  }
+  const d = decision as Record<string, unknown>;
+  if (d.action === 'rejected') {
+    return {
+      emailSent: d.clientEmailSent === true,
+      emailError:
+        typeof d.clientEmailError === 'string' && d.clientEmailError.trim()
+          ? d.clientEmailError
+          : undefined,
+    };
+  }
+  if (d.action === 'approved') {
+    return {
+      emailSent: d.paymentEmailSent === true,
+      emailError:
+        typeof d.paymentEmailError === 'string' && d.paymentEmailError.trim()
+          ? d.paymentEmailError
+          : undefined,
+    };
+  }
+  return {};
+}
+
+function formatRow(row: {
+  id: string;
+  empresaId: number;
+  sessionId: string;
+  canal: string;
+  estado: string;
+  tomadorRif: string | null;
+  tomadorNombre: string | null;
+  tomadorEmail: string | null;
+  cplan: string;
+  planName: string | null;
+  cramo: number | null;
+  scoreTotal: number;
+  scoreBreakdown: unknown;
+  healthAnswers: unknown;
+  snapshotJson: unknown;
+  rejectReason: string | null;
+  reviewedBy: string | null;
+  reviewedAt: Date | null;
+  paymentUrl: string | null;
+  paymentSid: string | null;
+  paymentExpiresAt: Date | null;
+  cnpoliza: string | null;
+  cnrecibo: string | null;
+  urlpoliza: string | null;
+  emittedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    id: row.id,
+    empresaId: row.empresaId,
+    sessionId: row.sessionId,
+    canal: row.canal,
+    estado: row.estado,
+    tomadorRif: row.tomadorRif,
+    tomadorNombre: row.tomadorNombre,
+    tomadorEmail: row.tomadorEmail,
+    cplan: row.cplan,
+    planName: row.planName,
+    cramo: row.cramo,
+    scoreTotal: row.scoreTotal,
+    scoreBreakdown: row.scoreBreakdown,
+    healthAnswers: row.healthAnswers,
+    snapshot: row.snapshotJson,
+    rejectReason: row.rejectReason,
+    reviewedBy: row.reviewedBy,
+    reviewedAt: row.reviewedAt,
+    paymentUrl: row.paymentUrl,
+    paymentSid: row.paymentSid,
+    paymentExpiresAt: row.paymentExpiresAt,
+    cnpoliza: row.cnpoliza,
+    cnrecibo: row.cnrecibo,
+    urlpoliza: row.urlpoliza,
+    emittedAt: row.emittedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    ...mailFlagsFromSnapshot(row.snapshotJson),
+  };
+}
+
+export class FuneralSubmissionService {
+  /** Correos a mesa técnica; si la lista está vacía deja aviso en el snapshot. */
+  private async notifyReviewers(
+    id: string,
+    snapshot: unknown,
+    input: CreateFuneralSubmissionInput,
+  ) {
+    const emails = [
+      ...new Set(
+        (Array.isArray(input.reviewerEmails) ? input.reviewerEmails : [])
+          .map((e) =>
+            String(e || '')
+              .trim()
+              .toLowerCase(),
+          )
+          .filter((e) => e.includes('@')),
+      ),
+    ];
+    const results = await Promise.all(
+      emails.map(async (to) => {
+        const mail = await sendFuneralReviewAlertEmail({
+          to,
+          tomadorNombre: input.tomadorNombre,
+          planName: input.planName,
+          productLabel: productLabelFromSnapshot(snapshot),
+          scoreTotal: String(input.scoreTotal ?? ''),
+        });
+        return { to, sent: mail.sent, error: mail.error };
+      }),
+    );
+    const withAlerts = {
+      ...asSnapshot(snapshot),
+      reviewAlerts: {
+        emails,
+        notifiedAt: new Date().toISOString(),
+        results,
+        warning:
+          emails.length === 0
+            ? 'Lista de correos vacía: no se envió alerta.'
+            : undefined,
+      },
+    };
+    const updated = await prisma.funeralSubmission.update({
+      where: { id },
+      data: { snapshotJson: withAlerts as Prisma.InputJsonValue },
+    });
+    return formatRow(updated);
+  }
+
+  async create(input: CreateFuneralSubmissionInput) {
+    const row = await prisma.funeralSubmission.create({
+      data: {
+        empresaId: input.empresaId,
+        sessionId: input.sessionId,
+        canal: input.canal?.trim() || 'default',
+        estado: 'pending',
+        tomadorRif: input.tomadorRif ?? null,
+        tomadorNombre: input.tomadorNombre ?? null,
+        tomadorEmail: input.tomadorEmail ?? null,
+        cplan: input.cplan,
+        planName: input.planName ?? null,
+        cramo: input.cramo ?? null,
+        scoreTotal: input.scoreTotal,
+        scoreBreakdown: input.scoreBreakdown as Prisma.InputJsonValue,
+        healthAnswers: input.healthAnswers as Prisma.InputJsonValue,
+        snapshotJson: input.snapshot as Prisma.InputJsonValue,
+      },
+    });
+    const formatted = formatRow(row);
+
+    if (input.notifyReviewers) {
+      return this.notifyReviewers(row.id, formatted.snapshot, input);
+    }
+
+    if (input.autoApprove && input.verdict === 'emit' && input.directPay) {
+      return this.approveDirectPay(row.id, formatted.snapshot);
+    }
+
+    if (input.autoApprove && input.verdict === 'emit') {
+      try {
+        const approved = await this.approve(row.id, {
+          reviewedBy: 'auto-score',
+          empresaId: input.empresaId,
+        });
+        if (approved) return approved;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[funeral-submission] autoApprove omitido, pasa a mesa: ${msg}`,
+        );
+      }
+      return this.notifyReviewers(row.id, formatted.snapshot, input);
+    }
+
+    return formatted;
+  }
+
+  async listByEmpresa(
+    empresaId: number,
+    opts?: { estado?: string; limit?: number; q?: string },
+  ) {
+    const where: Prisma.FuneralSubmissionWhereInput = { empresaId };
+    if (opts?.estado) where.estado = opts.estado;
+    const terminos = terminosBusqueda(opts?.q);
+    if (terminos.length) where.AND = whereBusqueda(terminos);
+
+    const rows = await prisma.funeralSubmission.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limiteLista(opts?.limit),
+    });
+    return rows.map(formatRow);
+  }
+
+  async getById(id: string, empresaId?: number) {
+    const row = await prisma.funeralSubmission.findFirst({
+      where: {
+        id,
+        ...(empresaId ? { empresaId } : {}),
+      },
+    });
+    return row ? formatRow(row) : null;
+  }
+
+  /**
+   * Semáforo verde con pago en la misma sesión: queda aprobada (fuera de la cola de mesa)
+   * sin link de pago ni correo al tomador.
+   */
+  private async approveDirectPay(id: string, snapshot: unknown) {
+    const reviewedAt = new Date();
+    const row = await prisma.funeralSubmission.update({
+      where: { id },
+      data: {
+        estado: 'approved',
+        reviewedBy: 'auto-score',
+        reviewedAt,
+        snapshotJson: {
+          ...asSnapshot(snapshot),
+          reviewDecision: {
+            action: 'approved',
+            mode: 'direct-pay',
+            reviewedBy: 'auto-score',
+            reviewedAt: reviewedAt.toISOString(),
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+    return formatRow(row);
+  }
+
+  async approve(id: string, opts: { reviewedBy?: string; empresaId?: number }) {
+    const existing = await this.getById(id, opts.empresaId);
+    if (!existing) return null;
+    if (existing.estado !== 'pending') {
+      throw new Error(`La solicitud ya está en estado "${existing.estado}".`);
+    }
+
+    if (!existing.tomadorEmail?.trim()) {
+      throw new Error(
+        'La solicitud no tiene correo del tomador para enviar el link de pago.',
+      );
+    }
+
+    const snapshot = asSnapshot(existing.snapshot);
+
+    const moduloGroupId = await inferModuloGroupId(existing.empresaId);
+    if (!moduloGroupId) {
+      throw new Error(
+        'No se encontró grupo de módulos activo para esta empresa.',
+      );
+    }
+
+    const expiresAt = new Date(
+      Date.now() + PAYMENT_LINK_TTL_HOURS * 60 * 60 * 1000,
+    );
+
+    const patch = buildFuneralCheckoutPatch(snapshot, {
+      submissionId: id,
+      originSessionId: existing.sessionId,
+      cplan: existing.cplan,
+      planName: existing.planName ?? undefined,
+      paymentExpiresAt: expiresAt,
+    });
+
+    const linkResult = await startCheckoutLink(
+      existing.empresaId,
+      moduloGroupId,
+      patch,
+    );
+    if ('error' in linkResult) {
+      throw new Error(linkResult.error);
+    }
+
+    const mail = await sendFuneralPaymentLinkEmail({
+      to: existing.tomadorEmail,
+      name: existing.tomadorNombre ?? undefined,
+      planName: existing.planName ?? undefined,
+      productLabel: productLabelFromSnapshot(existing.snapshot),
+      paymentUrl: linkResult.checkoutUrl,
+      expiresAt,
+    });
+
+    const reviewedBy = clipReviewedBy(opts.reviewedBy);
+    const reviewedAt = new Date();
+    const row = await prisma.funeralSubmission.update({
+      where: { id },
+      data: {
+        estado: 'approved',
+        reviewedBy,
+        reviewedAt,
+        rejectReason: null,
+        paymentUrl: linkResult.checkoutUrl,
+        paymentSid: linkResult.sid,
+        paymentExpiresAt: expiresAt,
+        snapshotJson: {
+          ...snapshot,
+          reviewDecision: {
+            action: 'approved',
+            reviewedBy,
+            reviewedAt: reviewedAt.toISOString(),
+            paymentEmailTo: existing.tomadorEmail,
+            paymentEmailSent: mail.sent,
+            paymentEmailError: mail.error,
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+
+    return {
+      ...formatRow(row),
+      emailSent: mail.sent,
+      emailError: mail.error,
+    };
+  }
+
+  async reject(
+    id: string,
+    opts: { reviewedBy?: string; reason?: string; empresaId?: number },
+  ) {
+    const existing = await this.getById(id, opts.empresaId);
+    if (!existing) return null;
+    if (existing.estado !== 'pending') {
+      throw new Error(`La solicitud ya está en estado "${existing.estado}".`);
+    }
+
+    const reviewedBy = clipReviewedBy(opts.reviewedBy);
+    const reviewedAt = new Date();
+    const rejectReason = opts.reason?.trim() || 'Rechazada por el técnico.';
+
+    const to = resolveTomadorEmail(existing.tomadorEmail, existing.snapshot);
+    let clientMail: { sent: boolean; error?: string };
+    if (!to) {
+      clientMail = { sent: false, error: 'Sin correo del tomador' };
+      console.warn(`[funeral-submission] reject ${id}: sin tomadorEmail`);
+    } else {
+      clientMail = await sendFuneralRejectedEmail({
+        to,
+        tomadorNombre: existing.tomadorNombre ?? undefined,
+        planName: existing.planName ?? undefined,
+        productLabel: productLabelFromSnapshot(existing.snapshot),
+        reason: rejectReason,
+      });
+      if (!clientMail.sent) {
+        console.warn(
+          `[funeral-submission] reject ${id} mail a ${to}: ${clientMail.error}`,
+        );
+      }
+    }
+
+    const row = await prisma.funeralSubmission.update({
+      where: { id },
+      data: {
+        estado: 'rejected',
+        reviewedBy,
+        reviewedAt,
+        rejectReason,
+        snapshotJson: {
+          ...asSnapshot(existing.snapshot),
+          reviewDecision: {
+            action: 'rejected',
+            reviewedBy,
+            reviewedAt: reviewedAt.toISOString(),
+            reason: rejectReason,
+            clientEmailTo: to || undefined,
+            clientEmailSent: clientMail?.sent ?? false,
+            clientEmailError: clientMail?.error,
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+    return {
+      ...formatRow(row),
+      emailSent: clientMail?.sent ?? false,
+      emailError: clientMail?.error,
+    };
+  }
+
+  /**
+   * Persiste póliza emitida. El lookup es por id de solicitud — no por empresa.
+   * Así el mismo flujo sirve para La Mundial y cualquier otra tenant.
+   */
+  async recordEmission(id: string, emission: Record<string, unknown>) {
+    const existing = await this.getById(id);
+    if (!existing) return null;
+
+    const snapshot =
+      existing.snapshot && typeof existing.snapshot === 'object'
+        ? { ...(existing.snapshot as Record<string, unknown>) }
+        : {};
+
+    snapshot.emission = {
+      ...(snapshot.emission && typeof snapshot.emission === 'object'
+        ? (snapshot.emission as Record<string, unknown>)
+        : {}),
+      ...emission,
+    };
+
+    const cnpoliza = String(emission.cnpoliza ?? '').trim() || null;
+    const cnrecibo =
+      emission.cnrecibo != null
+        ? String(emission.cnrecibo).trim() || null
+        : null;
+    const urlpoliza =
+      emission.urlpoliza != null
+        ? String(emission.urlpoliza).trim() || null
+        : null;
+    const emittedAt =
+      typeof emission.emittedAt === 'string'
+        ? new Date(emission.emittedAt)
+        : new Date();
+
+    const row = await prisma.funeralSubmission.update({
+      where: { id },
+      data: {
+        estado: 'paid',
+        cnpoliza,
+        cnrecibo,
+        urlpoliza,
+        emittedAt: Number.isFinite(emittedAt.getTime())
+          ? emittedAt
+          : new Date(),
+        snapshotJson: snapshot as Prisma.InputJsonValue,
+      },
+    });
+    return formatRow(row);
+  }
+
+  /**
+   * Busca la solicitud por cualquiera de las refs del checkout/emisión.
+   * No filtra por empresa: el SID o UUID ya identifican la fila.
+   */
+  async findForEmission(refs: {
+    id?: string;
+    paymentSid?: string;
+    sessionId?: string;
+  }) {
+    const id = String(refs.id ?? '').trim();
+    if (id) {
+      const byId = await prisma.funeralSubmission.findUnique({
+        where: { id },
+      });
+      if (byId) return byId;
+    }
+
+    const paymentSid = String(refs.paymentSid ?? '').trim();
+    if (paymentSid) {
+      const byPay = await prisma.funeralSubmission.findFirst({
+        where: {
+          OR: [{ paymentSid }, { sessionId: paymentSid }],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (byPay) return byPay;
+    }
+
+    const sessionId = String(refs.sessionId ?? '').trim();
+    if (sessionId) {
+      const bySession = await prisma.funeralSubmission.findFirst({
+        where: {
+          OR: [{ sessionId }, { paymentSid: sessionId }],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (bySession) return bySession;
+    }
+
+    return null;
+  }
+
+  async recordEmissionByPaymentSid(
+    paymentSid: string,
+    emission: Record<string, unknown>,
+  ) {
+    return this.recordEmissionByRefs({ paymentSid }, emission);
+  }
+
+  async recordEmissionByRefs(
+    refs: { id?: string; paymentSid?: string; sessionId?: string },
+    emission: Record<string, unknown>,
+  ) {
+    const existing = await this.findForEmission(refs);
+    if (!existing) return null;
+    return this.recordEmission(existing.id, emission);
+  }
+}

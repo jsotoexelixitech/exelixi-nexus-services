@@ -1,0 +1,56 @@
+# Caddyfile srv001 — HTTPS con sslip.io (Let's Encrypt automático)
+# IP pública: 200.75.131.138
+# Copiar: sudo cp ~/srv001-caddy-sslip.Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
+
+{
+  email javier.soto@exelixitech.com
+  acme_ca https://acme-v02.api.letsencrypt.org/directory
+}
+
+nexus-api.200-75-131-138.sslip.io {
+  reverse_proxy localhost:3092
+}
+
+nexus-admin.200-75-131-138.sslip.io {
+  reverse_proxy localhost:5200
+}
+
+ocr-api.200-75-131-138.sslip.io {
+  reverse_proxy localhost:4001
+}
+
+ocr.200-75-131-138.sslip.io {
+  reverse_proxy localhost:5181
+}
+
+form-api.200-75-131-138.sslip.io {
+  reverse_proxy localhost:4002
+}
+
+form.200-75-131-138.sslip.io {
+  reverse_proxy localhost:5182
+}
+
+pagos-api.200-75-131-138.sslip.io {
+  reverse_proxy localhost:4003
+}
+
+pagos.200-75-131-138.sslip.io {
+  reverse_proxy localhost:5184
+}
+
+emision-api.200-75-131-138.sslip.io {
+  reverse_proxy localhost:4004
+}
+
+emision.200-75-131-138.sslip.io {
+  reverse_proxy localhost:5183
+}
+
+rcv-api.200-75-131-138.sslip.io {
+  reverse_proxy localhost:3001
+}
+
+rcv.200-75-131-138.sslip.io {
+  reverse_proxy localhost:5180
+}

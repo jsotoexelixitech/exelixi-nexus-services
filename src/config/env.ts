@@ -21,8 +21,12 @@ const envSchema = z.object({
       32,
       'ENCRYPTION_KEY debe tener exactamente 32 caracteres (AES-256)',
     ),
+  TENANT_TOKEN_SECRET: z
+    .string()
+    .min(32, 'TENANT_TOKEN_SECRET debe tener al menos 32 caracteres'),
   ALLOWED_ORIGINS: z.string().default('*'),
   SENTRY_DSN: z.string().url().optional(),
+  LOG_CONSOLE: z.string().optional(),
 });
 
 const _env = envSchema.safeParse(process.env);

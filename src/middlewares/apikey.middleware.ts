@@ -12,8 +12,26 @@ export const apiKeyGuard = (
   next: NextFunction,
 ) => {
   // Excluir rutas públicas de la validación de API Key
-  const publicPaths = ['/health', '/api-docs', '/api/api-docs'];
-  if (publicPaths.some((path) => req.originalUrl.startsWith(path))) {
+  const publicPaths = [
+    '/health',
+    '/api-docs',
+    '/api/api-docs',
+    '/api/auth/sso-delegate',
+    '/api/auth/login',
+    // Portal operadores: JWT Bearer en cada ruta (authenticate), sin x-api-key global.
+    '/api/portal',
+  ];
+  const originalPath = req.originalUrl.split('?')[0] ?? '';
+  // Tras app.use('/api', guard), req.url suele ser relativo (ej. /portal/products).
+  const mountedPath = (req.url ?? '').split('?')[0] ?? '';
+
+  const isPublic =
+    publicPaths.some((path) => originalPath.startsWith(path)) ||
+    mountedPath.startsWith('/portal') ||
+    mountedPath.startsWith('/auth/login') ||
+    mountedPath.startsWith('/auth/sso-delegate');
+
+  if (isPublic) {
     return next();
   }
 
