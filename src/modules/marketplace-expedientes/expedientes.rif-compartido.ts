@@ -9,6 +9,7 @@
  *
  * Reglas:
  * - Solo el RIF jurídico del tomador. Una cédula nunca se usa, ni entre empresas distintas.
+ * - Una validada cuyo archivo cambió solo se cubre si lo que perdió era ese RIF (nunca una cédula).
  * - No toca decisiones manuales (ni como origen cuyo archivo cambió, ni como destino).
  * - Guarda de qué póliza se tomó: texto simple en `motivo` y evento `rif_compartido`.
  * - NO envía correos, NO llama a la IA, NO cambia nada en el disco del OCR.
@@ -25,6 +26,7 @@ import {
   huellaPoliza,
   lecturaEsRifDelTomador,
   numeroDocumento,
+  separarLecturas,
   tomadorJuridico,
 } from './expedientes.ia';
 import { requisitosAplicables, ESTADO_DESCARTADA } from './expedientes.domain';
@@ -57,6 +59,8 @@ export interface ResumenRifCompartido {
   aplicados: number;
   /** Destinos manuales: no se tocan. */
   omitidosManuales: number;
+  /** Validadas con el archivo perdido de OTRO documento (p. ej. la cédula del empleado): no se tapan. */
+  omitidosOtroDocumento: number;
   errores: number;
   ultimoError: string | null;
   /** Hasta 50 ejemplos sin datos personales. */
@@ -104,6 +108,7 @@ export async function ejecutarRifCompartido(
     porEstado: {},
     aplicados: 0,
     omitidosManuales: 0,
+    omitidosOtroDocumento: 0,
     errores: 0,
     ultimoError: null,
     muestra: [],
@@ -229,8 +234,20 @@ export async function ejecutarRifCompartido(
       if (!e || e.estadoDocumental === ESTADO_DESCARTADA) continue;
       if (!requisitosAplicables(e.producto, config).includes('cedula'))
         continue;
-      const tom = tomadorJuridico(contextoPoliza(e));
+      const ctxE = contextoPoliza(e);
+      const tom = tomadorJuridico(ctxE);
       if (!tom?.documento) continue;
+      // Validada con un archivo que ya no está: solo si lo perdido era ese mismo RIF. Si era la cédula
+      // de una persona, la fila (huella y lectura) es lo que permite recuperarla: no se tapa.
+      const lecturaE = (f.ocrDatos ?? {}) as Record<string, unknown>;
+      if (
+        f.estado === 'validado' &&
+        (!lecturaEsRifDelTomador(lecturaE, ctxE) ||
+          !!separarLecturas(lecturaE).complementaria)
+      ) {
+        r.omitidosOtroDocumento++;
+        continue;
+      }
       const rifE = numeroDocumento(tom.documento);
       const tipoE = String(tom.tipoDoc ?? '').toUpperCase();
       const origen = porEmpresa.find(
@@ -284,6 +301,12 @@ export async function ejecutarRifCompartido(
               rifCompartido: {
                 polizaOrigen: origen.cnpoliza,
                 expedienteOrigen: origen.req.expedienteId,
+                // Lo que tenía la fila, para poder volver a ese archivo.
+                anterior: {
+                  estado: f.estado,
+                  ref: f.ref,
+                  archivoHash: f.archivoHash,
+                },
               },
             } as Prisma.InputJsonValue,
             huellaPoliza: huellaPoliza(ctx),

@@ -105,6 +105,7 @@ async function escenario() {
     ref: 'x/4.pdf',
     analisisRef: 'x/4.pdf',
     archivoHash: 'h4',
+    ocrDatos: RIF_LECTURA,
     diagnostico: {
       resultado: 'coincide',
       archivoCambiado: { detectadoEn: '2026-11-24T00:00:00Z', motivo: 'otro' },
@@ -166,6 +167,40 @@ describe('RIF compartido', () => {
     expect(db.mktExpedienteNotificacion._rows().length).toBe(0);
   });
 
+  it('validada con la cédula perdida de una persona: no se tapa (huella y lectura intactas)', async () => {
+    await escenario();
+    const perdida = {
+      estado: 'validado',
+      decision: 'ia',
+      analisisRef: 'rio/pendiente/cedula.pdf',
+      ref: 'rio/pendiente/cedula.pdf',
+      diagnostico: {
+        resultado: 'coincide',
+        archivoCambiado: { detectadoEn: '2026-11-24T00:00:00Z', motivo: 'otro' },
+      },
+    };
+    await exp(20, 'J-50058503-9');
+    await cedula(20, { ...perdida, archivoHash: 'h20', ocrDatos: CEDULA_LECTURA });
+    await exp(21, 'J-50058503-9');
+    await cedula(21, {
+      ...perdida,
+      archivoHash: 'h21',
+      ocrDatos: { ...RIF_LECTURA, documentosAdicionales: [CEDULA_LECTURA] },
+    });
+    const r: any = await ejecutarRifCompartido(svc, { vistaPrevia: false });
+    expect(r.omitidosOtroDocumento).toBe(2);
+    for (const [id, h] of [
+      [20, 'h20'],
+      [21, 'h21'],
+    ] as const) {
+      expect(fila(id).archivoHash).toBe(h);
+      expect(fila(id).ref).toBe('rio/pendiente/cedula.pdf');
+      expect(fila(id).diagnostico.archivoCambiado).toBeTruthy();
+    }
+    // La que perdió ese mismo RIF sí queda cubierta, y guarda lo que tenía.
+    expect(fila(4).diagnostico.rifCompartido.anterior.archivoHash).toBe('h4');
+  });
+
   it('una cédula nunca se comparte', async () => {
     await exp(1, 'J-50058503-9');
     await cedula(1, {
@@ -196,7 +231,7 @@ describe('RIF compartido', () => {
     };
     const r: any = await ejecutarRifCompartido(svc, { vistaPrevia: false });
     expect(r.origenes).toBe(0);
-    expect(r.origenesConArchivoCambiado).toBe(1);
+    expect(r.origenesConArchivoCambiado).toBe(2);
     expect(fila(2).estado).toBe('faltante');
   });
 
