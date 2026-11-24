@@ -388,7 +388,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       'Resumen',
       'Pendientes canal (1)',
     ]);
-    // «Emitida por» igual que el Monitor; sin canal ni productor: «Emisor sin identificar»
+    // «Emitida por»: solo el nombre del canal (24-nov); sin canal ni productor: «Emisor sin identificar»
     // (nunca el login). Orden: incompletas y luego total.
     const pe = wb.getWorksheet('Por emisor')!;
     expect(filas(pe)).toEqual([
@@ -400,7 +400,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
         'Incompletas',
         '% incompletas',
       ],
-      ['Farmatodo (canal 900)', 'Canal 900', 5, 1, 4, 0.8],
+      ['Farmatodo', 'Canal 900', 5, 1, 4, 0.8],
       ['Emisor sin identificar', '', 1, 0, 1, 1],
       ['Productor 777', 'Productor 777', 1, 1, 0, 0],
     ]);

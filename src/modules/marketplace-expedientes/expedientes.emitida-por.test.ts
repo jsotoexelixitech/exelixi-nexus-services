@@ -15,7 +15,7 @@ vi.mock('../../utils/logger', () => ({
 }));
 
 import { esCodigoGestor, textoCanal, textoEmisor } from './expedientes.domain';
-import { canalSinIdentificar, emitidaPor } from './expedientes.reporte';
+import { canalSinIdentificar, emitidaPor, soloCanal } from './expedientes.reporte';
 
 const nombres = {
   canal: new Map([['27', 'OS_LMDS']]),
@@ -174,5 +174,25 @@ describe('emitidaPor (reporte nocturno y Excel)', () => {
     expect(
       canalSinIdentificar({ ...base, area: 'gestor', cgestor: '12' }, catalogo),
     ).toBe(false);
+  });
+});
+
+describe('Excel: solo el nombre del canal, sin gestor', () => {
+  const sc = (e: any, n: any = nombres, s: any = {}) => soloCanal(textoEmisor(e, n, s));
+  it('canal y gestor del canal dan el mismo nombre', () => {
+    expect(sc({ centidad: 'C', citem: '27' })).toBe('OS_LMDS');
+    expect(sc({ centidad: 'G', cgestor: '749', ccanalalt: '27' })).toBe('OS_LMDS');
+    expect(sc({ cgestor: '348-12' })).toBe('OS_LMDS');
+  });
+  it('sin nombre en el catálogo: «Canal 27», sin el gestor', () => {
+    expect(sc({ centidad: 'G', cgestor: '749', ccanalalt: '27' }, null)).toBe('Canal 27');
+  });
+  it('un nombre con paréntesis no se recorta; el productor no cambia', () => {
+    const n = { canal: new Map([['27', 'RED (NORTE)']]), gestorCanal: new Map() };
+    expect(sc({ centidad: 'C', citem: '27' }, n)).toBe('RED (NORTE)');
+    expect(sc({ area: 'productor', centidad: 'P', citem: '777' })).toBe('Productor 777');
+  });
+  it('sin canal ni productor sigue pendiente', () => {
+    expect(sc({})).toBeNull();
   });
 });
