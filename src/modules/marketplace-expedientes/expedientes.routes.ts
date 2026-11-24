@@ -38,6 +38,7 @@ import {
 import { caracasParts } from './expedientes.domain';
 import { revisarHuellas, vistaHuellas } from './expedientes.huellas';
 import { ejecutarRifCompartido } from './expedientes.rif-compartido';
+import { corregirNombres } from './expedientes.nombres';
 import {
   ejecutarSincronizacionPagos,
   vistaPagos,
@@ -403,6 +404,39 @@ router.post(
     });
     if ('omitido' in r) return fail(res, 409, r.motivo);
     return ok(res, r);
+  }),
+);
+
+/**
+ * Admin: corrige nombre y apellido mal guardados desde Sis2000 (solo lectura en nest-api) para una
+ * lista corta de pólizas. `vistaPrevia` (por defecto true) propone sin escribir. Si corregir cambiaría
+ * el documento o la clave del asegurado, queda «requiere decisión» y no se aplica.
+ */
+router.post(
+  '/nombres',
+  internoLimiter,
+  sesion,
+  admin,
+  sinSso,
+  h(async (req, res) => {
+    const vp = req.body?.vistaPrevia;
+    if (vp !== undefined && typeof vp !== 'boolean')
+      throw new AppError('vistaPrevia debe ser true o false.', 400);
+    const polizas = req.body?.polizas;
+    if (!Array.isArray(polizas) || polizas.some((p) => typeof p !== 'string'))
+      throw new AppError('polizas debe ser una lista de textos.', 400);
+    const empresaId = req.body?.empresaId;
+    if (empresaId !== undefined && !Number.isInteger(empresaId))
+      throw new AppError('empresaId debe ser un número entero.', 400);
+    return ok(
+      res,
+      await corregirNombres({
+        polizas,
+        vistaPrevia: vp !== false,
+        actor: actorDe(req),
+        empresaId,
+      }),
+    );
   }),
 );
 
