@@ -216,6 +216,23 @@ describe('validado con el archivo de otra persona (sin IA)', () => {
     });
   });
 
+  it('validada sin lectura propia en una ruta compartida: no se juzga con la lectura de otra huella', async () => {
+    const ref = 'La Mundial de Seguros/500000001/pendiente/cedula.pdf';
+    await validadoConElArchivo('7-7-7000003001', HUMBERTO, {
+      ref,
+      analisisRef: ref,
+    });
+    const yusmari = await validadoConElArchivo('7-7-7000003109', YUSMARI, {
+      ref,
+      analisisRef: null,
+      archivoHash: 'f'.repeat(64),
+      ocrDatos: null,
+    });
+    const r = await svc.revisarConIa({ modo: 'completo' });
+    expect(r.sobrescritos).toBeUndefined();
+    expect(req(yusmari, 'cedula').estado).not.toBe('sobrescrito');
+  });
+
   it('el mismo archivo en dos pólizas de la MISMA persona sigue validado', async () => {
     const a = await validadoConElArchivo('7-7-7000003001', HUMBERTO);
     const b = await validadoConElArchivo('9-7-7000003002', HUMBERTO);

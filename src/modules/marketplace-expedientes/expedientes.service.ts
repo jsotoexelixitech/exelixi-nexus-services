@@ -2867,12 +2867,13 @@ export class ExpedientesService {
         where: { id: { in: g.map((f) => f.id) } },
       });
       // Lo ya leído de ese archivo en cualquiera de los expedientes (es el mismo archivo).
-      const leido = reqs.find(
+      const filaLeida = reqs.find(
         (r) =>
           r.ocrDatos &&
           typeof r.ocrDatos === 'object' &&
           numerosLeidos(rec(r.ocrDatos)).length > 0,
-      )?.ocrDatos;
+      );
+      const leido = filaLeida?.ocrDatos;
       for (const r of reqs) {
         if (revisados.has(r.id)) continue;
         if (r.decision === 'manual') continue;
@@ -2889,6 +2890,15 @@ export class ExpedientesService {
           numerosLeidos(rec(r.ocrDatos)).length > 0
             ? r.ocrDatos
             : null;
+        // v13: una fila VALIDADA sin lectura propia no se juzga con la de otra fila salvo que sea
+        // exactamente el mismo archivo (misma huella): en pendiente/ la ruta coincide pero cada una
+        // se validó con su archivo, antes de que otra emisión lo reemplazara.
+        if (
+          validadoIa &&
+          !propio &&
+          (!r.archivoHash || r.archivoHash !== filaLeida?.archivoHash)
+        )
+          continue;
         const lectura = rec(propio ?? leido);
         const exp = exps.get(r.expedienteId);
         if (!exp || !Object.keys(lectura).length) continue;
