@@ -37,6 +37,10 @@ import {
 } from './expedientes.historico';
 import { caracasParts } from './expedientes.domain';
 import {
+  ejecutarSincronizacionPagos,
+  vistaPagos,
+} from './expedientes.pagos';
+import {
   requireListaMonitor,
   requireSinSso,
   sesionPermitida,
@@ -305,6 +309,40 @@ router.post(
         ? await reanudarCargaHistorica(actor)
         : await reiniciarCargaHistorica(actor),
     );
+  }),
+);
+
+// ─── Estado de pago vs Sis2000 (solo pendiente → pagada; nunca correos) ────
+
+/** Estado de la sincronización y último resumen. Solo cifras. */
+router.get(
+  '/pagos',
+  internoLimiter,
+  sesion,
+  h(async (_req, res) => ok(res, await vistaPagos())),
+);
+
+/**
+ * Admin: `vistaPrevia` (por defecto true) consulta y cuenta sin escribir; con `vistaPrevia:false`
+ * marca como pagadas las cobradas en Sis2000.
+ */
+router.post(
+  '/pagos',
+  internoLimiter,
+  sesion,
+  admin,
+  sinSso,
+  h(async (req, res) => {
+    const vp = req.body?.vistaPrevia;
+    if (vp !== undefined && typeof vp !== 'boolean')
+      throw new AppError('vistaPrevia debe ser true o false.', 400);
+    const r = await ejecutarSincronizacionPagos({
+      vistaPrevia: vp !== false,
+      origen: 'manual',
+      actor: actorDe(req),
+    });
+    if ('omitido' in r) return fail(res, 409, r.motivo);
+    return ok(res, r);
   }),
 );
 
