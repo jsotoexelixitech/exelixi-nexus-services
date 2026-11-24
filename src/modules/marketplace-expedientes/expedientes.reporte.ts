@@ -403,6 +403,23 @@ export function emisorDeExpediente(
   );
 }
 
+/**
+ * Excel (24-nov-2026): solo el nombre del canal, sin el número del canal ni el del gestor.
+ * «OS_LMDS (canal 27-749)» → «OS_LMDS»; «Canal 27-749» (sin nombre) → «Canal 27». El productor no cambia.
+ */
+export function soloCanal(em: { texto: string | null; canal?: string | null }): string | null {
+  if (!em.texto || !em.canal) return em.texto;
+  return em.texto
+    .split(' · ')
+    .map((t) => {
+      if (t === `Canal ${em.canal}` || t.startsWith(`Canal ${em.canal}-`))
+        return `Canal ${em.canal}`;
+      const i = t.lastIndexOf(` (canal ${em.canal}`);
+      return i > 0 && t.endsWith(')') ? t.slice(0, i) : t;
+    })
+    .join(' · ');
+}
+
 /** El catálogo de nest-api hace falta para nombrar canales y resolver el canal de un gestor. */
 function necesitaCatalogo(e: Pick<Exp, 'area' | 'ccanalalt' | 'cgestor'>): boolean {
   return grupoArea(e.area) === 'canal' || !!e.ccanalalt || !!e.cgestor;
@@ -1109,7 +1126,10 @@ export async function armarReporteSimple(
     documento: documentoCompleto(e),
     producto: productoLabel(e),
     area: areaDeGrupo(grupoDe(e)),
-    canalOProductor: recortar(emitidaPor(e, catalogo), 80),
+    canalOProductor: recortar(
+      soloCanal(emisorDeExpediente(e, catalogo)) ?? PENDIENTE_CANAL,
+      80,
+    ),
     emitidaEn: e.emitidaEn,
   });
 
@@ -1132,7 +1152,11 @@ export async function armarReporteSimple(
     // Toda la cartera del reporte (incluidas las pendientes de canal, como «Emisor sin identificar»).
     porEmisor: rankingPorEmisor(
       cartera,
-      (e) => emisorDeExpediente(e, catalogo),
+      (e) => {
+        // Por canal (sin gestor): las pólizas de sus gestores suman en la misma fila.
+        const em = emisorDeExpediente(e, catalogo);
+        return { ...em, texto: soloCanal(em) };
+      },
       MAX_EMISORES_EXCEL,
     ),
     incompletos: incompletos.map((e) => {
