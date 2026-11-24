@@ -38,7 +38,8 @@ export type EstadoDocumental =
 
 /** Estado documental de las pólizas descartadas por la conciliación con el OCR. */
 export const ESTADO_DESCARTADA = 'descartada';
-export type EstadoPago = 'pagada' | 'pendiente';
+/** `anulada` = el recibo está anulado en Sis2000 (no la póliza). */
+export type EstadoPago = 'pagada' | 'pendiente' | 'anulada';
 export type ProductoExpediente = 'rcv' | 'personas' | 'patrimonial';
 export type AreaExpediente = 'canal' | 'gestor' | 'productor' | 'desconocida';
 
@@ -622,6 +623,7 @@ export function normalizarEstadoPago(...vals: unknown[]): EstadoPago {
       .toLowerCase();
     if (s === 'pendiente' || s === 'pendiente_pago') return 'pendiente';
     if (s === 'pagada' || s === 'pagado') return 'pagada';
+    if (s === 'anulada' || s === 'anulado') return 'anulada';
   }
   return 'pagada';
 }

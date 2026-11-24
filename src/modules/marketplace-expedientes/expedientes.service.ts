@@ -10,6 +10,11 @@ import type {
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import prisma from '../../config/prisma';
+import { marcaArchivoCambiado } from './expedientes.huellas';
+import {
+  ejecutarRifCompartido,
+  rifCompartidoActivo,
+} from './expedientes.rif-compartido';
 import {
   catalogoCanales,
   gestorCanalEnCache,
@@ -1014,7 +1019,10 @@ export class ExpedientesService {
     if (
       p.estadoPago &&
       exp.estadoPago !== datos.estadoPago &&
-      !(exp.estadoPago === 'pagada' && datos.estadoPago === 'pendiente')
+      !(
+        (exp.estadoPago === 'pagada' || exp.estadoPago === 'anulada') &&
+        datos.estadoPago === 'pendiente'
+      )
     )
       out.estadoPago = datos.estadoPago;
     if (!exp.infoDocumental && datos.infoDocumental) {
@@ -1711,6 +1719,12 @@ export class ExpedientesService {
               : null,
           validadoPor: r?.validadoPor ?? null,
           decision: r?.decision ?? null,
+          /** 24-nov: el archivo guardado hoy no es el que se analizó (solo aviso; no cambia el estado). */
+          archivoCambiado: r
+            ? marcaArchivoCambiado(r)
+              ? { ...marcaArchivoCambiado(r), validadoEn: r.validadoEn ?? null }
+              : null
+            : null,
         };
       }),
       intentos: e.intentos,
@@ -1762,6 +1776,24 @@ export class ExpedientesService {
       select: { expedienteId: true },
     });
     return Array.from(new Set(rows.map((r) => r.expedienteId)));
+  }
+
+  /** 24-nov: expedientes con un documento cuyo archivo guardado hoy ya no es el analizado. */
+  private async idsArchivoCambiado(): Promise<number[]> {
+    const rows = await prisma.mktExpedienteRequisito.findMany({
+      where: { estado: { in: ['validado', 'observado'] }, ref: { not: null } },
+      select: {
+        expedienteId: true,
+        diagnostico: true,
+        analisisRef: true,
+        ref: true,
+      },
+    });
+    return Array.from(
+      new Set(
+        rows.filter((r) => marcaArchivoCambiado(r)).map((r) => r.expedienteId),
+      ),
+    );
   }
 
   /** v1.3: expedientes con datos cambiados en el formulario (observado `datos_modificados`). */
@@ -1839,6 +1871,10 @@ export class ExpedientesService {
     if (q.sobrescritos) {
       const so = await this.idsSobrescritos();
       ids = ids ? ids.filter((i) => so.includes(i)) : so;
+    }
+    if (q.archivoCambiado) {
+      const ac = await this.idsArchivoCambiado();
+      ids = ids ? ids.filter((i) => ac.includes(i)) : ac;
     }
     if (q.canal || q.productor) {
       const delActor = await this.idsDeActor(where, q.canal, q.productor);
@@ -1966,6 +2002,8 @@ export class ExpedientesService {
       ).length,
       pagadas: exps.filter((e) => e.estadoPago === 'pagada').length,
       pendientesPago: exps.filter((e) => e.estadoPago === 'pendiente').length,
+      /** Recibo anulado en Sis2000 (no póliza anulada): fuera de pendientes de pago. */
+      reciboAnulado: exps.filter((e) => e.estadoPago === 'anulada').length,
       porValidar: exps.filter((e) => conEstado(e, 'recibido')).length,
       observados: exps.filter((e) => conEstado(e, 'observado')).length,
       /** Completos en los que la IA validó todos los documentos (sin intervención manual). */
@@ -1985,6 +2023,14 @@ export class ExpedientesService {
       conErrores: exps.filter((e) => conEstado(e, 'observado')).length,
       /** v12: con un documento sobrescrito por el de otra persona (hay que pedirlo de nuevo). */
       sobrescritos: exps.filter((e) => conEstado(e, 'sobrescrito')).length,
+      /** 24-nov: con un documento cuyo archivo guardado hoy ya no es el analizado. */
+      archivoCambiado: exps.filter((e) =>
+        (reqs.get(e.id) ?? []).some(
+          (r) =>
+            requisitosAplicables(e.producto, config).includes(r.tipo) &&
+            !!marcaArchivoCambiado(r),
+        ),
+      ).length,
       /** v1.3: con datos cambiados en el formulario respecto a lo que leyó el OCR al emitir. */
       datosModificados: exps.filter((e) =>
         (reqs.get(e.id) ?? []).some(
@@ -2479,6 +2525,17 @@ export class ExpedientesService {
       }
     }
 
+    // 24-nov: el RIF de la empresa tomadora ya validado en otra póliza cubre las demás (apagado por defecto).
+    if (opts.modo !== 'recibidos' && !opts.expedienteIds && rifCompartidoActivo()) {
+      try {
+        await ejecutarRifCompartido(this, { vistaPrevia: false });
+      } catch (err) {
+        logger.warn(
+          `[expedientes] RIF compartido: ${err instanceof Error ? err.message : 'error'}`,
+        );
+      }
+    }
+
     const estados: Prisma.MktExpedienteRequisitoWhereInput =
       opts.modo === 'recibidos'
         ? { estado: 'recibido' }
@@ -2957,7 +3014,7 @@ export class ExpedientesService {
    * trae cuando la póliza llegó sin bloque `expediente` (conciliación). Solo lectura; si falla, se
    * compara con lo del expediente como antes.
    */
-  private async contextoDe(exp: Exp): Promise<ContextoPoliza> {
+  async contextoDe(exp: Exp): Promise<ContextoPoliza> {
     // v7: la cotización del wizard (solo si es la única con ese cnpoliza), fuera de la huella.
     let cotizacion: DatosCotizacion | null = null;
     if (exp.producto === 'rcv' || exp.producto === 'personas') {
@@ -3148,7 +3205,8 @@ export class ExpedientesService {
     const r = await prisma.mktExpedienteRequisito.findUnique({
       where: { expedienteId_tipo: { expedienteId: id, tipo } },
     });
-    if (r?.estado === 'validado') {
+    // Lo validado con el RIF compartido de la empresa no impide cargar un RIF propio.
+    if (r?.estado === 'validado' && r.validadoPor !== 'rif_compartido') {
       throw new AppError('Ese documento ya está validado.', 409);
     }
     const [res] = await this.cargarDocumento({

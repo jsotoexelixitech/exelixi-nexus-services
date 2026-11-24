@@ -36,6 +36,9 @@ import {
   vistaHistorico,
 } from './expedientes.historico';
 import { caracasParts } from './expedientes.domain';
+import { revisarHuellas, vistaHuellas } from './expedientes.huellas';
+import { ejecutarRifCompartido } from './expedientes.rif-compartido';
+import { corregirNombres } from './expedientes.nombres';
 import {
   ejecutarSincronizacionPagos,
   vistaPagos,
@@ -343,6 +346,97 @@ router.post(
     });
     if ('omitido' in r) return fail(res, 409, r.motivo);
     return ok(res, r);
+  }),
+);
+
+
+// ─── Archivo cambiado después de analizarse (huella sha256 vía OCR; solo aviso, sin correos) ────
+
+/** Estado de la revisión y último resumen. Solo cifras. */
+router.get(
+  '/huellas',
+  internoLimiter,
+  sesion,
+  h(async (_req, res) => ok(res, await vistaHuellas())),
+);
+
+/**
+ * Admin: `vistaPrevia` (por defecto true) consulta y cuenta sin escribir; con `vistaPrevia:false`
+ * marca el aviso en los documentos cuyo archivo guardado hoy no es el analizado. No cambia estados.
+ */
+router.post(
+  '/huellas',
+  internoLimiter,
+  sesion,
+  admin,
+  sinSso,
+  h(async (req, res) => {
+    const vp = req.body?.vistaPrevia;
+    if (vp !== undefined && typeof vp !== 'boolean')
+      throw new AppError('vistaPrevia debe ser true o false.', 400);
+    const r = await revisarHuellas({
+      vistaPrevia: vp !== false,
+      origen: 'manual',
+      actor: actorDe(req),
+    });
+    if ('omitido' in r) return fail(res, 409, r.motivo);
+    return ok(res, r);
+  }),
+);
+/**
+ * Admin: RIF de la empresa tomadora ya validado en otra póliza cubre las demás de esa empresa.
+ * `vistaPrevia` (por defecto true) cuenta sin escribir. Solo el RIF jurídico; sin correos ni IA.
+ */
+router.post(
+  '/rif-compartido',
+  internoLimiter,
+  sesion,
+  admin,
+  sinSso,
+  h(async (req, res) => {
+    const vp = req.body?.vistaPrevia;
+    if (vp !== undefined && typeof vp !== 'boolean')
+      throw new AppError('vistaPrevia debe ser true o false.', 400);
+    if (!expedientesEnabled()) return fail(res, 409, 'EXPEDIENTES_ENABLED apagado');
+    const r = await ejecutarRifCompartido(svc, {
+      vistaPrevia: vp !== false,
+      actor: actorDe(req),
+    });
+    if ('omitido' in r) return fail(res, 409, r.motivo);
+    return ok(res, r);
+  }),
+);
+
+/**
+ * Admin: corrige nombre y apellido mal guardados desde Sis2000 (solo lectura en nest-api) para una
+ * lista corta de pólizas. `vistaPrevia` (por defecto true) propone sin escribir. Si corregir cambiaría
+ * el documento o la clave del asegurado, queda «requiere decisión» y no se aplica.
+ */
+router.post(
+  '/nombres',
+  internoLimiter,
+  sesion,
+  admin,
+  sinSso,
+  h(async (req, res) => {
+    const vp = req.body?.vistaPrevia;
+    if (vp !== undefined && typeof vp !== 'boolean')
+      throw new AppError('vistaPrevia debe ser true o false.', 400);
+    const polizas = req.body?.polizas;
+    if (!Array.isArray(polizas) || polizas.some((p) => typeof p !== 'string'))
+      throw new AppError('polizas debe ser una lista de textos.', 400);
+    const empresaId = req.body?.empresaId;
+    if (empresaId !== undefined && !Number.isInteger(empresaId))
+      throw new AppError('empresaId debe ser un número entero.', 400);
+    return ok(
+      res,
+      await corregirNombres({
+        polizas,
+        vistaPrevia: vp !== false,
+        actor: actorDe(req),
+        empresaId,
+      }),
+    );
   }),
 );
 

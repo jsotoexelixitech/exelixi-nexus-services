@@ -26,6 +26,10 @@ import {
   tareaNocturna,
 } from './expedientes.tareas';
 import { detenerSchedulerPagos, iniciarSchedulerPagos } from './expedientes.pagos';
+import {
+  detenerSchedulerHuellas,
+  iniciarSchedulerHuellas,
+} from './expedientes.huellas';
 import { expedientesService as svc } from './expedientes.service';
 import type { JobName } from './expedientes.schema';
 
@@ -395,6 +399,7 @@ export function iniciarSchedulerExpedientes(): void {
   }, TICK_MS);
   historicoTimer.unref();
   iniciarSchedulerPagos();
+  iniciarSchedulerHuellas();
   logger.info('[expedientes] scheduler de tareas activo (hora Caracas)');
 }
 
@@ -409,6 +414,7 @@ export function _resetScheduler(): void {
   if (iaArranque) clearTimeout(iaArranque);
   if (historicoTimer) clearInterval(historicoTimer);
   detenerSchedulerPagos();
+  detenerSchedulerHuellas();
   timer = null;
   iaTimer = null;
   iaArranque = null;

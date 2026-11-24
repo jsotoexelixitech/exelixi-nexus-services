@@ -426,6 +426,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       'Qué falta / Observación',
       'Intentos de correo',
       'Último correo',
+      'Archivo cambiado',
       'No enviar correos',
     ]);
     expect(inc.getCell('A1').font?.bold).toBe(true);
@@ -453,6 +454,7 @@ describe('reporte nocturno simple: cifras y Excel adjunto', () => {
       'Licencia ilegible; faltan cédula y certificado de circulación',
       0,
       'Sin correo válido · 07/11/2026',
+      '',
       'No',
     ]);
     expect(fi[2]).toEqual(

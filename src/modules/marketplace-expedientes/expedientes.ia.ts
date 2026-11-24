@@ -1183,6 +1183,22 @@ export function archivoEsDeLaPoliza(
   return nums.some((n) => docs.some((d) => documentosIguales(d, n, true)));
 }
 
+/**
+ * 24-nov: ¿la lectura principal del archivo es el RIF jurídico (J/G/C) del tomador de la póliza?
+ * Compara el número normalizado (con o sin dígito verificador). Una cédula nunca cumple.
+ */
+export function lecturaEsRifDelTomador(
+  ex: Record<string, unknown>,
+  ctx: ContextoPoliza,
+): boolean {
+  const tom = tomadorJuridico(ctx);
+  if (!tom?.documento) return false;
+  const { principal } = separarLecturas(ex);
+  if (!esJuridico(tipoDeLectura(principal))) return false;
+  const doc = numeroDocumento(tom.documento);
+  return numerosLeidos(principal).some((n) => documentosIguales(doc, n, true));
+}
+
 /** v11: ¿lo leído trae un RIF de persona jurídica (J/G/C)? (también en `documentosAdicionales`). */
 export function leyoRifDelTomador(ex: Record<string, unknown>): boolean {
   return esJuridico(tipoDeLectura(separarLecturas(ex).principal));

@@ -258,7 +258,7 @@ export type OcrPorCanalUpdate = z.infer<typeof ocrPorCanalUpdateSchema>;
 
 export const listQuerySchema = z.object({
   estadoDoc: z.enum(['completo', 'incompleto', 'sin_informacion']).optional(),
-  estadoPago: z.enum(['pagada', 'pendiente']).optional(),
+  estadoPago: z.enum(['pagada', 'pendiente', 'anulada']).optional(),
   // C / G / P (centidad del SSO) o el nombre del área.
   area: z.string().trim().max(20).optional(),
   producto: z.enum(['rcv', 'personas', 'patrimonial']).optional(),
@@ -299,6 +299,16 @@ export const listQuerySchema = z.object({
   ),
   /** v12: solo pólizas con un documento sobrescrito por el de otra persona (pedirlo de nuevo). */
   sobrescritos: z.preprocess(
+    (v) =>
+      v === true || v === 'true' || v === '1'
+        ? true
+        : v === false || v === 'false' || v === '0'
+          ? false
+          : undefined,
+    z.boolean().optional(),
+  ),
+  /** 24-nov: solo pólizas con un documento cuyo archivo guardado hoy ya no es el analizado. */
+  archivoCambiado: z.preprocess(
     (v) =>
       v === true || v === 'true' || v === '1'
         ? true
