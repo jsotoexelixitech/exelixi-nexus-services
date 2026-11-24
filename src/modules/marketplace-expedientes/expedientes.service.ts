@@ -1014,7 +1014,10 @@ export class ExpedientesService {
     if (
       p.estadoPago &&
       exp.estadoPago !== datos.estadoPago &&
-      !(exp.estadoPago === 'pagada' && datos.estadoPago === 'pendiente')
+      !(
+        (exp.estadoPago === 'pagada' || exp.estadoPago === 'anulada') &&
+        datos.estadoPago === 'pendiente'
+      )
     )
       out.estadoPago = datos.estadoPago;
     if (!exp.infoDocumental && datos.infoDocumental) {
@@ -1966,6 +1969,8 @@ export class ExpedientesService {
       ).length,
       pagadas: exps.filter((e) => e.estadoPago === 'pagada').length,
       pendientesPago: exps.filter((e) => e.estadoPago === 'pendiente').length,
+      /** Recibo anulado en Sis2000 (no póliza anulada): fuera de pendientes de pago. */
+      reciboAnulado: exps.filter((e) => e.estadoPago === 'anulada').length,
       porValidar: exps.filter((e) => conEstado(e, 'recibido')).length,
       observados: exps.filter((e) => conEstado(e, 'observado')).length,
       /** Completos en los que la IA validó todos los documentos (sin intervención manual). */

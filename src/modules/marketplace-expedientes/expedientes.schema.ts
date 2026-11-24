@@ -258,7 +258,7 @@ export type OcrPorCanalUpdate = z.infer<typeof ocrPorCanalUpdateSchema>;
 
 export const listQuerySchema = z.object({
   estadoDoc: z.enum(['completo', 'incompleto', 'sin_informacion']).optional(),
-  estadoPago: z.enum(['pagada', 'pendiente']).optional(),
+  estadoPago: z.enum(['pagada', 'pendiente', 'anulada']).optional(),
   // C / G / P (centidad del SSO) o el nombre del área.
   area: z.string().trim().max(20).optional(),
   producto: z.enum(['rcv', 'personas', 'patrimonial']).optional(),

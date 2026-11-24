@@ -7,8 +7,13 @@
  * adrecibos) y los cobrados (iestadorec = 'C') pasan a `pagada`.
  *
  * Reglas:
- * - Solo pendiente → pagada, con UPDATE condicional (`where estadoPago = 'pendiente'`). Nunca al revés.
- * - P (pendiente) sin cambio; A (anulado), otros valores y no encontrados: sin cambio, contados aparte.
+ * - UPDATE siempre condicional al estado leído (`where estadoPago = <antes>`).
+ * - C (cobrado) → pagada (desde pendiente o anulada: si luego se cobra, vuelve a pagada).
+ * - A (recibo anulado, NO póliza anulada): se piden también los otros recibos de la misma póliza
+ *   (nest-api `incluirOtros`). Otro cobrado → pagada; otro pendiente → pendiente; ninguno → anulada.
+ *   Sin la lista `otros` (nest-api viejo) no se marca nada.
+ * - P (pendiente) → pendiente (si estaba anulada y el recibo se reabrió); otros valores y no encontrados:
+ *   sin cambio, contados aparte.
  * - Si el cnpoliza que devuelve Sis2000 no es el del expediente: no se marca y se cuenta.
  * - NO envía correos, NO toca documentos ni requisitos, NO llama a la IA. Deja un evento
  *   `estado_pago_sis2000` en el historial del expediente (origen Sis2000, fecha de cobro).
@@ -101,6 +106,8 @@ export interface ReciboSis2000 {
   cnpoliza: string | null;
   iestadorec: string | null;
   fcobro: string | null;
+  /** Otros recibos de la misma póliza (solo si se pidió `incluirOtros`); undefined = sin información. */
+  otros?: { cnrecibo: string; iestadorec: string | null }[];
 }
 
 export function urlRecibosEstado(nestUrl: string): string {
@@ -131,7 +138,7 @@ export async function consultarRecibos(
       Accept: 'application/json',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ recibos }),
+    body: JSON.stringify({ recibos, incluirOtros: true }),
     signal: AbortSignal.timeout(TIMEOUT_NEST_MS),
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -152,6 +159,14 @@ export async function consultarRecibos(
       cnpoliza: texto(r.cnpoliza),
       iestadorec: texto(r.iestadorec)?.toUpperCase() ?? null,
       fcobro: texto(r.fcobro),
+      otros: Array.isArray(r.otros)
+        ? (r.otros as unknown[])
+            .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+            .map((o) => ({
+              cnrecibo: texto(o.cnrecibo) ?? '',
+              iestadorec: texto(o.iestadorec)?.toUpperCase() ?? null,
+            }))
+        : undefined,
     });
   }
   return out;
@@ -170,9 +185,18 @@ export interface ResumenPagos {
   cobrados: number;
   /** De los cobrados, los que la actualización condicional realmente cambió. */
   actualizados: number;
-  /** P en Sis2000: siguen pendientes. */
+  /** P en Sis2000. */
   pendientes: number;
+  /** Recibos anulados (A) con póliza coincidente. */
   anulados: number;
+  /** De los A: póliza que queda (o quedaría) como «Recibo anulado». */
+  aAnulada: number;
+  /** De los A: otro recibo de la póliza está cobrado → pagada. */
+  anuladoConOtroCobrado: number;
+  /** De los A: otro recibo de la póliza sigue pendiente → pendiente. */
+  anuladoConOtroPendiente: number;
+  /** De los A: nest-api no devolvió los otros recibos; no se marca nada. */
+  anuladoSinInfoOtros: number;
   noEncontrados: number;
   /** Estado de Sis2000 distinto de P/C/A. */
   otrosEstados: number;
@@ -197,6 +221,10 @@ function resumenVacio(
     actualizados: 0,
     pendientes: 0,
     anulados: 0,
+    aAnulada: 0,
+    anuladoConOtroCobrado: 0,
+    anuladoConOtroPendiente: 0,
+    anuladoSinInfoOtros: 0,
     noEncontrados: 0,
     otrosEstados: 0,
     polizaDistinta: 0,
@@ -295,14 +323,14 @@ export async function ejecutarSincronizacionPagos(
     for (let lote = 0; lote < cfg.maxLotes; lote++) {
       const exps = await prisma.mktExpediente.findMany({
         where: {
-          estadoPago: 'pendiente',
+          estadoPago: { in: ['pendiente', 'anulada'] },
           id: { gt: ultimoId },
           estadoDocumental: { not: ESTADO_DESCARTADA },
           AND: [{ cnrecibo: { not: null } }, { cnrecibo: { not: '' } }],
         },
         orderBy: { id: 'asc' },
         take: LOTE_PAGOS,
-        select: { id: true, cnpoliza: true, cnrecibo: true },
+        select: { id: true, cnpoliza: true, cnrecibo: true, estadoPago: true },
       });
       if (!exps.length) break;
       ultimoId = exps[exps.length - 1].id;
@@ -334,15 +362,7 @@ export async function ejecutarSincronizacionPagos(
           continue;
         }
         const estado = rec.iestadorec;
-        if (estado === 'P') {
-          resumen.pendientes++;
-          continue;
-        }
-        if (estado === 'A') {
-          resumen.anulados++;
-          continue;
-        }
-        if (estado !== 'C') {
+        if (estado !== 'P' && estado !== 'C' && estado !== 'A') {
           resumen.otrosEstados++;
           continue;
         }
@@ -350,12 +370,36 @@ export async function ejecutarSincronizacionPagos(
           resumen.polizaDistinta++;
           continue;
         }
-        resumen.cobrados++;
+        let destino: 'pagada' | 'pendiente' | 'anulada' | null = null;
+        if (estado === 'C') {
+          resumen.cobrados++;
+          destino = 'pagada';
+        } else if (estado === 'P') {
+          resumen.pendientes++;
+          destino = 'pendiente';
+        } else {
+          resumen.anulados++;
+          const otros = rec.otros;
+          if (!otros) {
+            resumen.anuladoSinInfoOtros++;
+          } else if (otros.some((o) => o.iestadorec === 'C')) {
+            resumen.anuladoConOtroCobrado++;
+            destino = 'pagada';
+          } else if (otros.some((o) => o.iestadorec === 'P')) {
+            resumen.anuladoConOtroPendiente++;
+            destino = 'pendiente';
+          } else {
+            resumen.aAnulada++;
+            destino = 'anulada';
+          }
+        }
+        const antes = e.estadoPago;
+        if (!destino || destino === antes) continue;
         if (opts.vistaPrevia) continue;
-        // Condicional: nunca pisa a un expediente que ya no está pendiente.
+        // Condicional: nunca pisa a un expediente cuyo estado cambió entretanto.
         const r = await prisma.mktExpediente.updateMany({
-          where: { id: e.id, estadoPago: 'pendiente' },
-          data: { estadoPago: 'pagada' },
+          where: { id: e.id, estadoPago: antes },
+          data: { estadoPago: destino },
         });
         if (r.count === 1) {
           resumen.actualizados++;
@@ -367,9 +411,10 @@ export async function ejecutarSincronizacionPagos(
               detalle: {
                 origen: 'Sis2000',
                 cnrecibo: rec.cnrecibo,
+                iestadorec: estado,
                 fcobro: rec.fcobro,
-                estadoPagoAntes: 'pendiente',
-                estadoPagoDespues: 'pagada',
+                estadoPagoAntes: antes,
+                estadoPagoDespues: destino,
               } as Prisma.InputJsonValue,
             },
           });

@@ -122,7 +122,7 @@ describe('sincronización de pagos', () => {
     expect(url).toBe('http://nest.local/api/v1/canal/recibos-estado');
     expect(init.method).toBe('POST');
     expect(init.headers.apikey).toBe('k-pagos');
-    expect(JSON.parse(init.body)).toEqual({ recibos: ['5-1100385748'] });
+    expect(JSON.parse(init.body)).toEqual({ recibos: ['5-1100385748'], incluirOtros: true });
   });
 
   it('pendiente (P) sin cambio', async () => {
@@ -134,16 +134,62 @@ describe('sincronización de pagos', () => {
     expect(db.mktExpedienteEvento._rows()).toHaveLength(0);
   });
 
-  it('anulado (A) y no encontrado: sin cambio y contados aparte', async () => {
+  it('anulado (A) sin otros recibos: «anulada»; no encontrado: sin cambio', async () => {
     await exp(1, 'A-1', 'R1');
     await exp(2, 'A-2', 'R2');
-    vi.stubGlobal('fetch', nest([sis('R1', 'A-1', 'A')]));
+    vi.stubGlobal('fetch', nest([{ ...sis('R1', 'A-1', 'A'), otros: [] }]));
     const r: any = await ejecutarSincronizacionPagos({ vistaPrevia: false });
     expect(r.anulados).toBe(1);
+    expect(r.aAnulada).toBe(1);
     expect(r.noEncontrados).toBe(1);
+    expect(r.actualizados).toBe(1);
+    expect(estadoPago(1)).toBe('anulada');
+    expect(estadoPago(2)).toBe('pendiente');
+  });
+
+  it('recibo anulado pero otro recibo cobrado → pagada; otro pendiente → sigue pendiente', async () => {
+    await exp(1, 'A-1', 'R1');
+    await exp(2, 'A-2', 'R2');
+    vi.stubGlobal(
+      'fetch',
+      nest([
+        { ...sis('R1', 'A-1', 'A'), otros: [{ cnrecibo: 'R9', iestadorec: 'C' }] },
+        { ...sis('R2', 'A-2', 'A'), otros: [{ cnrecibo: 'R8', iestadorec: 'P' }] },
+      ]),
+    );
+    const r: any = await ejecutarSincronizacionPagos({ vistaPrevia: false });
+    expect(r.anuladoConOtroCobrado).toBe(1);
+    expect(r.anuladoConOtroPendiente).toBe(1);
+    expect(estadoPago(1)).toBe('pagada');
+    expect(estadoPago(2)).toBe('pendiente');
+  });
+
+  it('anulado sin la lista de otros recibos (nest-api viejo): no marca nada', async () => {
+    await exp(1, 'A-1', 'R1');
+    vi.stubGlobal('fetch', nest([sis('R1', 'A-1', 'A')]));
+    const r: any = await ejecutarSincronizacionPagos({ vistaPrevia: false });
+    expect(r.anuladoSinInfoOtros).toBe(1);
+    expect(estadoPago(1)).toBe('pendiente');
+  });
+
+  it('una anulada vuelve a pagada si luego se cobra, y queda evento; sin correos', async () => {
+    await exp(1, 'A-1', 'R1', { estadoPago: 'anulada' });
+    vi.stubGlobal('fetch', nest([sis('R1', 'A-1', 'C', '2026-11-20')]));
+    const r: any = await ejecutarSincronizacionPagos({ vistaPrevia: false });
+    expect(r.actualizados).toBe(1);
+    expect(estadoPago(1)).toBe('pagada');
+    const ev = db.mktExpedienteEvento._rows().find((x: any) => x.tipo === 'estado_pago_sis2000');
+    expect(ev.detalle.estadoPagoAntes).toBe('anulada');
+    expect(db.mktExpedienteCorreo?._rows?.().length ?? 0).toBe(0);
+  });
+
+  it('vista previa de anuladas no escribe', async () => {
+    await exp(1, 'A-1', 'R1');
+    vi.stubGlobal('fetch', nest([{ ...sis('R1', 'A-1', 'A'), otros: [] }]));
+    const r: any = await ejecutarSincronizacionPagos({ vistaPrevia: true });
+    expect(r.aAnulada).toBe(1);
     expect(r.actualizados).toBe(0);
     expect(estadoPago(1)).toBe('pendiente');
-    expect(estadoPago(2)).toBe('pendiente');
   });
 
   it('póliza distinta: no marca y lo cuenta; misma póliza con espacios sí', async () => {
