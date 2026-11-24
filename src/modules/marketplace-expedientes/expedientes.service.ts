@@ -960,7 +960,12 @@ export class ExpedientesService {
     }
     if (p.producto && exp.producto !== datos.producto)
       out.producto = datos.producto;
-    if (p.estadoPago && exp.estadoPago !== datos.estadoPago)
+    // Un aviso posterior con «pendiente» no devuelve a pendiente una póliza ya cobrada (sync con Sis2000).
+    if (
+      p.estadoPago &&
+      exp.estadoPago !== datos.estadoPago &&
+      !(exp.estadoPago === 'pagada' && datos.estadoPago === 'pendiente')
+    )
       out.estadoPago = datos.estadoPago;
     if (!exp.infoDocumental && datos.infoDocumental) {
       out.infoDocumental = true;
