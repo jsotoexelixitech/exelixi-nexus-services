@@ -68,8 +68,8 @@ const CEDULA_TITULAR = {
 };
 
 describe('v11: tomador persona jurídica — el documento del tomador es su RIF', () => {
-  it('la versión del comparador sube a 11 (se recomparan los observados)', () => {
-    expect(VERSION_COMPARADOR).toBe(11);
+  it('la versión del comparador es 12 (v12: documentos por persona; se recomparan los observados)', () => {
+    expect(VERSION_COMPARADOR).toBe(12);
   });
 
   it('RIF que coincide (sin guiones ni dígito verificador; «C.A» frente a «CA») → validado', () => {
@@ -140,8 +140,9 @@ describe('v11: tomador persona jurídica — el documento del tomador es su RIF'
       enPoliza: 'RAMON PEREZ GARCIA',
       enDocumento: 'JHON PEREZ GARCIA',
     });
+    // v12: texto simple (qué falta y de quién es el archivo cargado).
     expect(d.resumen).toBe(
-      'El tomador es una persona jurídica (J-****5039) y en el archivo no se leyó su RIF: se leyó la cédula del titular (V-****1805). Revisar si el archivo trae el RIF del tomador (p. ej. en otra página). Difiere (informativo, no cuenta): nombre en la cédula adicional (titular).',
+      'Falta el RIF de la empresa tomadora. El archivo cargado es la cédula del titular (V-****1805). Difiere (informativo, no cuenta): nombre en la cédula adicional (titular).',
     );
     const e = estadoPorDiagnostico(d);
     expect(e.estado).toBe('observado');
@@ -262,7 +263,7 @@ describe('v11: tomador persona jurídica — el documento del tomador es su RIF'
   });
 });
 
-describe('v11: tomador persona natural — sin cambios (v4)', () => {
+describe('v12: tomador persona natural con un titular distinto — el documento del tomador es el suyo', () => {
   const ctxNatural = () =>
     contextoPoliza({
       producto: 'personas',
@@ -306,14 +307,41 @@ describe('v11: tomador persona natural — sin cambios (v4)', () => {
     expect(d.comparadoCon).toBe('tomador');
   });
 
-  it('cédula del titular en el espacio del tomador → validado, como antes (v4)', () => {
+  it('cédula del titular en el espacio del tomador → Revisar: falta la cédula del tomador (nunca Errado)', () => {
     const d = diagnosticar(
       'cedula',
       lectura({ ...CEDULA_TITULAR, nombre: 'RAMON' }),
       ctxNatural(),
     );
-    expect(d.resultado).toBe('coincide');
-    expect(d.comparadoCon).toBe('asegurado');
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toBe(
+      'Falta la cédula del tomador. El archivo cargado es la cédula del titular (V-****1805).',
+    );
+    // La misma cédula, en el requisito del titular, coincide.
+    expect(
+      diagnosticar(
+        'cedula_titular',
+        lectura({ ...CEDULA_TITULAR, nombre: 'RAMON' }),
+        ctxNatural(),
+      ),
+    ).toMatchObject({ resultado: 'coincide', comparadoCon: 'asegurado' });
+  });
+
+  it('cédula del tomador en el espacio del titular → Revisar: falta la cédula del titular', () => {
+    const d = diagnosticar(
+      'cedula_titular',
+      lectura({
+        tipoDoc: 'V',
+        identificacion: '11225322',
+        nombre: 'CARLOS',
+        apellido: 'RUIZ',
+      }),
+      ctxNatural(),
+    );
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toBe(
+      'Falta la cédula del titular. El archivo cargado es la cédula del tomador (V-****5322).',
+    );
   });
 
   it('número del titular con otro nombre → sigue siendo no coincide (v4)', () => {
@@ -333,6 +361,21 @@ describe('v11: tomador persona natural — sin cambios (v4)', () => {
       ctxNatural(),
     );
     expect(d.resultado).toBe('no_coincide');
+  });
+
+  it('sin titular aparte en la póliza (un solo documento): vale la de cualquier persona natural (v4)', () => {
+    const ctx = contextoPoliza({
+      producto: 'personas',
+      snapshot: { tomador: SNAP_EMPRESA.asegurado },
+      aseguradoTipoDoc: 'V',
+      aseguradoDocumento: '17671805',
+    });
+    const d = diagnosticar(
+      'cedula',
+      lectura({ ...CEDULA_TITULAR, nombre: 'RAMON' }),
+      ctx,
+    );
+    expect(d.resultado).toBe('coincide');
   });
 
   it('la póliza no trae al tomador: se compara con las personas que sí trae (como antes)', () => {

@@ -22,6 +22,7 @@ import {
   emailValido,
   esPendiente,
   requisitosAplicables,
+  estadoSinFila,
 } from './expedientes.domain';
 import { correoCodigo, entregarCorreo } from './expedientes.mail';
 import {
@@ -140,7 +141,7 @@ export async function expedientesAccesibles(
     requisitosAplicables(e.producto, config).some((t) =>
       esPendiente(
         reqs.find((r) => r.expedienteId === e.id && r.tipo === t)?.estado ??
-          'faltante',
+          estadoSinFila(t),
       ),
     ),
   );

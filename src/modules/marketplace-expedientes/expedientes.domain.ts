@@ -10,6 +10,18 @@ export const ESTADOS_REQUISITO = [
   'validado',
   /** La emisión no informó documentos (registro viejo o personas sin wizard). No es faltante. */
   'sin_informacion',
+  /**
+   * v12: el requisito no se exige en esta póliza (personas: titular que es el mismo tomador,
+   * Viajero, o expediente registrado antes de separar los documentos por persona). No es faltante
+   * ni pendiente y no genera correos; si llega el archivo, pasa a recibido y se revisa.
+   */
+  'no_aplica',
+  /**
+   * v12: el archivo guardado es de otra persona (antes del arreglo del OCR del 23-nov, `pendiente/`
+   * usaba nombres fijos y una emisión pisaba el documento de otra). Hay que pedirlo de nuevo: no se
+   * vuelve a analizar ese archivo ni se envían correos automáticos por él.
+   */
+  'sobrescrito',
 ] as const;
 export type EstadoRequisito = (typeof ESTADOS_REQUISITO)[number];
 
@@ -63,7 +75,10 @@ export const DEFAULT_CONFIG: ExpedientesConfig = {
   horaResumen: '23:00',
   requisitosPorProducto: {
     rcv: ['cedula', 'licencia', 'certificado'],
-    personas: ['cedula'],
+    // v12: documento del tomador (cédula o RIF) y cédula del titular por separado, como los pide el
+    // OCR al emitir. La del titular depende de la póliza (ver `exigenciaRequisito`). La del
+    // beneficiario no se pide: la emisión no manda los beneficiarios a Nexus.
+    personas: ['cedula', 'cedula_titular'],
     patrimonial: ['cedula'],
   },
 };
@@ -82,6 +97,135 @@ export const REQUISITO_LABELS: Record<string, string> = {
 
 export function requisitoLabel(tipo: string): string {
   return REQUISITO_LABELS[tipo] ?? tipo;
+}
+
+// ─── v12: documentos por persona (personas) ─────────────────────────────────
+
+function recD(v: unknown): Record<string, unknown> {
+  return v && typeof v === 'object' && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+function txtD(v: unknown): string | null {
+  if (typeof v !== 'string' && typeof v !== 'number') return null;
+  const s = String(v).trim();
+  return s || null;
+}
+
+/** Tipo (V/E/J/G/P/C) y número sin ceros a la izquierda de una persona del snapshot. */
+function identPersona(v: unknown): { tipo: string | null; numero: string } {
+  const r = recD(v);
+  const raw =
+    txtD(r.documento) ??
+    txtD(r.identificacion) ??
+    txtD(r.cedula) ??
+    txtD(r.rif);
+  const id = separarIdentificacion(raw);
+  const tipo =
+    txtD(r.tipoDoc ?? r.tipo_doc)
+      ?.toUpperCase()
+      .slice(0, 1) ??
+    id.tipoDoc ??
+    null;
+  return { tipo, numero: (id.documento ?? '').replace(/^0+(?=.)/, '') };
+}
+
+const TIPOS_JURIDICOS = new Set(['J', 'G', 'C']);
+
+/** Expediente con lo necesario para saber qué documentos de personas se exigen. */
+export interface ExpedienteRequisitos {
+  producto: string;
+  snapshot?: unknown;
+  aseguradoTipoDoc?: string | null;
+  aseguradoDocumento?: string | null;
+}
+
+/** v12: el tomador de la póliza es persona jurídica (J/G/C), según el snapshot del expediente. */
+export function tomadorEsJuridico(e: ExpedienteRequisitos): boolean {
+  const tom = identPersona(recD(e.snapshot).tomador);
+  return !!tom.tipo && TIPOS_JURIDICOS.has(tom.tipo);
+}
+
+/** v12: Viajero (cproducto 25/26, como el OCR, o plan Viajero): la cédula del titular es opcional. */
+export function esViajero(e: ExpedienteRequisitos): boolean {
+  const snap = recD(e.snapshot);
+  const cprod = txtD(snap.cproducto);
+  if (cprod === '25' || cprod === '26') return true;
+  return [snap.plan, snap.planNombre].some((p) => /VIAJ/i.test(txtD(p) ?? ''));
+}
+
+/** Requisitos que dependen de la póliza (solo personas). */
+export const REQUISITOS_CONDICIONALES = new Set(['cedula_titular']);
+
+export const MOTIVO_NO_APLICA_TITULAR_TOMADOR =
+  'El titular es el mismo tomador: vale el documento del tomador.';
+export const MOTIVO_NO_APLICA_SIN_DATOS =
+  'La póliza no trae en Nexus un titular distinto del tomador: vale el documento del tomador.';
+export const MOTIVO_NO_APLICA_VIAJERO =
+  'Viajero: la cédula del titular es opcional.';
+/** Expediente registrado antes de separar los documentos por persona: no se pide el requisito nuevo. */
+export const MOTIVO_NO_APLICA_PREVIO =
+  'Requisito agregado después de registrar la póliza: no se pide (si llega el documento, se revisa).';
+
+/**
+ * v12: ¿se exige este requisito en la póliza? En personas, la cédula del titular no se exige si el
+ * titular es el mismo tomador (misma cédula: un solo documento) ni en Viajero (opcional en el OCR).
+ * Sin titular distinto del tomador en el expediente, tampoco. Lo demás se exige siempre.
+ */
+export function exigenciaRequisito(
+  tipo: string,
+  e: ExpedienteRequisitos,
+): { exigido: boolean; motivo: string | null } {
+  if (e.producto !== 'personas' || !REQUISITOS_CONDICIONALES.has(tipo))
+    return { exigido: true, motivo: null };
+  if (esViajero(e)) return { exigido: false, motivo: MOTIVO_NO_APLICA_VIAJERO };
+  const snap = recD(e.snapshot);
+  const tom = identPersona(snap.tomador);
+  const delSnap = identPersona(snap.titular ?? snap.asegurado);
+  const tit = delSnap.numero
+    ? delSnap
+    : identPersona({
+        tipoDoc: e.aseguradoTipoDoc,
+        documento: e.aseguradoDocumento,
+      });
+  // RIF personal del tomador natural (cédula + dígito verificador) = la misma persona.
+  const mismaPersona =
+    !!tom.numero &&
+    !TIPOS_JURIDICOS.has(tom.tipo ?? '') &&
+    (tom.numero === tit.numero ||
+      (tom.numero.length === tit.numero.length + 1 &&
+        tom.numero.startsWith(tit.numero)) ||
+      (tit.numero.length === tom.numero.length + 1 &&
+        tit.numero.startsWith(tom.numero)));
+  if (mismaPersona)
+    return { exigido: false, motivo: MOTIVO_NO_APLICA_TITULAR_TOMADOR };
+  // Sin el tomador o sin el titular en Nexus no se sabe si son personas distintas: un solo documento.
+  if (!tom.numero || !tit.numero)
+    return { exigido: false, motivo: MOTIVO_NO_APLICA_SIN_DATOS };
+  return { exigido: true, motivo: null };
+}
+
+/**
+ * Estado de un requisito aplicable que aún no tiene fila: faltante (o sin_informacion si la emisión
+ * no informó documentos). v12: un condicional sin fila es de un expediente anterior → no_aplica.
+ */
+export function estadoSinFila(tipo: string, infoDocumental = true): string {
+  if (REQUISITOS_CONDICIONALES.has(tipo)) return 'no_aplica';
+  return infoDocumental ? 'faltante' : 'sin_informacion';
+}
+
+/**
+ * v12: rótulo del requisito en la póliza. En personas, `cedula` es el documento del tomador: «RIF
+ * del tomador» si es persona jurídica, «Cédula del tomador» si es natural. RCV y patrimoniales igual.
+ */
+export function requisitoLabelDe(
+  tipo: string,
+  e: ExpedienteRequisitos,
+): string {
+  if (tipo === 'cedula' && e.producto === 'personas')
+    return tomadorEsJuridico(e) ? 'RIF del tomador' : 'Cédula del tomador';
+  return requisitoLabel(tipo);
 }
 
 /** Los gestores trabajan para los canales: su alcance es el de canales. */
@@ -116,11 +260,24 @@ export function mergeConfig(raw: unknown): ExpedientesConfig {
       : [],
     horaDiaria: r.horaDiaria || DEFAULT_CONFIG.horaDiaria,
     horaResumen: r.horaResumen || DEFAULT_CONFIG.horaResumen,
-    requisitosPorProducto: {
+    requisitosPorProducto: conTitularEnPersonas({
       ...DEFAULT_CONFIG.requisitosPorProducto,
       ...(r.requisitosPorProducto ?? {}),
-    },
+    }),
   };
+}
+
+/**
+ * v12: la configuración guardada antes del cambio trae personas = ['cedula'] (el portal no edita
+ * los requisitos: se guardaba el valor por defecto de entonces). Se agrega la cédula del titular.
+ */
+function conTitularEnPersonas(
+  req: Record<string, string[]>,
+): Record<string, string[]> {
+  const personas = Array.isArray(req.personas) ? req.personas : null;
+  if (!personas?.includes('cedula') || personas.includes('cedula_titular'))
+    return req;
+  return { ...req, personas: [...personas, 'cedula_titular'] };
 }
 
 // ─── Producto, área y alcance ──────────────────────────────────────────────
@@ -443,7 +600,11 @@ export function calcularEstadoDocumental(
 ): EstadoDocumental {
   if (!aplicables.length) return 'incompleto';
   const porTipo = new Map(requisitos.map((r) => [r.tipo, r.estado]));
-  const estados = aplicables.map((t) => porTipo.get(t) ?? 'faltante');
+  // v12: lo que no se exige en la póliza (no_aplica) no cuenta: ni falta ni completa.
+  const estados = aplicables
+    .map((t) => porTipo.get(t) ?? estadoSinFila(t))
+    .filter((e) => e !== 'no_aplica');
+  if (!estados.length) return 'incompleto';
   if (estados.every((e) => e === 'validado')) return 'completo';
   if (estados.every((e) => e === 'validado' || e === 'sin_informacion'))
     return 'sin_informacion';

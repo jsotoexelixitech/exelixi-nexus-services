@@ -39,6 +39,7 @@ import {
   proximoEnvio,
   requisitoLabel,
   requisitosAplicables,
+  estadoSinFila,
 } from './expedientes.domain';
 import { conDatosModificados, diagnosticoVigente } from './expedientes.ia';
 import { estaExcluido, nombreActorDeSnapshot } from './expedientes.service';
@@ -249,9 +250,10 @@ function aplicablesDe(
   config: ExpedientesConfig,
 ): ReqLike[] {
   const porTipo = new Map(reqs.map((r) => [r.tipo, r]));
-  // Igual que calcularEstadoDocumental: el requisito aplicable sin fila cuenta como faltante.
+  // Igual que calcularEstadoDocumental: el requisito aplicable sin fila cuenta como faltante (v12:
+  // salvo el condicional de un expediente anterior, que no aplica).
   return requisitosAplicables(e.producto, config).map(
-    (tipo) => porTipo.get(tipo) ?? { tipo, estado: 'faltante' },
+    (tipo) => porTipo.get(tipo) ?? { tipo, estado: estadoSinFila(tipo) },
   );
 }
 
@@ -273,10 +275,18 @@ export function observacionCorta(
   let principal: string;
   switch (categoriaIncompleto(e, reqs, config)) {
     case 'conErrores':
-      principal = observados
-        .filter((r) => !conDatosModificados(r))
-        .map(problemaObservado)
-        .join('; ');
+      principal = [
+        // v12: documento pisado por el de otra persona (antes del arreglo del OCR del 23-nov).
+        ...aplicables
+          .filter((r) => r.estado === 'sobrescrito')
+          .map(
+            (r) =>
+              `${mayus(docCorto(r.tipo))}: documento sobrescrito, pedirlo de nuevo`,
+          ),
+        ...observados
+          .filter((r) => !conDatosModificados(r))
+          .map(problemaObservado),
+      ].join('; ');
       break;
     case 'datosCambiados':
       principal = `Datos cambiados en la póliza (${enLista(observados.map((r) => docCorto(r.tipo)))})`;
@@ -580,6 +590,7 @@ export async function armarReporteDiario(
     for (const r of aplicablesDe(e, reqsDe(e), config)) {
       if (r.estado === 'faltante') distribucion.faltantes++;
       else if (r.estado === 'recibido') distribucion.porValidar++;
+      else if (r.estado === 'sobrescrito') distribucion.inconsistentes++;
       else if (r.estado === 'observado') {
         if (esIlegible(r)) distribucion.ilegibles++;
         else distribucion.inconsistentes++;

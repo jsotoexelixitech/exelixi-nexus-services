@@ -10,7 +10,11 @@
  * - solo_en_revision: todo lo pendiente ya está cargado y espera revisión; no hay nada que pedir.
  */
 import type { MktExpedienteRequisito } from '@prisma/client';
-import { ExpedientesConfig, requisitosAplicables } from './expedientes.domain';
+import {
+  estadoSinFila,
+  ExpedientesConfig,
+  requisitosAplicables,
+} from './expedientes.domain';
 import { conDatosModificados } from './expedientes.ia';
 
 export type MotivoSolicitud = 'faltan_documentos' | 'corregir' | 'ambos';
@@ -35,7 +39,8 @@ export function clasificarExpediente(
   let datosModificados = false;
   for (const tipo of requisitosAplicables(producto, config)) {
     const r = porTipo.get(tipo);
-    const estado = r?.estado ?? 'faltante';
+    // v12: lo que no se exige (no_aplica) y el sobrescrito no se le piden al cliente por correo.
+    const estado = r?.estado ?? estadoSinFila(tipo);
     if (estado === 'faltante') faltan = true;
     else if (estado === 'observado') {
       // La decisión manual del administrador prevalece: si lo observó, el cliente debe corregir.

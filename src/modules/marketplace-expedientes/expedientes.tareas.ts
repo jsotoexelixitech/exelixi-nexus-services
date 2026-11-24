@@ -15,6 +15,7 @@ import {
   etapaDebida,
   ExpedientesConfig,
   requisitosAplicables,
+  estadoSinFila,
   whitelistPermite,
 } from './expedientes.domain';
 import {
@@ -72,7 +73,7 @@ function pendientesDe(
   config: ExpedientesConfig,
 ): string[] {
   return requisitosAplicables(e.producto, config).filter((t) =>
-    esPendiente(reqs.find((r) => r.tipo === t)?.estado ?? 'faltante'),
+    esPendiente(reqs.find((r) => r.tipo === t)?.estado ?? estadoSinFila(t)),
   );
 }
 

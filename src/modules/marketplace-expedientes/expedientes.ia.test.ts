@@ -1124,7 +1124,7 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     expect(r.motivo).toMatch(/^Revisar: /);
   });
 
-  it('v4: cédula del asegurado (otra persona natural de la póliza) → coincide con el asegurado', async () => {
+  it('v12: cédula del titular en el documento del tomador → Revisar (falta la del tomador) y cubre la cédula del titular', async () => {
     lee(REF_P, {
       identificacion: '20304050',
       tipoDoc: 'V',
@@ -1137,8 +1137,19 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
       ASEGURADO,
     );
     const d = req(id, 'cedula').diagnostico;
-    expect(d.resultado).toBe('coincide');
-    expect(d.comparadoCon).toBe('asegurado');
+    expect(d.resultado).toBe('sin_certeza');
+    expect(d.resumen).toBe(
+      'Falta la cédula del tomador. El archivo cargado es la cédula del titular (V-****4050).',
+    );
+    // El mismo archivo valida la cédula del titular, sin otra llamada al OCR.
+    expect(req(id, 'cedula_titular')).toMatchObject({
+      estado: 'validado',
+      decision: 'ia',
+      ref: REF_P,
+    });
+    expect(req(id, 'cedula_titular').diagnostico.resumen).toMatch(
+      /Tomado del mismo archivo que cédula del tomador\.$/,
+    );
   });
 
   it('roles: cedula_titular → asegurado; cedula_beneficiario → beneficiario o el siguiente disponible', () => {
@@ -1171,7 +1182,9 @@ describe('v2: comparación por rol y recálculo al desplegar (falsos errores en 
     ).toMatchObject({ resultado: 'coincide', comparadoCon: 'asegurado' });
     expect(
       diagnosticar('cedula_titular', lect('11225322', 'CARLOS'), ctx).resumen,
-    ).toBe('El documento corresponde al tomador, no al asegurado.');
+    ).toBe(
+      'Falta la cédula del titular. El archivo cargado es la cédula del tomador (V-****5322).',
+    );
     expect(
       diagnosticar('cedula_beneficiario', lect('30111222', 'LUIS'), ctx),
     ).toMatchObject({ resultado: 'coincide', comparadoCon: 'beneficiario' });
@@ -1769,7 +1782,7 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
     expect(d.resultado).toBe('sin_certeza');
     expect(d.comparadoCon).toBe('tomador');
     expect(d.resumen).toMatch(
-      /no se leyó su RIF: se leyó la cédula del titular/,
+      /^Falta el RIF de la empresa tomadora\. El archivo cargado es la cédula del titular \(V-\*\*\*\*8363\)\./,
     );
   });
 
@@ -1888,7 +1901,9 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
       ctx,
     );
     expect(d.resultado).toBe('sin_certeza');
-    expect(estadoPorDiagnostico(d).motivo).toMatch(/^Revisar: .*jurídica/);
+    expect(estadoPorDiagnostico(d).motivo).toMatch(
+      /^Revisar: Falta el RIF de la empresa tomadora\. El archivo cargado es un pasaporte \(P-\*\*\*\*1551\) que no es de nadie de esta póliza\./,
+    );
   });
 
   it('datos insuficientes: tomador J sin titular ni asegurados → sin_certeza (revisión), nunca validado', () => {
@@ -1905,7 +1920,7 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
     );
     expect(d.resultado).toBe('sin_certeza');
     expect(d.resumen).toContain(
-      'no se leyó su RIF: se leyó una cédula (V-****8363) que no es de nadie de la póliza',
+      'Falta el RIF de la empresa tomadora. El archivo cargado es una cédula (V-****8363) que no es de nadie de esta póliza.',
     );
   });
 
@@ -2096,7 +2111,9 @@ describe('v4: personas — la cédula se compara contra todas las personas de la
     expect(llamadasAnalizar()).toHaveLength(llamadas + 1);
     expect(req(id, 'cedula').estado).toBe('observado');
     expect(req(id, 'cedula').diagnostico.resultado).toBe('sin_certeza');
-    expect(req(id, 'cedula').motivo).toMatch(/^Revisar: .*no se leyó su RIF/);
+    expect(req(id, 'cedula').motivo).toMatch(
+      /^Revisar: Falta el RIF de la empresa tomadora\. El archivo cargado es la cédula del titular/,
+    );
     await svc.revisarConIa({ modo: 'completo' });
     expect(llamadasAnalizar()).toHaveLength(llamadas + 1);
   });
