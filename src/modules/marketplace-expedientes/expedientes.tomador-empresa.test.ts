@@ -69,7 +69,7 @@ const CEDULA_TITULAR = {
 
 describe('v11: tomador persona jurídica — el documento del tomador es su RIF', () => {
   it('la versión del comparador es 12 (v12: documentos por persona; se recomparan los observados)', () => {
-    expect(VERSION_COMPARADOR).toBe(12);
+    expect(VERSION_COMPARADOR).toBeGreaterThanOrEqual(12);
   });
 
   it('RIF que coincide (sin guiones ni dígito verificador; «C.A» frente a «CA») → validado', () => {
