@@ -91,6 +91,17 @@ describe('corregir nombres desde Sis2000', () => {
     expect(db.mktExpedienteNotificacion._rows()).toHaveLength(0);
   });
 
+  it('corrige también al tomador con ESE documento y nunca a otra persona', async () => {
+    const malo = { tipoDoc: 'V', documento: '13307292', nombre: 'Masculino', apellido: 'RODRIGUEZ PEÑA' };
+    const otra = { tipoDoc: 'V', documento: '9999999', nombre: 'ANA', apellido: 'PEREZ' };
+    await exp(1, '18-1-0000139376', { snapshot: { tomador: malo, asegurado: otra } });
+    vi.stubGlobal('fetch', nest([SIS]));
+    await corregirNombres({ polizas: ['18-1-0000139376'], vistaPrevia: false });
+    expect(fila(1).snapshot.tomador.nombre).toBe('JUAN CARLOS');
+    expect(fila(1).snapshot.tomador.documento).toBe('13307292');
+    expect(fila(1).snapshot.asegurado).toEqual(otra);
+  });
+
   it('el tipo de documento no cuadra con Sis2000: requiere decisión y no aplica', async () => {
     await exp(1, '18-1-0000144583', { aseguradoTipoDoc: 'J' });
     vi.stubGlobal('fetch', nest([SIS]));

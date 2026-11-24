@@ -144,7 +144,7 @@ function rec(v: unknown): Record<string, unknown> {
     : {};
 }
 
-/** Igual al asegurado/titular del snapshot con ese mismo documento: corrige su nombre y apellido. */
+/** Tomador, asegurado y titular del snapshot con ese MISMO documento: corrige su nombre y apellido. */
 function snapshotCorregido(
   snapshot: unknown,
   docNum: string,
@@ -153,7 +153,7 @@ function snapshotCorregido(
 ): Record<string, unknown> | null {
   const snap = { ...rec(snapshot) };
   let cambio = false;
-  for (const k of ['asegurado', 'titular']) {
+  for (const k of ['tomador', 'asegurado', 'titular']) {
     const p = rec(snap[k]);
     const d = numeroDocumento(
       String(p.documento ?? p.identificacion ?? p.cedula ?? ''),
