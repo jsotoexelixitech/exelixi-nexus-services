@@ -245,7 +245,7 @@ describe('v12: requisitos por persona (reglas puras)', () => {
   });
 
   it('la versión del comparador es 12', () => {
-    expect(VERSION_COMPARADOR).toBe(12);
+    expect(VERSION_COMPARADOR).toBeGreaterThanOrEqual(12);
   });
 
   it('personas pide el documento del tomador y la cédula del titular; RCV no cambia', () => {
@@ -534,7 +534,7 @@ describe('v12: caso real tomador empresa (4 pólizas con el mismo archivo de pen
         motivo:
           'Revisar: Falta el RIF de la empresa tomadora. El archivo cargado es la cédula del titular (V-****0001).',
       });
-      expect(req(id, 'cedula').diagnostico.comparador).toBe(12);
+      expect(req(id, 'cedula').diagnostico.comparador).toBe(VERSION_COMPARADOR);
       // La cédula del titular (requisito nuevo) se cubre con el mismo archivo.
       expect(req(id, 'cedula_titular')).toMatchObject({
         estado: 'validado',

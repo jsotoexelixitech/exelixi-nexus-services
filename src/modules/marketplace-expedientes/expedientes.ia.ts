@@ -82,8 +82,16 @@ export type MotivoAnalisis =
  *   v<12 se recomparan con lo ya leído; el documento del tomador empresa sin RIF ni documentos
  *   adicionales se vuelve a leer UNA vez, salvo que el archivo esté compartido (ver
  *   expedientes.service: documento sobrescrito).
+ * v13 (24-nov, falsa alarma prod 18-1-0000139376): el nombre o apellido REGISTRADO de una persona
+ *   natural que es solo sexo o estado civil («Masculino») cuenta como sin dato, igual que en lo
+ *   leído; si el registro trae el nombre completo en un solo campo y empieza por esa palabra
+ *   («Masculino RODRIGUEZ PEÑA», expediente creado por conciliación), se quita solo si el número del
+ *   documento coincide y el resto es el apellido leído. Se compara el valor completo: una razón
+ *   social («Venezolana de Instrumentación…») y los tomadores J/G/C no se tocan. Sin ningún nombre
+ *   que comparar queda «Revisar». Siempre exige el número: una cédula ajena nunca valida. Los
+ *   observados v<13 se recomparan con lo ya leído (sin OCR ni correos).
  */
-export const VERSION_COMPARADOR = 12;
+export const VERSION_COMPARADOR = 13;
 
 /**
  * La v4 a la v7 solo cambian contra quién se compara en personas y licencias (y el orden
@@ -295,6 +303,22 @@ const SEXO_ESTADO_CIVIL = new Set([
   'EDO',
   'ESTADO',
   'CIVIL',
+]);
+
+/**
+ * v13: palabras que, delante del nombre completo registrado, son el sexo o el estado civil y no un
+ * nombre. Sin «SOLTERO» ni «CASADO» (apellidos reales) ni letras sueltas; nunca nacionalidad
+ * («VENEZOLANA DE …» es una razón social legítima).
+ */
+const PREFIJO_SEXO_ESTADO_CIVIL = new Set([
+  'MASCULINO',
+  'FEMENINO',
+  'SOLTERA',
+  'CASADA',
+  'DIVORCIADO',
+  'DIVORCIADA',
+  'CONCUBINO',
+  'CONCUBINA',
 ]);
 
 /** v10: ¿el nombre o apellido leído es solo sexo o estado civil? Entonces no se leyó el nombre. */
@@ -1453,8 +1477,44 @@ function compararPersona(
   const tk = rifJuridico ? tokensRazonSocial : tokens;
   const nOcr = tk(original(clavesNombre));
   const aOcr = tokens(original(['apellido', 'apellidos']));
-  const nPol = tk(persona?.nombre);
-  const aPol = tokens(persona?.apellido);
+  // v13: el nombre REGISTRADO de una persona natural que es solo sexo o estado civil («Masculino»)
+  // es sin dato, igual que en lo leído. Nunca en empresas (razón social) ni por prefijo suelto.
+  let nombrePol = persona?.nombre ?? null;
+  let apellidoPol = persona?.apellido ?? null;
+  /** v13: palabra registrada como nombre que no es un nombre. */
+  let noEsNombre: string | null = null;
+  if (persona && !rifJuridico && !esJuridico(persona.tipoDoc)) {
+    if (nombrePol && esSexoOEstadoCivil(nombrePol)) {
+      noEsNombre = nombrePol;
+      nombrePol = null;
+    }
+    if (apellidoPol && esSexoOEstadoCivil(apellidoPol)) {
+      noEsNombre ??= apellidoPol;
+      apellidoPol = null;
+    }
+    // Nombre completo en un solo campo que empieza por el sexo o el estado civil («Masculino
+    // RODRIGUEZ PEÑA»): se quita esa palabra solo con cédula V/E, el mismo número y si el resto es
+    // el apellido leído; lo que queda es el apellido.
+    const palabras = (nombrePol ?? '').trim().split(/\s+/).filter(Boolean);
+    const resto = palabras.slice(1).join(' ');
+    if (
+      !apellidoPol &&
+      palabras.length >= 2 &&
+      PREFIJO_SEXO_ESTADO_CIVIL.has(normTexto(palabras[0])) &&
+      ['V', 'E'].includes(String(persona.tipoDoc ?? '').toUpperCase()) &&
+      !!docOcr &&
+      documentosIguales(docDe(persona), docOcr, conDv) &&
+      aOcr.length > 0 &&
+      tokens(resto).length > 0 &&
+      contenido(tokens(resto), aOcr)
+    ) {
+      noEsNombre = palabras[0];
+      nombrePol = null;
+      apellidoPol = resto;
+    }
+  }
+  const nPol = tk(nombrePol);
+  const aPol = tokens(apellidoPol);
   const todosOcr = [...nOcr, ...aOcr];
   const todosPol = [...nPol, ...aPol];
   const comunes = todosOcr.filter((t) =>
@@ -1467,7 +1527,7 @@ function compararPersona(
     campo(
       'nombre',
       rifJuridico ? 'Razón social' : 'Nombre',
-      persona?.nombre ?? null,
+      nombrePol,
       original(clavesNombre),
       () => contenido(nOcr, nPol) || completo,
     ),
@@ -1477,7 +1537,7 @@ function compararPersona(
       campo(
         'apellido',
         'Apellido',
-        persona?.apellido ?? null,
+        apellidoPol,
         original(['apellido', 'apellidos']),
         () => contenido(aOcr, aPol) || completo,
       ),
@@ -1630,6 +1690,14 @@ function compararPersona(
       ? 'No se pudo comparar: la póliza no trae los asegurados en Nexus y el documento no es del tomador; puede ser de un asegurado.'
       : 'No se pudo comparar: la póliza no trae los datos del conductor en Nexus y la licencia no es del tomador ni del titular; puede ser del conductor habitual.';
   }
+  // v13: nombre registrado que no es un nombre (sexo o estado civil): se dice en simple y no hace
+  // fallar el documento; sin ningún nombre con que confirmar, revisar (el número solo no valida).
+  if (noEsNombre) {
+    const dicho = `En el registro el nombre del ${rol ?? 'titular'} quedó como «${noEsNombre}», que no es un nombre: no se tomó en cuenta.`;
+    if (!aviso && !todosPol.length && docCampo.coincide === true)
+      aviso = `El número del documento coincide. ${dicho} Falta confirmar el nombre.`;
+    else if (!aviso) nota = nota ? `${nota} ${dicho}` : dicho;
+  }
   const crudos: Crudos = {
     tipoDoc: { pol: persona?.tipoDoc ?? null, doc: tipoOcr ?? null },
     documento: {
@@ -1637,11 +1705,11 @@ function compararPersona(
       doc: docOcr || null,
     },
     nombre: {
-      pol: persona?.nombre ?? null,
+      pol: nombrePol,
       doc: original(clavesNombre),
     },
     apellido: {
-      pol: persona?.apellido ?? null,
+      pol: apellidoPol,
       doc: original(['apellido', 'apellidos']),
     },
   };
