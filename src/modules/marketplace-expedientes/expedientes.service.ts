@@ -1647,7 +1647,8 @@ export class ExpedientesService {
     });
     const canalResuelto = emisor.canal ?? (ccanal || null);
     const canalNombre = canalResuelto
-      ? (nombres?.canal?.get(normalizarCodigoActor(canalResuelto) ?? '') ?? null)
+      ? (nombres?.canal?.get(normalizarCodigoActor(canalResuelto) ?? '') ??
+        null)
       : null;
     const vendedor = emisor.texto ?? 'Pendiente de identificar canal';
     const noEnviarPor = exclusionesQueAplican(e, exclusiones);
@@ -1659,7 +1660,9 @@ export class ExpedientesService {
       producto: e.producto,
       // Grupo visible resuelto (un gestor de productor cuenta en Productores).
       area: emisor.grupo ?? areaVisible(e.area),
-      areaCodigo: (emisor.grupo ? AREA_CODIGO[emisor.grupo] : AREA_CODIGO[e.area]) ?? null,
+      areaCodigo:
+        (emisor.grupo ? AREA_CODIGO[emisor.grupo] : AREA_CODIGO[e.area]) ??
+        null,
       vendedor,
       vendedorDetalle: {
         centidad: e.centidad,
@@ -2809,7 +2812,8 @@ export class ExpedientesService {
    * expedientes de titulares distintos, y cuya lectura no es de nadie de su póliza, queda
    * «sobrescrito»: hay que pedirlo de nuevo. No llama al OCR (usa lo ya leído de ese archivo en
    * cualquiera de los expedientes), no envía correos ni toca decisiones manuales. Las pólizas del
-   * dueño real del archivo no se marcan.
+   * dueño real del archivo no se marcan. v13: también saca de «validado» lo que la IA validó con
+   * el archivo de otra persona.
    */
   async detectarSobrescritos(): Promise<{ grupos: number; marcados: number }> {
     const filas = await prisma.mktExpedienteRequisito.findMany({
@@ -2872,7 +2876,12 @@ export class ExpedientesService {
       for (const r of reqs) {
         if (revisados.has(r.id)) continue;
         if (r.decision === 'manual') continue;
-        if (r.estado !== 'recibido' && r.estado !== 'observado') continue;
+        // v13: también lo que la IA dejó VALIDADO con el archivo de otra persona (7-7-7000003109 y
+        // 9-7-7000002320 quedaron validadas con la cédula de un tercero): una cédula ajena nunca
+        // queda validada. Lo validado a mano no se toca.
+        const validadoIa = r.estado === 'validado' && r.decision === 'ia';
+        if (r.estado !== 'recibido' && r.estado !== 'observado' && !validadoIa)
+          continue;
         const propio =
           r.ocrDatos &&
           typeof r.ocrDatos === 'object' &&
@@ -4003,7 +4012,8 @@ export class ExpedientesService {
       }));
     });
     // Contador para el equipo: pólizas sin canal ni productor identificado (solo el número).
-    let pendientesCanal: { pendientes: number; polizas: string[] } | null = null;
+    let pendientesCanal: { pendientes: number; polizas: string[] } | null =
+      null;
     try {
       pendientesCanal = await contarPendientesCanal();
     } catch {
