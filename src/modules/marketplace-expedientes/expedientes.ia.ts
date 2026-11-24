@@ -90,6 +90,8 @@ export type MotivoAnalisis =
  *   social («Venezolana de Instrumentación…») y los tomadores J/G/C no se tocan. Sin ningún nombre
  *   que comparar queda «Revisar». Siempre exige el número: una cédula ajena nunca valida. Los
  *   observados v<13 se recomparan con lo ya leído (sin OCR ni correos).
+ *   Nombre de pila distinto con el mismo número y el apellido coincidente (7-7-7000003208: «JHON»
+ *   en la cédula, «RAMON» registrado): misma persona, queda `difiere` (informativo).
  */
 export const VERSION_COMPARADOR = 13;
 
@@ -2302,6 +2304,24 @@ export function diagnosticar(
         tolerado,
       })
     : [];
+  // v13 (7-7-7000003208: «JHON» en la cédula y «RAMON» registrado, mismo número): con el mismo
+  // número de documento y el apellido coincidente es la misma persona; un nombre de pila distinto
+  // (el OCR devuelve el primer nombre y la póliza puede traer el segundo) es informativo. Va
+  // después de los datos cambiados en el formulario, que se siguen avisando. Con otro número u otro
+  // apellido no aplica: una cédula ajena sigue saliendo errada.
+  if (
+    TIPOS_PERSONA.has(tipo) &&
+    campos.some((c) => c.campo === 'documento' && c.coincide === true) &&
+    campos.some((c) => c.campo === 'apellido' && c.coincide === true)
+  ) {
+    for (const c of campos) {
+      if (c.campo === 'nombre' && c.estado === 'no_coincide') {
+        c.estado = 'difiere';
+        c.coincide = false;
+      }
+    }
+  }
+
   // v9: un dígito distinto y lo que leyó el OCR del wizard al escanear: si leyó lo mismo que trae
   // la póliza, la diferencia es entre lecturas del documento; si leyó otro número, la cédula se
   // cambió en el formulario.
