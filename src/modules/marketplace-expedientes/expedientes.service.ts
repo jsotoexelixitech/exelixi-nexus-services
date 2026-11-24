@@ -10,6 +10,7 @@ import type {
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import prisma from '../../config/prisma';
+import { marcaArchivoCambiado } from './expedientes.huellas';
 import {
   catalogoCanales,
   gestorCanalEnCache,
@@ -1714,6 +1715,12 @@ export class ExpedientesService {
               : null,
           validadoPor: r?.validadoPor ?? null,
           decision: r?.decision ?? null,
+          /** 24-nov: el archivo guardado hoy no es el que se analizó (solo aviso; no cambia el estado). */
+          archivoCambiado: r
+            ? marcaArchivoCambiado(r)
+              ? { ...marcaArchivoCambiado(r), validadoEn: r.validadoEn ?? null }
+              : null
+            : null,
         };
       }),
       intentos: e.intentos,
@@ -1765,6 +1772,24 @@ export class ExpedientesService {
       select: { expedienteId: true },
     });
     return Array.from(new Set(rows.map((r) => r.expedienteId)));
+  }
+
+  /** 24-nov: expedientes con un documento cuyo archivo guardado hoy ya no es el analizado. */
+  private async idsArchivoCambiado(): Promise<number[]> {
+    const rows = await prisma.mktExpedienteRequisito.findMany({
+      where: { estado: { in: ['validado', 'observado'] }, ref: { not: null } },
+      select: {
+        expedienteId: true,
+        diagnostico: true,
+        analisisRef: true,
+        ref: true,
+      },
+    });
+    return Array.from(
+      new Set(
+        rows.filter((r) => marcaArchivoCambiado(r)).map((r) => r.expedienteId),
+      ),
+    );
   }
 
   /** v1.3: expedientes con datos cambiados en el formulario (observado `datos_modificados`). */
@@ -1842,6 +1867,10 @@ export class ExpedientesService {
     if (q.sobrescritos) {
       const so = await this.idsSobrescritos();
       ids = ids ? ids.filter((i) => so.includes(i)) : so;
+    }
+    if (q.archivoCambiado) {
+      const ac = await this.idsArchivoCambiado();
+      ids = ids ? ids.filter((i) => ac.includes(i)) : ac;
     }
     if (q.canal || q.productor) {
       const delActor = await this.idsDeActor(where, q.canal, q.productor);
@@ -1990,6 +2019,14 @@ export class ExpedientesService {
       conErrores: exps.filter((e) => conEstado(e, 'observado')).length,
       /** v12: con un documento sobrescrito por el de otra persona (hay que pedirlo de nuevo). */
       sobrescritos: exps.filter((e) => conEstado(e, 'sobrescrito')).length,
+      /** 24-nov: con un documento cuyo archivo guardado hoy ya no es el analizado. */
+      archivoCambiado: exps.filter((e) =>
+        (reqs.get(e.id) ?? []).some(
+          (r) =>
+            requisitosAplicables(e.producto, config).includes(r.tipo) &&
+            !!marcaArchivoCambiado(r),
+        ),
+      ).length,
       /** v1.3: con datos cambiados en el formulario respecto a lo que leyó el OCR al emitir. */
       datosModificados: exps.filter((e) =>
         (reqs.get(e.id) ?? []).some(

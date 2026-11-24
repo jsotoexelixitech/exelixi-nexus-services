@@ -16,6 +16,7 @@ import type {
 } from '@prisma/client';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
+import { marcaArchivoCambiado } from './expedientes.huellas';
 import { CatalogoCanales, catalogoCanales } from './expedientes.canales';
 import {
   CATEGORIAS_INCOMPLETO,
@@ -855,6 +856,8 @@ export interface FilaIncompleto {
   intentos: number;
   ultimoCorreo: string;
   noEnviar: boolean;
+  /** 24-nov: algún documento cuyo archivo guardado hoy ya no es el analizado. */
+  archivoCambiado?: boolean;
 }
 
 export interface FilaCompletado {
@@ -1143,6 +1146,7 @@ export async function armarReporteSimple(
           ? `${ultimoResultadoLabel(u.resultado)} · ${fechaLocal(caracasParts(u.createdAt).fecha)}`
           : ultimoResultadoLabel(null),
         noEnviar: estaExcluido(e, exclusiones),
+        archivoCambiado: (reqs.get(e.id) ?? []).some((r) => !!marcaArchivoCambiado(r)),
       };
     }),
     completados: completados.map((e) => ({

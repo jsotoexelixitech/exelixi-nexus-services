@@ -36,6 +36,7 @@ import {
   vistaHistorico,
 } from './expedientes.historico';
 import { caracasParts } from './expedientes.domain';
+import { revisarHuellas, vistaHuellas } from './expedientes.huellas';
 import {
   ejecutarSincronizacionPagos,
   vistaPagos,
@@ -346,6 +347,40 @@ router.post(
   }),
 );
 
+
+// ─── Archivo cambiado después de analizarse (huella sha256 vía OCR; solo aviso, sin correos) ────
+
+/** Estado de la revisión y último resumen. Solo cifras. */
+router.get(
+  '/huellas',
+  internoLimiter,
+  sesion,
+  h(async (_req, res) => ok(res, await vistaHuellas())),
+);
+
+/**
+ * Admin: `vistaPrevia` (por defecto true) consulta y cuenta sin escribir; con `vistaPrevia:false`
+ * marca el aviso en los documentos cuyo archivo guardado hoy no es el analizado. No cambia estados.
+ */
+router.post(
+  '/huellas',
+  internoLimiter,
+  sesion,
+  admin,
+  sinSso,
+  h(async (req, res) => {
+    const vp = req.body?.vistaPrevia;
+    if (vp !== undefined && typeof vp !== 'boolean')
+      throw new AppError('vistaPrevia debe ser true o false.', 400);
+    const r = await revisarHuellas({
+      vistaPrevia: vp !== false,
+      origen: 'manual',
+      actor: actorDe(req),
+    });
+    if ('omitido' in r) return fail(res, 409, r.motivo);
+    return ok(res, r);
+  }),
+);
 // ─── Acceso (el portal decide si muestra el monitor) ───────────────────────
 
 router.get(

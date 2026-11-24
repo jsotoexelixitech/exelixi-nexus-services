@@ -307,6 +307,16 @@ export const listQuerySchema = z.object({
           : undefined,
     z.boolean().optional(),
   ),
+  /** 24-nov: solo pólizas con un documento cuyo archivo guardado hoy ya no es el analizado. */
+  archivoCambiado: z.preprocess(
+    (v) =>
+      v === true || v === 'true' || v === '1'
+        ? true
+        : v === false || v === 'false' || v === '0'
+          ? false
+          : undefined,
+    z.boolean().optional(),
+  ),
   page: z.coerce.number().int().min(1).max(10_000).optional(),
   pageSize: z.coerce.number().int().min(1).max(200).optional(),
 });

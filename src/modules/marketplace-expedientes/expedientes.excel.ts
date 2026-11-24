@@ -92,6 +92,11 @@ export const COLUMNAS_INCOMPLETOS: Columna<FilaIncompleto>[] = [
   { header: 'Intentos de correo', width: 12, valor: (f) => f.intentos },
   { header: 'Último correo', width: 28, valor: (f) => f.ultimoCorreo },
   {
+    header: 'Archivo cambiado',
+    width: 14,
+    valor: (f) => (f.archivoCambiado ? 'Sí' : ''),
+  },
+  {
     header: 'No enviar correos',
     width: 12,
     valor: (f) => (f.noEnviar ? 'Sí' : 'No'),

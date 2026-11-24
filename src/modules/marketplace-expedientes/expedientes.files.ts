@@ -393,3 +393,49 @@ export async function localizarEnOcr(params: {
     documentos,
   };
 }
+
+export interface HuellaArchivo {
+  existe: boolean;
+  hash: string | null;
+}
+
+/** Máximo de rutas por llamada a la ruta de huellas del OCR. */
+export const MAX_HUELLAS_OCR = 100;
+
+/**
+ * Huellas sha256 de archivos YA guardados: POST {OCR_INTERNAL_URL}/api/internal/expedientes/huellas
+ * JSON { refs } (hasta 100). Solo lectura y sin IA. Devuelve ref -> { existe, hash }. Cualquier
+ * respuesta no 200 es error (el llamador no cambia nada y reintenta después).
+ */
+export async function huellasEnOcr(
+  refs: string[],
+): Promise<Map<string, HuellaArchivo>> {
+  const cfg = ocrInternalConfig();
+  if (!cfg) throw new OcrNoConfiguradoError();
+  if (refs.length === 0) return new Map();
+  if (refs.length > MAX_HUELLAS_OCR)
+    throw new Error(`Máximo ${MAX_HUELLAS_OCR} rutas por consulta de huellas.`);
+  const res = await fetch(`${cfg.url}/api/internal/expedientes/huellas`, {
+    method: 'POST',
+    headers: {
+      'x-expediente-key': cfg.key,
+      'content-type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ refs }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok || body.ok !== true || !Array.isArray(body.resultados)) {
+    throw new Error(`OCR (huellas) respondió HTTP ${res.status}`);
+  }
+  const out = new Map<string, HuellaArchivo>();
+  for (const raw of body.resultados as unknown[]) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.ref !== 'string') continue;
+    const hash = typeof r.hash === 'string' ? r.hash.slice(0, 64) : null;
+    out.set(r.ref, { existe: r.existe === true && !!hash, hash });
+  }
+  return out;
+}
