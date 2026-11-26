@@ -17,6 +17,11 @@ vi.mock('../../utils/logger', () => ({
 import prisma from '../../config/prisma';
 import {
   _resetPerdidas,
+  canalEmitePendiente,
+  crearBuscadorNest,
+  llegoAEmision,
+  mapearFilaNest,
+  sesionCandidata,
   claveTandaPerdidas,
   conciliarEmisionesPerdidas,
   datosDeSesion,
@@ -317,5 +322,176 @@ describe('scheduler y bandera', () => {
       estado: 'ok',
     });
     expect(db.emision._rows()).toHaveLength(0);
+  });
+});
+
+describe('sesiones con emisión pendiente del canal (sin pago verificado)', () => {
+  // Sesión 7311 (26-nov-2026): RCV, canal 30/subcanal 23, punto Autovial 490, productor 80080.
+  // Avanzó a Emisión 16:19:37 y a Pagos 16:19:45 sin pago verificado; póliza emitida 16:19:49 UTC.
+  const jd7311 = () =>
+    wizard({
+      paymentVerified: false,
+      vehicle: { placa: 'AK9C34D', serial: '8YZRGV6C9TD000027' },
+      metadata: {
+        cproductor: '80080',
+        ccanalalt: '30',
+        cscanalalt: '23',
+        allowPendingEmission: 'true',
+        tipoEmision: 'emit',
+      },
+      metadataCanal: undefined,
+      _flowMeta: { moduloGroupId: 1, current: 4, history: [1, 2, 3] },
+    });
+  // Relativos al reloj real: el prisma falso fija updatedAt con Date.now().
+  const inicio7311 = inicio; // 16:19:37 del caso real
+  const ahora7311 = ahora;
+  const p7311 = () =>
+    poliza({
+      cnpoliza: '18-1-0000147613',
+      placa: 'AK9C34D',
+      serial: '8YZRGV6C9TD000027',
+      cproductor: 80080,
+      ccanalalt: 30,
+      fingreso: new Date(inicio.getTime() + 12_000).toISOString(), // 16:19:49 (12 s después)
+    });
+
+  it('helpers: pendiente del canal y llegó a Emisión', () => {
+    expect(canalEmitePendiente(jd7311())).toBe(true);
+    expect(canalEmitePendiente(wizard())).toBe(false);
+    expect(llegoAEmision(jd7311())).toBe(true);
+    expect(llegoAEmision({ _flowMeta: { current: 2, history: [1, 2] } })).toBe(
+      false,
+    );
+    expect(sesionCandidata(wizard({ paymentVerified: false }))).toBe(false);
+  });
+
+  it('caso 7311: sin pago verificado pero con emisión pendiente en Emisión -> registra la póliza', async () => {
+    await sesion(7311, jd7311(), { createdAt: inicio7311 });
+    const buscar = vi.fn().mockResolvedValue([p7311()]);
+    const r = await conciliarEmisionesPerdidas({
+      ahora: ahora7311,
+      buscar,
+      escribir: true,
+      edadMin: 0,
+    });
+    expect(buscar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placa: 'AK9C34D',
+        serial: '8YZRGV6C9TD000027',
+      }),
+    );
+    expect(r.registradas).toBe(1);
+    expect(r.detalle[0]).toMatchObject({
+      cotizacionId: 7311,
+      cnpoliza: '18-1-0000147613',
+    });
+    expect(
+      await db.emision.findFirst({
+        where: { polizaNumero: '18-1-0000147613' },
+      }),
+    ).toBeTruthy();
+  });
+
+  it('sin la bandera del canal o sin haber llegado a Emisión no es candidata', async () => {
+    await sesion(
+      1,
+      { ...jd7311(), metadata: { cproductor: '80080', ccanalalt: '30' } },
+      { createdAt: inicio7311 },
+    );
+    await sesion(
+      2,
+      { ...jd7311(), _flowMeta: { current: 2, history: [1, 2] } },
+      { createdAt: inicio7311 },
+    );
+    const buscar = vi.fn().mockResolvedValue([p7311()]);
+    const r = await conciliarEmisionesPerdidas({
+      ahora: ahora7311,
+      buscar,
+      escribir: true,
+      edadMin: 0,
+    });
+    expect(buscar).not.toHaveBeenCalled();
+    expect(r.registradas).toBe(0);
+  });
+});
+
+describe('buscador real de nest-api', () => {
+  it('mapea xplaca/xsercar y fingreso de Caracas', () => {
+    const p = mapearFilaNest({
+      cnpoliza: '18-1-0000147613',
+      cnrecibo: '18-1100000001',
+      xplaca: 'AK9C34D',
+      xsercar: '8YZRGV6C9TD000027',
+      cproductor: 80080,
+      ccanalalt: 30,
+      fingreso: '2026-11-26 12:19:49.000',
+    });
+    expect(p).toMatchObject({
+      placa: 'AK9C34D',
+      serial: '8YZRGV6C9TD000027',
+      cproductor: '80080',
+      ccanalalt: '30',
+    });
+    expect(new Date(p.fingreso).toISOString()).toBe('2026-11-26T16:19:49.000Z');
+  });
+
+  it('llama a poliza-por-vehiculo con la apikey y devuelve las filas mapeadas', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: true,
+        data: [
+          {
+            cnpoliza: 'X-1',
+            xplaca: 'A1',
+            xsercar: 'S1',
+            fingreso: '2026-11-26 12:00:00.000',
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const out = await crearBuscadorNest({
+        url: 'http://nest:3002/api/',
+        key: 'nest_k',
+      })({
+        placa: 'A1',
+        serial: 'S1',
+        desde: new Date('2026-11-26T16:00:00Z'),
+      });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(String(url)).toMatch(
+        /^http:\/\/nest:3002\/api\/v1\/canal\/poliza-por-vehiculo\?/,
+      );
+      expect(String(url)).toContain('placa=A1');
+      expect(init.headers.apikey).toBe('nest_k');
+      expect(out[0].cnpoliza).toBe('X-1');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('con la bandera y la key, la tarea consulta; sin bandera informa no_disponible', async () => {
+    await sesion(1);
+    process.env.NEST_API_KEY = 'nest_k';
+    const sin = await conciliarEmisionesPerdidas({ ahora });
+    expect(sin.lookup).toBe('no_disponible');
+    process.env.EXPEDIENTES_PERDIDAS_BUSCADOR = 'true';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: true, data: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const con = await conciliarEmisionesPerdidas({ ahora });
+      expect(con.lookup).toBe('ok');
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.NEST_API_KEY;
+    }
   });
 });

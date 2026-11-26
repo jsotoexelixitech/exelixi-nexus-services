@@ -16,9 +16,11 @@
  *   recordatorios) y la tarea no llama a ningún servicio de correo.
  * - Idempotente: una sesión con `emision` o una póliza ya registrada se omite; una póliza candidata de más de
  *   una sesión (o más de una póliza para una sesión) es ambigua y no se toca.
- * - La búsqueda de la póliza es inyectable (`BuscarPolizasVehiculo`). nest-api aún no expone un endpoint de solo
- *   lectura placa/serial → cnpoliza + fecha de ingreso; mientras no exista, la tarea solo informa cuántas
- *   sesiones quedaron sin póliza (`lookup: 'no_disponible'`) y no escribe.
+ * - La búsqueda de la póliza es inyectable (`BuscarPolizasVehiculo`). Con EXPEDIENTES_PERDIDAS_BUSCADOR=true usa
+ *   nest-api GET /api/v1/canal/poliza-por-vehiculo (key NEST_API_KEY con scope polizas:vehiculo); sin ella la tarea
+ *   solo informa cuántas sesiones quedaron sin póliza (`lookup: 'no_disponible'`) y no escribe.
+ * - Candidatas: sesión con pago verificado, o que llegó al paso Emisión con emisión del canal / recibo pendiente
+ *   (allowPendingEmission o tipoEmision=emit) aunque no tenga pago verificado.
  */
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
@@ -44,6 +46,9 @@ export type BuscarPolizasVehiculo = (q: {
   serial: string;
   desde: Date;
 }) => Promise<PolizaVehiculo[]>;
+
+/** Orden del paso Emisión en el flujo RCV (1 OCR, 2 Formulario, 3 Emisión, 4 Pagos). */
+const PASO_EMISION = 3;
 
 /** Holgura por diferencia de relojes entre Nexus y Sis2000. */
 const HOLGURA_MS = 2 * 60_000;
@@ -115,6 +120,96 @@ export function polizaCoincide(
   );
 }
 
+/** Flujo del canal con emisión pendiente (sin pago): allowPendingEmission=true o tipoEmision=emit. */
+export function canalEmitePendiente(jd: unknown): boolean {
+  const d = rec(jd);
+  const meta = { ...rec(d.metadataCanal), ...rec(d.metadata) };
+  const allow = String(meta.allowPendingEmission ?? '')
+    .trim()
+    .toLowerCase();
+  const tipo = String(meta.tipoEmision ?? '')
+    .trim()
+    .toLowerCase();
+  return allow === 'true' || tipo === 'emit';
+}
+
+/** ¿La sesión llegó (o pasó) al paso Emisión? Usa el avance del flujo guardado en la sesión (_flowMeta). */
+export function llegoAEmision(jd: unknown): boolean {
+  const fm = rec(rec(jd)._flowMeta);
+  const pasos = [
+    Number(fm.current),
+    ...(Array.isArray(fm.history) ? fm.history.map(Number) : []),
+  ].filter(Number.isFinite);
+  return pasos.some((n) => n >= PASO_EMISION);
+}
+
+/** Candidata: pago verificado, o llegó a Emisión con emisión pendiente del canal. */
+export function sesionCandidata(jd: unknown): boolean {
+  const d = rec(jd);
+  return (
+    d.paymentVerified === true || (canalEmitePendiente(d) && llegoAEmision(d))
+  );
+}
+
+/** Fila de nest-api (xplaca/xsercar; fingreso en hora de Caracas) → PolizaVehiculo. */
+export function mapearFilaNest(row: Record<string, unknown>): PolizaVehiculo {
+  const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(\.\d+)?/.exec(
+    String(row.fingreso ?? '').trim(),
+  );
+  return {
+    cnpoliza: String(row.cnpoliza ?? ''),
+    cnrecibo: txt(row.cnrecibo),
+    urlpoliza: txt(row.urlpoliza),
+    placa: String(row.xplaca ?? ''),
+    serial: String(row.xsercar ?? ''),
+    cproductor: txt(row.cproductor),
+    ccanalalt: txt(row.ccanalalt),
+    fingreso: m
+      ? `${m[1]}T${m[2]}${m[3] ?? ''}-04:00`
+      : String(row.fingreso ?? ''),
+  };
+}
+
+/** Buscador real: nest-api poliza-por-vehiculo con la key de Nexus (solo lectura). */
+export function crearBuscadorNest(cfg: {
+  url: string;
+  key: string;
+}): BuscarPolizasVehiculo {
+  const base = cfg.url.replace(/\/+$/, '').replace(/\/api$/, '');
+  return async ({ placa, serial, desde }) => {
+    const qs = new URLSearchParams({
+      placa,
+      serial,
+      // 5 min de holgura hacia atrás: el filtro fino lo hace polizaCoincide.
+      desde: new Date(desde.getTime() - 5 * 60_000).toISOString(),
+    });
+    const res = await fetch(`${base}/api/v1/canal/poliza-por-vehiculo?${qs}`, {
+      headers: { apikey: cfg.key, Accept: 'application/json' },
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = (await res.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+    // Sin cuerpo en el mensaje: puede traer datos de la consulta.
+    if (!res.ok || body.status === false)
+      throw new Error(`nest-api respondió HTTP ${res.status}`);
+    const data = Array.isArray(body.data) ? body.data : [];
+    return data.map((r) => mapearFilaNest(rec(r)));
+  };
+}
+
+/** Buscador según la bandera EXPEDIENTES_PERDIDAS_BUSCADOR y NEST_API_URL / NEST_API_KEY. */
+function buscadorDeEntorno(): BuscarPolizasVehiculo | null {
+  const key = (
+    process.env.NEST_API_KEY ||
+    process.env.NEST_SERVICE_API_KEY ||
+    ''
+  ).trim();
+  const url = (process.env.NEST_API_URL || 'http://127.0.0.1:3002').trim();
+  return key ? crearBuscadorNest({ url, key }) : null;
+}
+
 export interface ResumenPerdidas {
   modo: 'vista_previa' | 'escribir';
   lookup: 'ok' | 'no_disponible';
@@ -140,7 +235,7 @@ export interface OpcionesPerdidas {
   max?: number;
 }
 
-/** Punto de inyección del buscador (hasta que nest-api exponga el endpoint de solo lectura). */
+/** Punto de inyección del buscador (pruebas); por defecto, el de nest-api si la bandera está encendida. */
 let buscarPorDefecto: BuscarPolizasVehiculo | null = null;
 export function _setBuscadorPerdidas(b: BuscarPolizasVehiculo | null): void {
   buscarPorDefecto = b;
@@ -152,7 +247,10 @@ export async function conciliarEmisionesPerdidas(
   const cfg = perdidasConfig();
   const ahora = opts.ahora ?? new Date();
   const escribir = opts.escribir ?? cfg.escribir;
-  const buscar = opts.buscar === undefined ? buscarPorDefecto : opts.buscar;
+  const buscar =
+    opts.buscar === undefined
+      ? (buscarPorDefecto ?? (cfg.buscador ? buscadorDeEntorno() : null))
+      : opts.buscar;
   const dias = opts.dias ?? cfg.dias;
   const edadMin = opts.edadMin ?? cfg.edadMin;
   const max = opts.max ?? cfg.max;
@@ -179,10 +277,10 @@ export async function conciliarEmisionesPerdidas(
     take: max * 5,
   });
 
-  // Candidatas: wizard RCV con pago verificado, sin póliza y sin actividad reciente.
+  // Candidatas: wizard RCV pagado o con emisión pendiente del canal, sin póliza y sin actividad reciente.
   const candidatas = cotizaciones.filter((c) => {
     const jd = rec(c.jsonData);
-    if (jd.paymentVerified !== true) return false;
+    if (!sesionCandidata(jd)) return false;
     if (txt(rec(jd.policy).number) ?? txt(rec(jd.policy).cnpoliza))
       return false;
     const ultima = c.updatedAt ?? c.createdAt;
