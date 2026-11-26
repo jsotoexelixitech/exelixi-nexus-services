@@ -90,10 +90,13 @@ export type MotivoAnalisis =
  *   social («Venezolana de Instrumentación…») y los tomadores J/G/C no se tocan. Sin ningún nombre
  *   que comparar queda «Revisar». Siempre exige el número: una cédula ajena nunca valida. Los
  *   observados v<13 se recomparan con lo ya leído (sin OCR ni correos).
+ *   v14: placa y seriales que difieren solo en caracteres confundibles por la lectura (8/B, 0/O/D/Q,
+ *   1/I/L, 5/S, 2/Z, 6/G, 7/T; máx. 2 posiciones) quedan sin_certeza, no no_coincide. Los observados
+ *   v<14 se recomparan con lo ya leído (sin OCR).
  *   Nombre de pila distinto con el mismo número y el apellido coincidente (7-7-7000003208: «JHON»
  *   en la cédula, «RAMON» registrado): misma persona, queda `difiere` (informativo).
  */
-export const VERSION_COMPARADOR = 13;
+export const VERSION_COMPARADOR = 14;
 
 /**
  * La v4 a la v7 solo cambian contra quién se compara en personas y licencias (y el orden
@@ -128,6 +131,8 @@ export interface CampoDiagnostico {
   estado: EstadoCampo;
   /** v3: lo que el OCR leyó de este dato al emitir (documentos enmascarados). */
   enOcrAlEmitir?: string | null;
+  /** v14: explicación cuando el estado es `parecido` por caracteres confundibles. */
+  nota?: string;
 }
 
 export interface Diagnostico {
@@ -408,6 +413,35 @@ function normSerial(v?: string | null): string {
     .replace(/[^A-Z0-9]/g, '')
     .replace(/[OQ]/g, '0')
     .replace(/I/g, '1');
+}
+
+const GRUPOS_CONFUNDIBLES = ['8B', '0OQD', '1IL', '5S', '2Z', '6G', '7T'];
+const MAX_POSICIONES_CONFUNDIBLES = 2;
+
+/**
+ * v14: si dos placas/seriales del mismo largo difieren en 1 o 2 posiciones y todas son pares de
+ * caracteres que la lectura suele confundir (8/B, 0/O/D/Q, 1/I/L, 5/S, 2/Z, 6/G, 7/T), devuelve
+ * los pares (p. ej. ['8/B']); si no, null. Iguales → null (no hay diferencia que explicar).
+ */
+export function diferenciaConfundible(a: string, b: string): string[] | null {
+  const x = String(a ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  const y = String(b ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (!x || x.length !== y.length) return null;
+  const pares: string[] = [];
+  for (let i = 0; i < x.length; i++) {
+    if (x[i] === y[i]) continue;
+    const g = GRUPOS_CONFUNDIBLES.find(
+      (k) => k.includes(x[i]) && k.includes(y[i]),
+    );
+    if (!g) return null;
+    pares.push(`${x[i]}/${y[i]}`);
+    if (pares.length > MAX_POSICIONES_CONFUNDIBLES) return null;
+  }
+  return pares.length ? pares : null;
 }
 
 /** v9: posición (desde 1) del único dígito distinto entre dos números del mismo largo; si no, null. */
@@ -1792,6 +1826,7 @@ function compararVehiculo(
       const x = normSerial(a);
       const y = normSerial(b);
       if (x === y) return true;
+      if (diferenciaConfundible(a, b)) return 'parecido';
       // Un carácter distinto en un serial largo suele ser lectura del OCR: revisar, no errar.
       if (Math.min(x.length, y.length) >= largoMin && levenshtein(x, y) === 1)
         return 'parecido';
@@ -1825,11 +1860,11 @@ function compararVehiculo(
   const anioDoc = pick(ex, ['anio', 'año', 'ano']);
 
   const campos = [
-    campo('placa', 'Placa', placaPol, placaDoc, () =>
-      placaPol && placaDoc
-        ? normSerial(placaPol) === normSerial(placaDoc)
-        : false,
-    ),
+    campo('placa', 'Placa', placaPol, placaDoc, () => {
+      if (!placaPol || !placaDoc) return false;
+      if (normSerial(placaPol) === normSerial(placaDoc)) return true;
+      return diferenciaConfundible(placaPol, placaDoc) ? 'parecido' : false;
+    }),
     campo(
       'serialCarroceria',
       'Serial de carrocería',
@@ -1880,6 +1915,22 @@ function compararVehiculo(
           ),
       ),
     );
+  }
+  // v14: aviso para el monitor cuando la diferencia es solo de caracteres confundibles.
+  const origenCampo: Record<
+    string,
+    [string | null, string | null, string, string]
+  > = {
+    placa: [placaPol, placaDoc, 'la placa leída', 'la'],
+    serialCarroceria: [carrPol, carrDoc, 'el serial de carrocería leído', 'el'],
+    serialMotor: [motorPol, motorDoc, 'el serial de motor leído', 'el'],
+  };
+  for (const c of campos) {
+    const o = origenCampo[c.campo];
+    if (c.estado !== 'parecido' || !o?.[0] || !o[1]) continue;
+    const pares = diferenciaConfundible(o[0], o[1]);
+    if (!pares) continue;
+    c.nota = `Revisar: ${o[2]} (${o[1]}) difiere solo en caracteres que la lectura suele confundir (${pares.join(', ')}) con ${o[3]} de la póliza (${o[0]}).`;
   }
   // v8: motor, marca, modelo (catálogo cmarca/cmodelo del formulario), año y propietario son
   // informativos: se muestran como «difiere», pero no marcan el documento como errado.
@@ -2146,6 +2197,17 @@ function listaEtiquetas(campos: CampoDiagnostico[]): string {
   const e = campos.map((c) => c.etiqueta.toLowerCase());
   if (e.length <= 1) return e.join('');
   return `${e.slice(0, -1).join(', ')} y ${e[e.length - 1]}`;
+}
+
+/** Resumen de campos `parecido`: nota de confundibles (v14) o «un carácter distinto». */
+function resumenParecidos(parecidos: CampoDiagnostico[]): string {
+  const textos = parecidos.filter((c) => c.nota).map((c) => c.nota as string);
+  const sinNota = parecidos.filter((c) => !c.nota);
+  if (sinNota.length)
+    textos.push(
+      `${listaEtiquetas(sinNota)}: casi igual a la póliza (un carácter distinto).`,
+    );
+  return textos.join(' ').replace(/Revisar: /g, '');
 }
 
 export interface OpcionesDiagnostico {
@@ -2450,7 +2512,7 @@ export function diagnosticar(
       resumen = `La póliza no trae ${c.etiqueta.toLowerCase()} para comparar.`;
     } else if (tipo === 'certificado') {
       resumen = parecidos.length
-        ? `${listaEtiquetas(parecidos)}: casi igual a la póliza (un carácter distinto).`
+        ? resumenParecidos(parecidos)
         : 'No se leyó la placa ni el serial de carrocería en el documento.';
     } else {
       resumen = `No se leyó ${(c?.etiqueta ?? 'el número de documento').toLowerCase()} en el documento.`;
@@ -2468,7 +2530,7 @@ export function diagnosticar(
       ...base,
       resultado: 'sin_certeza',
       campos,
-      resumen: `${listaEtiquetas(parecidos)}: casi igual a la póliza (un carácter distinto).${informativo}`,
+      resumen: `${resumenParecidos(parecidos)}${informativo}`,
       comparadoCon: rol,
     };
   }
