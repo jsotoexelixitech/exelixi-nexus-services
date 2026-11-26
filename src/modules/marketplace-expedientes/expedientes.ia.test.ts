@@ -35,6 +35,7 @@ import {
   ColaConcurrencia,
   contextoPoliza,
   diagnosticar,
+  diferenciaConfundible,
   esperaReintentoMs,
   esRotuloOcr,
   esSexoOEstadoCivil,
@@ -333,6 +334,20 @@ describe('validación automática al crear el expediente (documentos del wizard)
     expect(
       r.diagnostico.campos.find((c: any) => c.campo === 'placa').coincide,
     ).toBe(true);
+  });
+
+  it('v14: placa que difiere solo en un carácter confundible (8/B) → sin_certeza «Revisar:», no no_coincide', async () => {
+    lee(REF.certificado, { ...LECTURA_OK.certificado, placa: 'AB1Z3CD' });
+    const a = await crearRcv('P-5', { documentos: ['certificado'] });
+    const r = req(a, 'certificado');
+    expect(r.diagnostico.resultado).toBe('sin_certeza');
+    expect(r.estado).toBe('observado');
+    expect(r.motivo).toBe(
+      'Revisar: la placa leída (AB1Z3CD) difiere solo en caracteres que la lectura suele confundir (2/Z) con la de la póliza (AB123CD).',
+    );
+    expect(
+      r.diagnostico.campos.find((c: any) => c.campo === 'placa').estado,
+    ).toBe('parecido');
   });
 
   it('ilegible → observado con el motivo del OCR', async () => {
@@ -3199,5 +3214,26 @@ describe('v10: falsas alarmas de prod (23-nov)', () => {
       await svc.esperarAnalisisPendientes();
       expect(llamadasAnalizar()).toHaveLength(antes);
     });
+  });
+});
+
+describe('v14: diferenciaConfundible (placa y seriales)', () => {
+  it('988AAH vs 98BAAH → dudoso (8/B)', () => {
+    expect(diferenciaConfundible('988AAH', '98BAAH')).toEqual(['8/B']);
+  });
+  it('ZS172MM8T002174 vs ZS172MM87002174 → dudoso (T/7)', () => {
+    expect(diferenciaConfundible('ZS172MM8T002174', 'ZS172MM87002174')).toEqual(
+      ['T/7'],
+    );
+  });
+  it('AX8C94D vs AK9C34D → no coincide (3 diferencias, X/K no confundibles)', () => {
+    expect(diferenciaConfundible('AX8C94D', 'AK9C34D')).toBeNull();
+  });
+  it('iguales → null (coincide)', () => {
+    expect(diferenciaConfundible('988AAH', '988-AAH')).toBeNull();
+  });
+  it('más de 2 posiciones o distinto largo → null', () => {
+    expect(diferenciaConfundible('8B0O5S', 'B8O0S5')).toBeNull();
+    expect(diferenciaConfundible('988AAH', '988AA')).toBeNull();
   });
 });
