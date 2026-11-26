@@ -244,3 +244,37 @@ export function historicoMotivoApagado(): string | null {
     return 'EXPEDIENTES_HISTORICO_ENABLED apagado';
   return 'Faltan EXPEDIENTES_HISTORICO_NEST_URL, EXPEDIENTES_HISTORICO_NEST_KEY o EXPEDIENTES_HISTORICO_DESDE (YYYY-MM-DD)';
 }
+
+// ─── Conciliación de emisiones perdidas (sesión pagada sin póliza en Nexus) ─
+
+export interface PerdidasConfig {
+  /** EXPEDIENTES_PERDIDAS_ENABLED=true (apagada por defecto). */
+  enabled: boolean;
+  /** EXPEDIENTES_PERDIDAS_ESCRIBIR=true; sin ella solo lista (vista previa). */
+  escribir: boolean;
+  /** Días hacia atrás de sesiones a revisar (1-30, def. 3). */
+  dias: number;
+  /** Minutos sin actividad de la sesión antes de revisarla (5-1440, def. 20). */
+  edadMin: number;
+  /** Cada cuántos minutos corre dentro de la ventana (10-720, def. 30). */
+  cadaMin: number;
+  /** Ventana horaria de Caracas 'HH:MM-HH:MM' (def. 07:00-20:00). */
+  ventana: { inicio: string; fin: string };
+  /** Tope de sesiones por corrida (1-1000, def. 200). */
+  max: number;
+}
+
+export function perdidasConfig(): PerdidasConfig {
+  const raw = String(process.env.EXPEDIENTES_PERDIDAS_VENTANA ?? '').trim();
+  const m = /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/.exec(raw);
+  const [inicio, fin] = (m ? raw : '07:00-20:00').split('-');
+  return {
+    enabled: expedientesEnabled() && flag('EXPEDIENTES_PERDIDAS_ENABLED'),
+    escribir: flag('EXPEDIENTES_PERDIDAS_ESCRIBIR'),
+    dias: entero('EXPEDIENTES_PERDIDAS_DIAS', 3, 1, 30),
+    edadMin: entero('EXPEDIENTES_PERDIDAS_EDAD_MIN', 20, 5, 1440),
+    cadaMin: entero('EXPEDIENTES_PERDIDAS_CADA_MIN', 30, 10, 720),
+    ventana: { inicio, fin },
+    max: entero('EXPEDIENTES_PERDIDAS_MAX', 200, 1, 1000),
+  };
+}
