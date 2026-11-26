@@ -336,6 +336,7 @@ export function createFakePrisma() {
     'mktExpedienteEnlace',
     'mktExpedienteJobRun',
     'emision',
+    'pago',
     'cotizacion',
     'usuarioPortalPerfil',
     'usuario',

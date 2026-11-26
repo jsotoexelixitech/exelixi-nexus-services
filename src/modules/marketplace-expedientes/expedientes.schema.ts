@@ -335,6 +335,7 @@ export const JOBS = [
   'conciliacion',
   'validacion_ia',
   'carga_historica',
+  'conciliacion_perdidas',
 ] as const;
 export type JobName = (typeof JOBS)[number];
 

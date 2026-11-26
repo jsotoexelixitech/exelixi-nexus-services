@@ -30,6 +30,11 @@ import {
   detenerSchedulerHuellas,
   iniciarSchedulerHuellas,
 } from './expedientes.huellas';
+import {
+  conciliarEmisionesPerdidas,
+  marcarTandaPerdidas,
+  tandaPerdidasDebida,
+} from './expedientes.perdidas';
 import { expedientesService as svc } from './expedientes.service';
 import type { JobName } from './expedientes.schema';
 
@@ -67,6 +72,8 @@ async function correr(
   switch (job) {
     case 'conciliacion':
       return { conciliacion: await svc.conciliar() };
+    case 'conciliacion_perdidas':
+      return { conciliacionPerdidas: await conciliarEmisionesPerdidas({ ahora }) };
     case 'diaria':
       return tareaDiaria(ahora);
     case 'nocturna':
@@ -290,6 +297,18 @@ export async function tickScheduler(
       });
       ultimaConciliacion = periodica;
       if (!r.omitido) corridos.push('conciliacion');
+    }
+    // Emisiones perdidas (sesión pagada sin póliza en Nexus): apagada por defecto, nunca envía correos.
+    const tandaPerdidas = tandaPerdidasDebida(ahora);
+    if (tandaPerdidas) {
+      marcarTandaPerdidas(tandaPerdidas);
+      const r = await ejecutarJob('conciliacion_perdidas', {
+        origen: 'auto',
+        ahora,
+        actor: 'scheduler',
+        clave: tandaPerdidas,
+      });
+      if (!r.omitido) corridos.push('conciliacion_perdidas');
     }
   } catch (err) {
     logger.error(
