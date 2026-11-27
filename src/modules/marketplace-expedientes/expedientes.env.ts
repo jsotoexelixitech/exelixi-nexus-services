@@ -262,6 +262,8 @@ export interface PerdidasConfig {
   ventana: { inicio: string; fin: string };
   /** Tope de sesiones por corrida (1-1000, def. 200). */
   max: number;
+  /** EXPEDIENTES_PERDIDAS_BUSCADOR=true: consulta nest-api poliza-por-vehiculo (key NEST_API_KEY, scope polizas:vehiculo). */
+  buscador: boolean;
 }
 
 export function perdidasConfig(): PerdidasConfig {
@@ -276,5 +278,6 @@ export function perdidasConfig(): PerdidasConfig {
     cadaMin: entero('EXPEDIENTES_PERDIDAS_CADA_MIN', 30, 10, 720),
     ventana: { inicio, fin },
     max: entero('EXPEDIENTES_PERDIDAS_MAX', 200, 1, 1000),
+    buscador: flag('EXPEDIENTES_PERDIDAS_BUSCADOR'),
   };
 }
